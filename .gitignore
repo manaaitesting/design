@@ -8,3 +8,5 @@ next-env.d.ts
 tests/.auth/
 test-results/
 playwright-report/
+.vercel
+.env*
