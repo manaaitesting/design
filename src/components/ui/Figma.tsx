@@ -1,10 +1,11 @@
 'use client';
 
-import { Children, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Children, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icons';
 import { FigIcon } from './FigIcon';
 import { PaintPicker, type PaintType } from './PaintPicker';
+import { BLEND_MODES, blendLabel } from './blend';
 
 /**
  * A menu anchored to a button but rendered at the document root.
@@ -13,12 +14,36 @@ import { PaintPicker, type PaintType } from './PaintPicker';
  * scroll container — the menu appears cut off against the panel edge instead of
  * floating over the canvas. Figma's dialogs live outside the panel; these do too.
  */
+const POPOVER_LOOK: Record<'menu' | 'dark' | 'card', CSSProperties> = {
+  menu: {
+    background: '#fff',
+    borderRadius: 6,
+    padding: 4,
+    boxShadow: '0 0 0 1px rgba(0,0,0,0.08), 0 8px 24px -6px rgba(0,0,0,0.24)',
+  },
+  dark: {
+    background: '#1e1e1e',
+    borderRadius: 10,
+    padding: 6,
+    color: '#fff',
+    boxShadow:
+      '0 0 0 0.5px rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.25), 0 10px 34px rgba(0,0,0,0.4)',
+  },
+  card: {
+    background: '#fff',
+    borderRadius: 12,
+    padding: 0,
+    boxShadow: '0 0 0 1px rgba(0,0,0,0.06), 0 12px 32px -8px rgba(0,0,0,0.28)',
+  },
+};
+
 export function FigPopover({
   anchor,
   onClose,
   width = 190,
   align = 'right',
   placement = 'below',
+  variant = 'menu',
   children,
 }: {
   anchor: HTMLElement | null;
@@ -31,9 +56,17 @@ export function FigPopover({
    * styles-and-variables dialog, so it never covers the rows you are editing.
    */
   placement?: 'below' | 'beside';
+  /**
+   * 'menu' is the white list Figma hangs off a panel button. 'dark' is the
+   * floating menu it uses for choices that belong to the canvas rather than the
+   * panel — blend modes, the effect types. 'card' is a settings dialog, which
+   * brings its own header and padding.
+   */
+  variant?: 'menu' | 'dark' | 'card';
   children: ReactNode;
 }) {
   const [box, setBox] = useState<{ left: number; top: number } | null>(null);
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     if (!anchor) return;
@@ -42,23 +75,37 @@ export function FigPopover({
       const panel = placement === 'beside' ? anchor.closest('.fig')?.getBoundingClientRect() : null;
       const left = panel ? panel.left - width - 8 : align === 'right' ? rect.right - width : rect.left;
       const top = panel ? rect.top : rect.bottom + 4;
+      // A dialog opened from a row near the foot of the panel would otherwise
+      // be scrolled rather than shown: lift it by however much it overhangs.
+      const height = element?.scrollHeight ?? 0;
+      const lowest = window.innerHeight - Math.min(height, window.innerHeight - 16) - 8;
       setBox({
         // never let the menu hang off any edge of the window
         left: Math.max(8, Math.min(left, window.innerWidth - width - 8)),
-        top: Math.max(8, Math.min(top, window.innerHeight - 16)),
+        top: Math.max(8, Math.min(top, height ? lowest : window.innerHeight - 16)),
       });
     };
     place();
+    // a dialog that grows — Duo noise adding its second colour — has to be
+    // re-placed, or the new row lands under the bottom of the window
+    const observer = element ? new ResizeObserver(place) : null;
+    if (element) observer!.observe(element);
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => {
+      observer?.disconnect();
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
     };
-  }, [anchor, align, width, placement]);
+  }, [anchor, align, width, placement, element]);
 
   useEffect(() => {
-    const close = () => onClose();
+    // A press on the anchor is that control's own business: closing here as
+    // well would fight the toggle, and the menu would flicker back open.
+    const close = (event: PointerEvent) => {
+      if (anchor && event.target instanceof Node && anchor.contains(event.target)) return;
+      onClose();
+    };
     const escape = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('pointerdown', close);
     window.addEventListener('keydown', escape);
@@ -66,26 +113,26 @@ export function FigPopover({
       window.removeEventListener('pointerdown', close);
       window.removeEventListener('keydown', escape);
     };
-  }, [onClose]);
+  }, [onClose, anchor]);
 
   if (!box || typeof document === 'undefined') return null;
 
   return createPortal(
     <div
+      ref={setElement}
       onPointerDown={(e) => e.stopPropagation()}
       style={{
         position: 'fixed',
         left: box.left,
         top: box.top,
         width,
-        maxHeight: `min(320px, calc(100vh - ${box.top + 16}px))`,
+        maxHeight: `min(${variant === 'dark' ? 600 : 420}px, calc(100vh - ${box.top + 16}px))`,
         overflowY: 'auto',
-        background: '#fff',
-        borderRadius: 6,
-        padding: 4,
-        boxShadow: '0 0 0 1px rgba(0,0,0,0.08), 0 8px 24px -6px rgba(0,0,0,0.24)',
+        ...POPOVER_LOOK[variant],
         zIndex: 90,
       }}
+      // portalled to the body, so it has to bring the panel's variables with it
+      className={`fig-shell${variant === 'dark' ? ' fig-menu-dark' : ''}`}
     >
       {children}
     </div>,
@@ -326,6 +373,7 @@ export function FigSelect<T extends string>({
   glyph,
   title,
   width,
+  mixed,
 }: {
   value: T;
   options: FigOption<T>[];
@@ -333,6 +381,11 @@ export function FigSelect<T extends string>({
   glyph?: ReactNode;
   title?: string;
   width?: number | string;
+  /**
+   * The selected layers disagree. Figma leaves the trigger reading "Mixed" and
+   * ticks nothing, so no option is claimed to apply to all of them.
+   */
+  mixed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
@@ -366,7 +419,7 @@ export function FigSelect<T extends string>({
         }}
       >
         {glyph !== undefined && <span className="glyph">{glyph}</span>}
-        <span className="fig-value">{current?.label ?? value}</span>
+        <span className="fig-value">{mixed ? 'Mixed' : (current?.label ?? value)}</span>
         <span className="fig-caret">
           <Icon.Caret />
         </span>
@@ -403,8 +456,8 @@ export function FigSelect<T extends string>({
                 style={{
                   width: '100%',
                   justifyContent: 'flex-start',
-                  background: option.value === value ? 'var(--fig-blue)' : undefined,
-                  color: option.value === value ? '#fff' : undefined,
+                  background: !mixed && option.value === value ? 'var(--fig-blue)' : undefined,
+                  color: !mixed && option.value === value ? '#fff' : undefined,
                 }}
                 onClick={() => {
                   onChange(option.value);
@@ -412,7 +465,7 @@ export function FigSelect<T extends string>({
                 }}
               >
                 <span style={{ width: 10, display: 'inline-flex' }}>
-                  {option.value === value ? '✓' : ''}
+                  {!mixed && option.value === value ? '✓' : ''}
                 </span>
                 {option.label}
               </button>
@@ -451,8 +504,13 @@ export function FigPaintRow({
   blend,
   onBlend,
   pageColors = [],
+  backdrop,
   tokens = [],
   onCreateToken,
+  typeBody,
+  alphaField,
+  trailing,
+  mixed,
 }: {
   color: string;
   alpha: number;
@@ -469,15 +527,69 @@ export function FigPaintRow({
   onBlend?: (mode: string) => void;
   /** colours already used on the page, offered as swatches in the picker */
   pageColors?: string[];
+  /** what this paint sits on, for the picker's contrast check */
+  backdrop?: string;
   tokens?: { id: string; name: string; value: string; type: string }[];
   onCreateToken?: (hex: string) => void;
+  /** the picker body for Video and Shader, which are layer properties */
+  typeBody?: ReactNode;
+  /** puts the opacity in a field box of its own, as Selection colors has it */
+  alphaField?: boolean;
+  /** an action revealed at the trailing edge of the paint field on hover */
+  trailing?: ReactNode;
+  /**
+   * The selected layers do not share this paint. Figma says so rather than
+   * showing one of them, which would invite you to flatten the rest by accident.
+   */
+  mixed?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const swatch = useRef<HTMLButtonElement>(null);
   const checkbox = useId();
-  const isHex = /^#[0-9a-fA-F]{6}$/.test(color);
-  const hex = isHex ? color.slice(1).toUpperCase() : color;
+  const isHex = !mixed && /^#[0-9a-fA-F]{6}$/.test(color);
+  const hex = mixed ? 'Mixed' : isHex ? color.slice(1).toUpperCase() : color;
+
+  // Fill keeps swatch, hex and opacity in one box; Selection colors gives the
+  // opacity a box of its own, which is what `alphaField` switches on.
+  const alphaControls = onAlpha ? (
+    <>
+      <input
+        aria-label="Opacity"
+        value={String(Math.round(alpha * 100))}
+        spellCheck={false}
+        className="fig-paint-alpha"
+        onChange={(e) => {
+          const next = Number(e.target.value.replace(/[^0-9]/g, ''));
+          if (Number.isFinite(next)) onAlpha(Math.min(100, Math.max(0, next)) / 100);
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+      />
+      <span
+        className="glyph fig-paint-percent"
+        onPointerDown={(event) => {
+          // scrubbing the % sign changes opacity, as it does in Figma
+          event.preventDefault();
+          const startX = event.clientX;
+          const from = alpha;
+          const move = (e: PointerEvent) => {
+            const next = from + (e.clientX - startX) / 200;
+            onAlpha(Math.min(1, Math.max(0, next)));
+          };
+          const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            document.body.style.cursor = '';
+          };
+          document.body.style.cursor = 'ew-resize';
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', up);
+        }}
+      >
+        %
+      </span>
+    </>
+  ) : null;
 
   return (
     <div className="fig-row tight">
@@ -489,9 +601,9 @@ export function FigPaintRow({
           ref={swatch}
           type="button"
           className="fig-swatch"
-          aria-label={isHex ? `Solid color hex: ${hex}` : 'Paint'}
+          aria-label={mixed ? 'Mixed paint' : isHex ? `Solid color hex: ${hex}` : 'Paint'}
           title="Open the color picker"
-          style={{ background: color || '#DDDDDD' }}
+          style={{ background: mixed ? 'var(--fig-checker)' : color || '#DDDDDD' }}
           onClick={() => setPicking((v) => !v)}
         >
           {/* Figma's chit carries its own alpha wedge rather than dimming the swatch */}
@@ -505,12 +617,14 @@ export function FigPaintRow({
             alpha={alpha}
             blend={blend}
             pageColors={pageColors}
+            backdrop={backdrop}
             tokens={tokens}
             onChange={onColor}
             onAlpha={(next) => onAlpha?.(next)}
             onBlend={onBlend}
             onType={(kind) => onKind?.(kind)}
             onCreateToken={onCreateToken}
+            typeBody={typeBody}
             onClose={() => setPicking(false)}
           />
         )}
@@ -531,45 +645,12 @@ export function FigPaintRow({
           style={{ marginLeft: 4, paddingRight: 0 }}
         />
 
-        {onAlpha && (
-          <>
-            <input
-              aria-label="Opacity"
-              value={String(Math.round(alpha * 100))}
-              spellCheck={false}
-              className="fig-paint-alpha"
-              onChange={(e) => {
-                const next = Number(e.target.value.replace(/[^0-9]/g, ''));
-                if (Number.isFinite(next)) onAlpha(Math.min(100, Math.max(0, next)) / 100);
-              }}
-              onKeyDown={(e) => e.stopPropagation()}
-            />
-            <span
-              className="glyph fig-paint-percent"
-              onPointerDown={(event) => {
-                // scrubbing the % sign changes opacity, as it does in Figma
-                event.preventDefault();
-                const startX = event.clientX;
-                const from = alpha;
-                const move = (e: PointerEvent) => {
-                  const next = from + (e.clientX - startX) / 200;
-                  onAlpha(Math.min(1, Math.max(0, next)));
-                };
-                const up = () => {
-                  window.removeEventListener('pointermove', move);
-                  window.removeEventListener('pointerup', up);
-                  document.body.style.cursor = '';
-                };
-                document.body.style.cursor = 'ew-resize';
-                window.addEventListener('pointermove', move);
-                window.addEventListener('pointerup', up);
-              }}
-            >
-              %
-            </span>
-          </>
-        )}
+        {!alphaField && alphaControls}
+        {trailing && <span className="fig-paint-trailing">{trailing}</span>}
       </div>
+      {alphaField && alphaControls && (
+        <div className="fig-input fig-paint fig-paint-alpha-field">{alphaControls}</div>
+      )}
 
       {onVisible && (
         // Figma uses a real checkbox here, so the row is operable from the keyboard
@@ -592,6 +673,96 @@ export function FigPaintRow({
         </FigButton>
       )}
     </div>
+  );
+}
+
+/** One row of a dark floating menu — the blend modes, the effect types. */
+export function FigMenuItem({
+  label,
+  icon,
+  tag,
+  selected,
+  divider,
+  onSelect,
+}: {
+  label: string;
+  icon?: ReactNode;
+  /** the "Beta" pill Figma puts beside an unfinished entry */
+  tag?: string;
+  selected?: boolean;
+  divider?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <>
+      {divider && <div className="fig-menu-sep" />}
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        className="fig-menu-item"
+        onClick={onSelect}
+      >
+        <span className="fig-menu-mark">
+          {icon ?? (selected ? <FigIcon name="Selected check" size={16} /> : null)}
+        </span>
+        {label}
+        {tag && <span className="fig-menu-tag">{tag}</span>}
+      </button>
+    </>
+  );
+}
+
+/**
+ * Blend mode.
+ *
+ * Figma puts it behind a header icon rather than an inline dropdown, and opens
+ * a dark menu over the canvas — the same menu whether it is the layer's blend
+ * mode or one effect's, which is why it lives here rather than in the panel.
+ */
+export function FigBlendMenu({
+  value,
+  onChange,
+  icon,
+  title,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  icon?: ReactNode;
+  title?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLSpanElement>(null);
+
+  return (
+    <span ref={anchor} style={{ display: 'inline-flex' }}>
+      <FigButton
+        title={`${title ?? 'Apply blend mode'} — ${blendLabel(value)}`}
+        on={open || value !== 'normal'}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {icon ?? <FigIcon name="Apply blend mode" />}
+      </FigButton>
+      {open && (
+        <FigPopover anchor={anchor.current} width={190} variant="dark" onClose={() => setOpen(false)}>
+          <ul role="listbox" aria-label="Blend mode" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            {BLEND_MODES.map((mode) => (
+              <li key={mode.value}>
+                <FigMenuItem
+                  label={mode.label}
+                  selected={mode.value === value}
+                  divider={mode.divider}
+                  onSelect={() => {
+                    onChange(mode.value);
+                    setOpen(false);
+                  }}
+                />
+              </li>
+            ))}
+          </ul>
+        </FigPopover>
+      )}
+    </span>
   );
 }
 
@@ -678,6 +849,7 @@ export function FigSection({
   title,
   children,
   actions,
+  add,
   onAdd,
   onRemove,
   empty,
@@ -685,6 +857,8 @@ export function FigSection({
   title: string;
   children?: ReactNode;
   actions?: ReactNode;
+  /** an add control of the section's own — a + that opens a menu, say */
+  add?: ReactNode;
   onAdd?: () => void;
   onRemove?: () => void;
   empty?: boolean;
@@ -714,6 +888,7 @@ export function FigSection({
         {/* Figma fades the styles-and-variables button out until the header is
             hovered; the add button stays. */}
         {actions && <span className="fig-head-fade">{actions}</span>}
+        {add}
         {onAdd && (alwaysAdd || empty) && (
           <FigButton title={`Add ${title.toLowerCase()}`} onClick={onAdd}>
             <FigIcon name="Add fill" />

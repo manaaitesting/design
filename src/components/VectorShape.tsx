@@ -28,6 +28,22 @@ export function pathFrom(points: [number, number][], closed: boolean, smooth = 0
   return closed ? `${d} Z` : d;
 }
 
+/**
+ * The dash pattern.
+ *
+ * An explicit dash length wins — that is what the advanced stroke controls set,
+ * and a vector is the one place the numbers can be drawn literally. Without one
+ * the line style picks a pattern proportional to the weight, so a thick dashed
+ * stroke does not turn into a solid one.
+ */
+function dashArray(stroke: SceneNode['border']): string | undefined {
+  if (!stroke) return undefined;
+  if (stroke.dash) return `${stroke.dash} ${stroke.gap ?? stroke.dash}`;
+  if (stroke.style === 'dashed') return `${stroke.width * 4} ${stroke.width * 3}`;
+  if (stroke.style === 'dotted') return `0 ${stroke.width * 2.2}`;
+  return undefined;
+}
+
 export function VectorShape({ node }: { node: SceneNode }) {
   const points = node.points ?? [];
   if (points.length < 2) return null;
@@ -46,15 +62,9 @@ export function VectorShape({ node }: { node: SceneNode }) {
         fill={node.closed && node.fill && node.fillVisible !== false ? node.fill : 'none'}
         stroke={stroke ? stroke.color : 'none'}
         strokeWidth={stroke ? stroke.width : 0}
-        strokeDasharray={
-          stroke?.style === 'dashed'
-            ? `${stroke.width * 4} ${stroke.width * 3}`
-            : stroke?.style === 'dotted'
-              ? `0 ${stroke.width * 2.2}`
-              : undefined
-        }
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeDasharray={dashArray(stroke)}
+        strokeLinecap={stroke?.cap ?? 'round'}
+        strokeLinejoin={stroke?.join ?? 'round'}
       />
     </svg>
   );

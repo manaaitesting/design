@@ -26,6 +26,7 @@ const SPRING_OPEN_MS = 500;
 
 const TYPE_ICON: Record<NodeType, React.ReactNode> = {
   page: <Icon.Page />,
+  section: <Icon.Section />,
   frame: <Icon.Frame />,
   rect: <Icon.Square />,
   ellipse: <Icon.Circle />,

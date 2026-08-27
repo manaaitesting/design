@@ -3,12 +3,19 @@ import type { Doc, FlexSpec, FontSpec, NodeType, SceneNode } from './types';
 export const DEFAULT_FLEX: FlexSpec = {
   mode: 'flex',
   columns: 2,
+  rows: 0,
   direction: 'column',
   gap: 16,
+  crossGap: 16,
   padding: [16, 16, 16, 16],
   align: 'start',
   justify: 'start',
   wrap: false,
+  alignContent: 'start',
+  // Figma's advanced defaults
+  strokesIncluded: false,
+  stacking: 'last',
+  baseline: false,
 };
 
 export const DEFAULT_FONT: FontSpec = {
@@ -72,10 +79,15 @@ export const DEFAULT_GUIDES = {
   size: 8,
   color: 'rgba(255,0,80,0.18)',
   visible: true,
+  align: 'stretch' as const,
+  width: 64,
 };
 
 const PER_TYPE: Partial<Record<NodeType, Partial<SceneNode>>> = {
   page: { fill: '#EEEEEE', clip: false, w: 0, h: 0 },
+  // Figma's section: a tinted board you drop artboards onto. It never clips —
+  // a frame dragged half out of one has to stay visible, not disappear.
+  section: { fill: '#E9E9E9', clip: false, w: 800, h: 600, radius: 8 },
   frame: { fill: '#FFFFFF' },
   rect: { fill: '#DDDDDD', clip: false },
   ellipse: { fill: '#DDDDDD', radius: 9999, clip: false },
@@ -105,6 +117,7 @@ const PER_TYPE: Partial<Record<NodeType, Partial<SceneNode>>> = {
 
 export const TYPE_LABEL: Record<NodeType, string> = {
   page: 'Page',
+  section: 'Section',
   frame: 'Frame',
   text: 'Text',
   rect: 'Rectangle',

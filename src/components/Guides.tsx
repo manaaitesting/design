@@ -32,18 +32,36 @@ export function Guides({ guides }: { guides: GuideSpec }) {
   }
 
   const isColumns = guides.type === 'columns';
+  const align = guides.align ?? 'stretch';
+  const stretch = align === 'stretch';
+  // Stretch is the only mode the margin describes; the others pin a run of
+  // fixed-width tracks, and Figma greys the margin out for them.
+  const justify = stretch ? 'flex-start' : align === 'end' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start';
+
   return (
     <div
       style={{
         ...base,
         display: 'flex',
         flexDirection: isColumns ? 'row' : 'column',
+        justifyContent: justify,
         gap: guides.gutter,
-        padding: isColumns ? `0 ${guides.margin}px` : `${guides.margin}px 0`,
+        padding: stretch ? (isColumns ? `0 ${guides.margin}px` : `${guides.margin}px 0`) : 0,
       }}
     >
       {Array.from({ length: Math.max(1, guides.count) }, (_, i) => (
-        <div key={i} style={{ flex: '1 1 0', background: guides.color }} />
+        <div
+          key={i}
+          style={
+            stretch
+              ? { flex: '1 1 0', background: guides.color }
+              : {
+                  flex: 'none',
+                  background: guides.color,
+                  [isColumns ? 'width' : 'height']: Math.max(1, guides.width ?? 64),
+                }
+          }
+        />
       ))}
     </div>
   );

@@ -696,7 +696,9 @@ function containerAt(clientX: number, clientY: number, doc: Doc): string | null 
   const hit = hitStack(clientX, clientY, doc)[0];
   if (!hit || isLocked(hit, doc)) return null;
   let current: SceneNode | undefined = doc[hit];
-  while (current && current.type !== 'frame') current = current.parent ? doc[current.parent] : undefined;
+  while (current && current.type !== 'frame' && current.type !== 'section') {
+    current = current.parent ? doc[current.parent] : undefined;
+  }
   return current?.id ?? null;
 }
 

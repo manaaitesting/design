@@ -1,5 +1,16 @@
 import type { CSSProperties } from 'react';
-import { isInFlow, type Align, type Doc, type Justify, type Paint, type SceneNode } from './types';
+import { effectStyle, effectsOf } from './effects';
+import {
+  isInFlow,
+  type Align,
+  type AlignContent,
+  type Doc,
+  type FlexSpec,
+  type Justify,
+  type NumericField,
+  type Paint,
+  type SceneNode,
+} from './types';
 
 /**
  * Applies a paint's own alpha.
@@ -52,13 +63,52 @@ const JUSTIFY_CSS: Record<Justify, string> = {
   between: 'space-between',
 };
 
+const ALIGN_CONTENT_CSS: Record<AlignContent, string> = {
+  start: 'flex-start',
+  center: 'center',
+  end: 'flex-end',
+  stretch: 'stretch',
+  between: 'space-between',
+};
+
+/**
+ * `gap` is written row-first in CSS, so which of Figma's two gap fields lands
+ * in which slot depends on the direction items flow in.
+ */
+function gapCss(flex: FlexSpec): string {
+  const cross = flex.crossGap ?? flex.gap;
+  const [row, column] =
+    flex.mode === 'grid' || flex.direction === 'row' ? [cross, flex.gap] : [flex.gap, cross];
+  return row === column ? `${row}px` : `${row}px ${column}px`;
+}
+
 /**
  * The single source of truth for how a node looks.
  *
  * The canvas renders real DOM with these styles and `export/toReact` serialises
  * the very same object, so a design cannot render one way and export another.
  */
-export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
+/**
+ * A field's value as CSS: the variable when one is bound, the number otherwise.
+ *
+ * Emitting `var()` rather than the resolved number is what makes the binding
+ * live — the exported CSS moves with the token, instead of freezing whatever it
+ * happened to be at export time.
+ */
+function bound(
+  node: SceneNode,
+  field: NumericField,
+  tokens: Record<string, string>,
+): string | null {
+  const id = node.vars?.[field];
+  const name = id ? tokens[id] : undefined;
+  if (!name) return null;
+  // A number variable is a bare number, so it can serve a length, a ratio or a
+  // count. `calc` is what gives it the unit the property being written wants.
+  return `calc(var(--${name}) * 1px)`;
+}
+
+export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, string> = {}): CSSProperties {
   const style: CSSProperties = {};
   const parent = node.parent ? doc[node.parent] : null;
   const inFlow = isInFlow(node, doc);
@@ -67,8 +117,8 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
   // ── Position ─────────────────────────────────────────────────────────
   if (!inFlow) {
     style.position = 'absolute';
-    style.left = node.x;
-    style.top = node.y;
+    style.left = bound(node, 'x', varNames) ?? node.x;
+    style.top = bound(node, 'y', varNames) ?? node.y;
   } else {
     style.position = 'relative';
   }
@@ -82,13 +132,13 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
   const wMode = node.wMode === 'fit' && !canHug ? 'fixed' : node.wMode;
   const hMode = node.hMode === 'fit' && !canHug ? 'fixed' : node.hMode;
 
-  if (wMode === 'fixed') style.width = node.w;
+  if (wMode === 'fixed') style.width = bound(node, 'w', varNames) ?? node.w;
   else if (wMode === 'fit') style.width = 'fit-content';
   else if (inFlow && mainAxisIsWidth) style.flex = '1 1 0';
   else if (inFlow) style.alignSelf = 'stretch';
   else style.width = '100%';
 
-  if (hMode === 'fixed') style.height = node.h;
+  if (hMode === 'fixed') style.height = bound(node, 'h', varNames) ?? node.h;
   else if (hMode === 'fit') style.height = 'fit-content';
   else if (inFlow && !mainAxisIsWidth) style.flex = '1 1 0';
   else if (inFlow) style.alignSelf = 'stretch';
@@ -100,23 +150,48 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
   if (node.flipV) transforms.push('scaleY(-1)');
   if (transforms.length) style.transform = transforms.join(' ');
 
+  // A child that opted out of its parent's auto layout still answers to the
+  // cross-axis alignment it was given, so the override is applied last.
+  if (inFlow && node.alignSelf && node.alignSelf !== 'auto') {
+    style.alignSelf = ALIGN_CSS[node.alignSelf];
+  }
+
+  // Canvas stacking. CSS already paints later siblings on top, so only Figma's
+  // "First on top" needs saying — and it has to be said on the child.
+  if (inFlow && parent?.flex?.stacking === 'first') {
+    const index = parent.children.indexOf(node.id);
+    if (index >= 0) style.zIndex = parent.children.length - index;
+  }
+
   // ── Layout of this node's own children ───────────────────────────────
   if (node.flex) {
-    if (node.flex.mode === 'grid') {
+    const flex = node.flex;
+    if (flex.mode === 'grid') {
       style.display = 'grid';
-      style.gridTemplateColumns = `repeat(${Math.max(1, node.flex.columns ?? 2)}, minmax(0, 1fr))`;
-      style.alignItems = ALIGN_CSS[node.flex.align];
-      style.justifyItems = JUSTIFY_CSS[node.flex.justify] === 'space-between' ? 'stretch' : JUSTIFY_CSS[node.flex.justify];
+      style.gridTemplateColumns = `repeat(${Math.max(1, flex.columns ?? 2)}, minmax(0, 1fr))`;
+      // 0 rows means "however many the children need", which is grid's default
+      if (flex.rows) style.gridTemplateRows = `repeat(${flex.rows}, minmax(0, 1fr))`;
+      style.alignItems = ALIGN_CSS[flex.align];
+      style.justifyItems =
+        JUSTIFY_CSS[flex.justify] === 'space-between' ? 'stretch' : JUSTIFY_CSS[flex.justify];
     } else {
       style.display = 'flex';
-      style.flexDirection = node.flex.direction;
-      style.alignItems = ALIGN_CSS[node.flex.align];
-      style.justifyContent = JUSTIFY_CSS[node.flex.justify];
-      if (node.flex.wrap) style.flexWrap = 'wrap';
+      style.flexDirection = flex.direction;
+      // Baseline alignment is a cross-axis rule, so it supersedes align rather
+      // than sitting beside it — the same trade Figma's toggle makes.
+      style.alignItems = flex.baseline ? 'baseline' : ALIGN_CSS[flex.align];
+      style.justifyContent = JUSTIFY_CSS[flex.justify];
+      if (flex.wrap) {
+        style.flexWrap = 'wrap';
+        style.alignContent = ALIGN_CONTENT_CSS[flex.alignContent ?? 'start'];
+      }
     }
-    style.gap = node.flex.gap;
-    const [top, right, bottom, left] = node.flex.padding;
+    style.gap = gapCss(flex);
+    const [top, right, bottom, left] = flex.padding;
     style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
+    // "Strokes included in layout" is border-box: the stroke eats into the
+    // frame instead of growing it.
+    if (flex.strokesIncluded) style.boxSizing = 'border-box';
   } else if (node.type !== 'text') {
     // absolute children need a positioned ancestor
     style.display = 'block';
@@ -141,19 +216,43 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
   if (node.radii) {
     const [tl, tr, br, bl] = node.radii;
     style.borderRadius = `${tl}px ${tr}px ${br}px ${bl}px`;
-  } else if (node.radius) {
-    style.borderRadius = node.radius;
+  } else if (node.radius || node.vars?.radius) {
+    style.borderRadius = bound(node, 'radius', varNames) ?? node.radius;
   }
 
-  if (node.opacity !== 1) style.opacity = node.opacity;
+  // Figma's corner smoothing is CSS's superellipse: 2 is the circular corner
+  // every rounded box already has, and higher exponents flatten it toward the
+  // squircle. Browsers that do not know `corner-shape` ignore it and round.
+  if (node.cornerSmoothing && (node.radius || node.radii)) {
+    (style as Record<string, unknown>).cornerShape =
+      `superellipse(${(2 + node.cornerSmoothing * 4).toFixed(2)})`;
+  }
+
+  // opacity is a ratio, not a length — the variable is a percentage of one
+  const opacityToken = node.vars?.opacity;
+  const opacityName = opacityToken ? varNames[opacityToken] : undefined;
+  if (opacityName) style.opacity = `calc(var(--${opacityName}) / 100)`;
+  else if (node.opacity !== 1) style.opacity = node.opacity;
   if (node.blend !== 'normal') style.mixBlendMode = node.blend as CSSProperties['mixBlendMode'];
 
   // Border, inner shadow and drop shadow all share `box-shadow`; the order here
   // is what stacks them correctly — insets first, drop last.
   const shadows: string[] = [];
   if (node.border && node.type !== 'vector') {
-    const { width, color, style: lineStyle, position } = node.border;
-    if (lineStyle && lineStyle !== 'solid') {
+    const { width, color, style: lineStyle, position, sides } = node.border;
+    if (sides) {
+      // Individual strokes have to be real borders: a box-shadow ring cannot
+      // have four different widths, which is the whole point of the control.
+      const [top, right, bottom, left] = sides;
+      style.borderStyle = lineStyle ?? 'solid';
+      style.borderColor = color;
+      style.borderTopWidth = top;
+      style.borderRightWidth = right;
+      style.borderBottomWidth = bottom;
+      style.borderLeftWidth = left;
+      // an inside stroke eats into the box; an outside one grows it
+      style.boxSizing = position === 'outside' ? 'content-box' : 'border-box';
+    } else if (lineStyle && lineStyle !== 'solid') {
       // dashed/dotted can't be faked with a shadow, so use a real border
       style.border = `${width}px ${lineStyle} ${color}`;
       style.boxSizing = 'border-box';
@@ -166,14 +265,12 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
       shadows.push(`inset 0 0 0 ${width}px ${color}`);
     }
   }
-  if (node.innerShadow) {
-    const { x, y, blur, spread, color } = node.innerShadow;
-    shadows.push(`inset ${x}px ${y}px ${blur}px ${spread}px ${color}`);
-  }
-  for (const drop of [node.shadow, ...(node.shadows ?? [])]) {
-    if (!drop) continue;
-    shadows.push(`${drop.x}px ${drop.y}px ${drop.blur}px ${drop.spread}px ${drop.color}`);
-  }
+  // The Effects list owns the shadows and the blurs; `effectsOf` reads a
+  // pre-list document's `shadow`/`filters` back out as entries, so both shapes
+  // of document render the same.
+  const effects = effectsOf(node);
+  const { inset, drop, filter: blurs, backdrop } = effectStyle(effects, node.clip);
+  shadows.push(...inset, ...drop);
   if (shadows.length) style.boxShadow = shadows.join(', ');
 
   if (node.outline) {
@@ -182,19 +279,20 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
     style.outlineOffset = offset;
   }
 
+  // Layer blur comes from the effects list; the rest of `filters` is this
+  // canvas's colour adjustments, which Figma has no equivalent for.
+  const parts: string[] = [...blurs];
   if (node.filters) {
     const f = node.filters;
-    const parts: string[] = [];
-    if (f.blur) parts.push(`blur(${f.blur}px)`);
     if (f.brightness !== 1) parts.push(`brightness(${f.brightness})`);
     if (f.contrast !== 1) parts.push(`contrast(${f.contrast})`);
     if (f.saturate !== 1) parts.push(`saturate(${f.saturate})`);
     if (f.grayscale) parts.push(`grayscale(${f.grayscale})`);
     if (f.hueRotate) parts.push(`hue-rotate(${f.hueRotate}deg)`);
-    if (parts.length) style.filter = parts.join(' ');
-    // background blur is a separate CSS property — it frosts what is behind
-    if (f.backdropBlur) style.backdropFilter = `blur(${f.backdropBlur}px)`;
   }
+  if (parts.length) style.filter = parts.join(' ');
+  // background blur is a separate CSS property — it frosts what is behind
+  if (backdrop.length) style.backdropFilter = backdrop.join(' ');
 
   if (node.clip) style.overflow = 'hidden';
 
@@ -211,7 +309,23 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
     style.whiteSpace = 'pre-wrap';
     style.wordBreak = 'break-word';
 
-    if (node.vAlign && node.vAlign !== 'top') {
+    if (f.case && f.case !== 'none') {
+      style.textTransform =
+        f.case === 'upper' ? 'uppercase' : f.case === 'lower' ? 'lowercase' : 'capitalize';
+    }
+
+    // Figma's "Truncate text": keep N lines and ellipsise the rest
+    if (f.maxLines && f.maxLines > 0) {
+      style.display = '-webkit-box';
+      style.WebkitBoxOrient = 'vertical';
+      style.WebkitLineClamp = f.maxLines;
+      style.overflow = 'hidden';
+    }
+
+    // Truncation needs `-webkit-box`, so it and vertical alignment cannot both
+    // own `display`. Truncating wins: it is the one that changes what the text
+    // says, and a clipped line matters more than where the block sits.
+    if (node.vAlign && node.vAlign !== 'top' && !f.maxLines) {
       style.display = 'flex';
       style.flexDirection = 'column';
       style.justifyContent = node.vAlign === 'middle' ? 'center' : 'flex-end';
@@ -219,7 +333,7 @@ export function nodeStyle(node: SceneNode, doc: Doc): CSSProperties {
 
     if (node.underline) {
       const u = node.underline;
-      style.textDecorationLine = 'underline';
+      style.textDecorationLine = u.line === 'strikethrough' ? 'line-through' : 'underline';
       style.textDecorationStyle = u.style as CSSProperties['textDecorationStyle'];
       style.textDecorationColor = u.color;
       style.textDecorationThickness = `${u.thickness}px`;

@@ -12,8 +12,8 @@ import {
 import { getSession, type Presence, type Session } from '../collab/session';
 import { useUI as useUIStore } from '../state/ui';
 import type { Identity } from '../collab/identity';
-import type { Doc, SceneNode } from '../document/types';
-import type { Comment, DocStore, Token } from '../document/store';
+import type { Doc, SceneNode, StyleKind } from '../document/types';
+import type { Comment, DocStore, Style, Token } from '../document/store';
 
 const SessionContext = createContext<Session | null>(null);
 
@@ -102,18 +102,45 @@ export function useTokens(): Token[] {
   return store.listTokens();
 }
 
+export function useStyles(kind?: StyleKind): Style[] {
+  const store = useStore();
+  useSyncExternalStore(store.subscribe, store.getRevision, () => 0);
+  return store.listStyles(kind);
+}
+
 export function useComments(page: string): Comment[] {
   const store = useStore();
   useSyncExternalStore(store.subscribe, store.getRevision, () => 0);
   return store.listComments(page);
 }
 
+/** Token ids mapped to their names, for the `var()` a bound field emits. */
+export function useVarNames(): Record<string, string> {
+  const tokens = useTokens();
+  const names: Record<string, string> = {};
+  for (const token of tokens) names[token.id] = token.name;
+  return names;
+}
+
 /** Tokens as CSS custom properties, applied to the canvas root. */
 export function useTokenVars(): Record<string, string> {
   const tokens = useTokens();
   const vars: Record<string, string> = {};
-  for (const token of tokens) vars[`--${token.name}`] = token.value;
+  for (const token of tokens) vars[`--${token.name}`] = cssValueOf(token);
   return vars;
+}
+
+/**
+ * A number variable is published unitless.
+ *
+ * Whoever uses it supplies the unit — `calc(var(--x) * 1px)` for a length,
+ * `calc(var(--x) / 100)` for a ratio. Publishing "16px" instead would make the
+ * variable usable as a width and nowhere else.
+ */
+export function cssValueOf(token: Token): string {
+  if (token.type !== 'number') return token.value;
+  const match = /-?\d*\.?\d+/.exec(String(token.value));
+  return match ? match[0] : token.value;
 }
 
 /** Everyone else in the room, in a stable order so avatars don't shuffle. */

@@ -207,3 +207,136 @@ export function replaceGradientStop(value: string, index: number, next: string):
   if (!stop) return value;
   return value.slice(0, stop.start) + next + value.slice(stop.end);
 }
+
+// ── Gradients and patterns ───────────────────────────────────────────────
+
+export type GradientKind = 'linear' | 'radial' | 'conic';
+
+export interface Gradient {
+  kind: GradientKind;
+  /** degrees; ignored by radial, which has no direction to speak of */
+  angle: number;
+  stops: { color: string; at: number }[];
+}
+
+/** Splits on commas that are not inside brackets — `rgb(1, 2, 3)` is one item. */
+function topLevelParts(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i];
+    if (char === '(') depth++;
+    else if (char === ')') depth--;
+    else if (char === ',' && depth === 0) {
+      parts.push(body.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(body.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
+/**
+ * Reads a gradient into something the picker can edit stop by stop.
+ *
+ * `gradientStops` above finds colours in place, which is what a single-stop
+ * rewrite needs; this is the other half — adding, removing and moving stops
+ * means holding the whole thing as data and re-emitting it.
+ */
+export function parseGradient(value: string): Gradient | null {
+  const head = /^(linear|radial|conic)-gradient\(/.exec(value.trim());
+  if (!head) return null;
+  const body = value.trim().slice(head[0].length, value.trim().lastIndexOf(')'));
+  const parts = topLevelParts(body);
+  if (!parts.length) return null;
+
+  const kind = head[1] as GradientKind;
+  // the first part is a direction only when it carries no colour
+  const direction = /deg|to\s|circle|ellipse|at\s/.test(parts[0]) && !/#|rgb|hsl|var\(/.test(parts[0])
+    ? parts.shift()!
+    : '';
+  const angleMatch = /(-?[\d.]+)deg/.exec(direction);
+  const angle = angleMatch ? Number(angleMatch[1]) : kind === 'linear' ? 180 : 0;
+
+  const stops = parts.map((part, index) => {
+    const at = /(-?[\d.]+)%/.exec(part);
+    return {
+      color: part.replace(/\s+-?[\d.]+%.*$/, '').trim(),
+      at: at ? Number(at[1]) : (index / Math.max(1, parts.length - 1)) * 100,
+    };
+  });
+  if (stops.length < 2) return null;
+
+  return { kind, angle, stops };
+}
+
+export function formatGradient({ kind, angle, stops }: Gradient): string {
+  const list = stops
+    .map((stop) => `${stop.color} ${Math.round(stop.at)}%`)
+    .join(', ');
+  if (kind === 'radial') return `radial-gradient(circle at 50% 50%, ${list})`;
+  if (kind === 'conic') return `conic-gradient(from ${Math.round(angle)}deg, ${list})`;
+  return `linear-gradient(${Math.round(angle)}deg, ${list})`;
+}
+
+export interface PatternSpec {
+  a: string;
+  b: string;
+  angle: number;
+  /** stripe width in px */
+  size: number;
+}
+
+const PATTERN = /^repeating-linear-gradient\(\s*(-?[\d.]+)deg\s*,\s*(.+?)\s+0\s+([\d.]+)px\s*,\s*(.+?)\s+[\d.]+px\s+[\d.]+px\s*\)$/;
+
+/** A pattern is a repeating two-stripe gradient; these are its four knobs. */
+export function parsePattern(value: string): PatternSpec | null {
+  const match = PATTERN.exec(value.trim());
+  if (!match) return null;
+  return { angle: Number(match[1]), a: match[2], size: Number(match[3]), b: match[4] };
+}
+
+export function formatPattern({ a, b, angle, size }: PatternSpec): string {
+  const step = Math.max(1, Math.round(size));
+  return `repeating-linear-gradient(${Math.round(angle)}deg, ${a} 0 ${step}px, ${b} ${step}px ${step * 2}px)`;
+}
+
+/** The address inside a `url(...)` paint. */
+export function imageSrc(value: string): string {
+  return /^url\(\s*['"]?(.*?)['"]?\s*\)$/.exec(value.trim())?.[1] ?? '';
+}
+
+// ── Contrast ─────────────────────────────────────────────────────────────
+
+/** WCAG relative luminance. */
+function luminance(hex: string): number {
+  const channel = (value: number) => {
+    const v = value / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const [r, g, b] = hexToRgb(hex);
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/**
+ * The WCAG contrast ratio between two colours, 1–21.
+ *
+ * This is what Figma's "Check color contrast" button reports: whether the paint
+ * you are choosing is legible against what sits behind it.
+ */
+export function contrastRatio(a: string, b: string): number {
+  const [x, y] = [luminance(a), luminance(b)];
+  const [light, dark] = x > y ? [x, y] : [y, x];
+  return (light + 0.05) / (dark + 0.05);
+}
+
+/** Which WCAG thresholds a ratio clears, for normal and for large text. */
+export function contrastGrades(ratio: number): { label: string; passes: boolean }[] {
+  return [
+    { label: 'AA', passes: ratio >= 4.5 },
+    { label: 'AAA', passes: ratio >= 7 },
+    { label: 'AA Large', passes: ratio >= 3 },
+    { label: 'AAA Large', passes: ratio >= 4.5 },
+  ];
+}

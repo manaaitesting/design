@@ -85,6 +85,8 @@ export function nodeToSvg(
   nodeId: string,
   zoom: number,
   vars: Record<string, string> = {},
+  /** Figma's "Contents only": drop the layer's own paint and keep what is in it */
+  contentsOnly = false,
 ): Serialised | null {
   const source = elementFor(nodeId);
   if (!source) return null;
@@ -107,6 +109,13 @@ export function nodeToSvg(
   clone.style.height = `${height}px`;
   clone.style.transform = clone.style.transform.replace(/scale\([^)]*\)/g, '').trim();
 
+  if (contentsOnly) {
+    clone.style.background = 'none';
+    clone.style.border = 'none';
+    clone.style.boxShadow = 'none';
+    clone.style.borderRadius = '0';
+  }
+
   const declarations = Object.entries(vars)
     .map(([name, value]) => `${name}:${value}`)
     .join(';');
@@ -127,8 +136,9 @@ export async function nodeToPng(
   zoom: number,
   scale: number,
   vars: Record<string, string> = {},
+  contentsOnly = false,
 ): Promise<Blob> {
-  const serialised = nodeToSvg(nodeId, zoom, vars);
+  const serialised = nodeToSvg(nodeId, zoom, vars, contentsOnly);
   if (!serialised) throw new Error('That layer is not on screen — scroll it into view and try again.');
 
   const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialised.svg)}`;

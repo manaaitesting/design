@@ -1,4 +1,5 @@
 import { nodeStyle, styleToCss } from '../document/css';
+import { effectLayers, effectsOf } from '../document/effects';
 import type { Doc, SceneNode } from '../document/types';
 import { compose, SHADER_BY_ID } from '../webgl/shaders';
 import type { Token } from '../document/store';
@@ -33,7 +34,70 @@ interface Emitted {
  * renders with — so the exported component is not an approximation of the
  * design, it is the design.
  */
+/**
+ * The markup a text node's content becomes.
+ *
+ * Plain text is the string. Paragraph spacing and lists need the lines to be
+ * real blocks first — the same split the canvas makes, so the export and the
+ * artboard say the same thing. JSX and HTML disagree about how an inline style
+ * is written, so the caller supplies that rather than the two growing apart.
+ */
+function textMarkup(
+  node: SceneNode,
+  escape: (value: string) => string,
+  inlineStyle: (declarations: Record<string, string | number>) => string,
+): string {
+  const font = node.font;
+  const spacing = font?.paragraphSpacing ?? 0;
+  const list = font?.list && font.list !== 'none' ? font.list : null;
+  const text = node.text ?? '';
+  if (!spacing && !list) return escape(text);
+
+  const lines = text.split('\n');
+  const gap = (index: number) => (index && spacing ? ` ${inlineStyle({ marginTop: spacing })}` : '');
+  if (!list) {
+    return lines.map((line, i) => `<div${gap(i)}>${escape(line)}</div>`).join('');
+  }
+  const tag = list === 'number' ? 'ol' : 'ul';
+  const items = lines.map((line, i) => `<li${gap(i)}>${escape(line)}</li>`).join('');
+  return `<${tag} ${inlineStyle({ margin: 0, paddingLeft: '1.4em' })}>${items}</${tag}>`;
+}
+
+/** A number variable is published unitless; everything else passes through. */
+function tokenCssValue(token: Token): string {
+  if (token.type !== 'number') return token.value;
+  const match = /-?\d*\.?\d+/.exec(String(token.value));
+  return match ? match[0] : token.value;
+}
+
+/** Token ids to names, so a bound field exports as the variable it follows. */
+function namesOf(tokens: Token[]): Record<string, string> {
+  const names: Record<string, string> = {};
+  for (const token of tokens) names[token.id] = token.name;
+  return names;
+}
+
+/** `style={{ marginTop: 8 }}` — JSX takes an object. */
+function jsxStyle(declarations: Record<string, string | number>): string {
+  const body = Object.entries(declarations)
+    .map(([key, value]) => `${key}: ${typeof value === 'number' ? value : JSON.stringify(value)}`)
+    .join(', ');
+  return `style={{ ${body} }}`;
+}
+
+/** `style="margin-top: 8px"` — HTML takes a declaration block. */
+function htmlStyle(declarations: Record<string, string | number>): string {
+  const body = Object.entries(declarations)
+    .map(([key, value]) => {
+      const name = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+      return `${name}: ${typeof value === 'number' && value !== 0 ? `${value}px` : value}`;
+    })
+    .join('; ');
+  return `style="${body}"`;
+}
+
 export function toReact(rootId: string, doc: Doc, tokens: Token[] = []): Emitted {
+  const varNames = namesOf(tokens);
   const rules: string[] = [];
   const usedShaders = new Set<string>();
 
@@ -43,7 +107,7 @@ export function toReact(rootId: string, doc: Doc, tokens: Token[] = []): Emitted
     const pad = '  '.repeat(depth + 2);
     const className = slug(node.name, node.id);
 
-    const style = nodeStyle(node, doc);
+    const style = nodeStyle(node, doc, varNames);
     // the root of an export shouldn't be absolutely positioned inside nothing
     if (depth === 0) {
       delete style.position;
@@ -52,8 +116,20 @@ export function toReact(rootId: string, doc: Doc, tokens: Token[] = []): Emitted
     }
     rules.push(`.${className} {\n${styleToCss(style)}\n}`);
 
+    // Noise, texture, progressive blur and glass paint on their own surface —
+    // the canvas draws them as overlay divs, so the export has to as well.
+    const layers = effectLayers(effectsOf(node), node.clip);
+    layers.forEach((layer, index) => {
+      rules.push(`.${className}-fx${index} {\n${styleToCss(layer.style)}\n}`);
+    });
+    const overlays = layers
+      .map((_, index) => `${pad}  <div className="${className}-fx${index}" />`)
+      .join('\n');
+
     if (node.type === 'text') {
-      return `${pad}<div className="${className}">${escapeText(node.text ?? '')}</div>`;
+      const text = textMarkup(node, escapeText, jsxStyle);
+      if (!overlays) return `${pad}<div className="${className}">${text}</div>`;
+      return `${pad}<div className="${className}">\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
     }
     if (node.type === 'shader' && node.shader) {
       usedShaders.add(node.shader.id);
@@ -65,9 +141,12 @@ export function toReact(rootId: string, doc: Doc, tokens: Token[] = []): Emitted
       );
     }
     if (node.children.length === 0) {
-      return `${pad}<div className="${className}" />`;
+      if (!overlays) return `${pad}<div className="${className}" />`;
+      return `${pad}<div className="${className}">\n${overlays}\n${pad}</div>`;
     }
-    const children = node.children.map((childId) => walk(childId, depth + 1)).filter(Boolean).join('\n');
+    const children = [node.children.map((childId) => walk(childId, depth + 1)).filter(Boolean).join('\n'), overlays]
+      .filter(Boolean)
+      .join('\n');
     return `${pad}<div className="${className}">\n${children}\n${pad}</div>`;
   };
 
@@ -96,7 +175,11 @@ ${shaderRuntime}`;
 function emitTokenRoot(css: string, tokens: Token[]): string {
   const used = tokens.filter((token) => css.includes(`var(--${token.name})`));
   if (!used.length) return '';
-  const declarations = used.map((token) => `  --${token.name}: ${token.value};`).join('\n');
+  // published the same way the canvas publishes them: a number is unitless,
+  // and whoever uses it supplies the unit
+  const declarations = used
+    .map((token) => `  --${token.name}: ${tokenCssValue(token)};`)
+    .join('\n');
   return `:root {\n${declarations}\n}\n\n`;
 }
 
@@ -193,27 +276,37 @@ export function Shader({ id, params = {} }) {
 
 /** Standalone HTML, styles inlined — paste into any page. */
 export function toHtml(rootId: string, doc: Doc, tokens: Token[] = []): string {
+  const varNames = namesOf(tokens);
   const walk = (id: string, depth: number): string => {
     const node = doc[id];
     if (!node || !node.visible) return '';
     const pad = '  '.repeat(depth + 2);
-    const style = nodeStyle(node, doc);
+    const style = nodeStyle(node, doc, varNames);
     if (depth === 0) {
       delete style.position;
       delete style.left;
       delete style.top;
     }
     const inline = styleToCss(style, '').replace(/\n/g, ' ').trim();
+    const overlays = effectLayers(effectsOf(node), node.clip)
+      .map((layer) => `${pad}  <div style="${styleToCss(layer.style, '').replace(/\n/g, ' ').trim()}"></div>`)
+      .join('\n');
 
     if (node.type === 'text') {
-      return `${pad}<div style="${inline}">${node.text ?? ''}</div>`;
+      const text = textMarkup(node, (value) => value, htmlStyle);
+      if (!overlays) return `${pad}<div style="${inline}">${text}</div>`;
+      return `${pad}<div style="${inline}">\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
     }
     if (node.type === 'shader') {
       // a GPU surface has no static equivalent — React export carries the GLSL
       return `${pad}<div style="${inline}"><!-- shader: ${node.shader?.id} — export as React for the GLSL --></div>`;
     }
-    if (node.children.length === 0) return `${pad}<div style="${inline}"></div>`;
-    const children = node.children.map((childId) => walk(childId, depth + 1)).filter(Boolean).join('\n');
+    if (node.children.length === 0) {
+      return `${pad}<div style="${inline}">${overlays ? `\n${overlays}\n${pad}` : ''}</div>`;
+    }
+    const children = [node.children.map((childId) => walk(childId, depth + 1)).filter(Boolean).join('\n'), overlays]
+      .filter(Boolean)
+      .join('\n');
     return `${pad}<div style="${inline}">\n${children}\n${pad}</div>`;
   };
 

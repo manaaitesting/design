@@ -15,6 +15,8 @@ import { listAllFiles } from '../src/server/db';
 import { toHtml, toJson, toReact } from '../src/export/toCode';
 import { ROOT_ID, type NodeType, type SceneNode } from '../src/document/types';
 import { DEFAULT_FONT } from '../src/document/defaults';
+import { effectsOf, newEffect, splitColor } from '../src/document/effects';
+import type { Effect, EffectType } from '../src/document/types';
 
 /**
  * Paperlike's MCP server.
@@ -190,6 +192,48 @@ const PROPS = z
       .nullable()
       .optional()
       .describe('null removes the shadow. Partial patches merge.'),
+    effects: z
+      .array(
+        z
+          .object({
+            type: z.enum([
+              'inner-shadow',
+              'drop-shadow',
+              'layer-blur',
+              'background-blur',
+              'noise',
+              'texture',
+              'glass',
+              'shader',
+            ]),
+            visible: z.boolean().optional(),
+            x: z.number().optional().describe('shadows: offset'),
+            y: z.number().optional(),
+            blur: z.number().optional().describe('shadows and uniform blurs'),
+            spread: z.number().optional(),
+            color: z.string().optional().describe('shadows and mono/duo noise'),
+            opacity: z.number().min(0).max(1).optional().describe("the colour's own alpha"),
+            blend: z.string().optional().describe('blend mode for this effect alone'),
+            progressive: z.boolean().optional().describe('blurs: ramp start → end'),
+            start: z.number().optional(),
+            end: z.number().optional(),
+            variant: z.enum(['mono', 'duo', 'multi']).optional().describe('noise'),
+            sizeX: z.number().optional().describe('noise and texture grain size'),
+            sizeY: z.number().optional(),
+            density: z.number().min(0).max(1).optional(),
+            color2: z.string().optional().describe('duo noise'),
+            opacity2: z.number().min(0).max(1).optional(),
+            grain: z.number().min(0).max(1).optional().describe('multi noise opacity'),
+            radius: z.number().optional().describe('texture'),
+            clip: z.boolean().optional().describe('texture: clip to shape'),
+            refraction: z.number().min(0).max(1).optional().describe('glass'),
+            depth: z.number().optional(),
+          })
+          .describe('Only the fields the type uses matter; the rest take Figma\'s defaults.'),
+      )
+      .nullable()
+      .optional()
+      .describe('The Effects list, in paint order. Replaces whatever the layer had.'),
     visible: z.boolean().optional(),
     locked: z.boolean().optional(),
     clip: z.boolean().optional(),
@@ -203,10 +247,27 @@ const PROPS = z
         justify: z.enum(['start', 'center', 'end', 'between']).default('start'),
         wrap: z.boolean().default(false),
         columns: z.number().optional(),
+        rows: z.number().optional().describe('grid rows; 0 fits as many as the children need'),
+        crossGap: z.number().optional().describe('space between wrapped lines and grid rows'),
+        alignContent: z
+          .enum(['start', 'center', 'end', 'stretch', 'between'])
+          .optional()
+          .describe('how wrapped lines share the leftover cross-axis space'),
+        strokesIncluded: z.boolean().optional().describe('count strokes inside the box'),
+        stacking: z.enum(['first', 'last']).optional().describe('which sibling paints on top'),
+        baseline: z.boolean().optional().describe('align text by its baseline'),
       })
       .nullable()
       .optional()
       .describe('Non-null makes this a layout container; children then flow.'),
+    absolute: z
+      .boolean()
+      .optional()
+      .describe('Opts this child out of its parent\'s auto layout, keeping its own x/y.'),
+    alignSelf: z
+      .enum(['auto', 'start', 'center', 'end', 'stretch'])
+      .optional()
+      .describe('Overrides the parent layout\'s cross-axis alignment for this child.'),
   })
   .describe('Any subset of a node\'s properties.');
 
@@ -217,12 +278,34 @@ const DEFAULT_SHADOW = { x: 0, y: 2, blur: 8, spread: 0, color: 'rgba(0,0,0,0.2)
  * font/border/shadow are whole objects on a node, so a patch carrying one
  * would otherwise replace it outright — setting just `size` would drop the
  * colour with it. Merge each over what the node already has.
+ *
+ * `shadow` is also the older way of asking for one. A layer edited in the
+ * panel keeps its shadows in the effects list, and the list wins when it is
+ * there — so a legacy patch is folded into it rather than written somewhere
+ * that no longer renders.
  */
 function withSpecs(props: Record<string, unknown>, node?: SceneNode): Partial<SceneNode> {
   const out = { ...props };
   if (out.font) out.font = { ...(node?.font ?? DEFAULT_FONT), ...(out.font as object) };
   if (out.border) out.border = { ...(node?.border ?? DEFAULT_BORDER), ...(out.border as object) };
   if (out.shadow) out.shadow = { ...(node?.shadow ?? DEFAULT_SHADOW), ...(out.shadow as object) };
+
+  if (Array.isArray(out.effects)) {
+    out.effects = (out.effects as { type: EffectType }[]).map((effect, index) => ({
+      ...newEffect(effect.type),
+      id: `mcp-${index}`,
+      ...effect,
+    }));
+    // the list supersedes the older fields, so retire them in the same patch
+    Object.assign(out, { shadow: null, innerShadow: null, shadows: [] });
+  } else if (out.shadow && node?.effects) {
+    const spec = out.shadow as { x: number; y: number; blur: number; spread: number; color: string };
+    const drop: Effect = { ...newEffect('drop-shadow'), ...spec, ...splitColor(spec.color) };
+    const list = effectsOf(node);
+    const at = list.findIndex((effect) => effect.type === 'drop-shadow');
+    out.effects = at === -1 ? [...list, drop] : list.map((e, i) => (i === at ? { ...drop, id: e.id } : e));
+    out.shadow = null;
+  }
   return out as Partial<SceneNode>;
 }
 

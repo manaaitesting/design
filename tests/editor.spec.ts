@@ -487,6 +487,125 @@ test.describe('paint picker', () => {
     await removeNodes(page, [id]);
   });
 
+  test('each type swaps the body below the tabs for its own controls', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'PickMe', x: 40, y: 500, w: 200, h: 120, fill: '#D9D9D9' });
+    await select(page, [id]);
+    await openPicker(page);
+    const picker = page.getByTestId('paint-picker');
+
+    const pick = (label: string) =>
+      page.locator(`.fig-picker-type[title="${label}"] input`).click({ force: true });
+
+    // Solid: the spectrum, and nothing that belongs to another type
+    await expect(picker.locator('.fig-picker-spectrum')).toBeVisible();
+    await expect(picker.locator('.fig-picker-ramp')).toBeHidden();
+
+    await pick('Gradient');
+    await expect(picker.locator('.fig-picker-ramp')).toBeVisible();
+    await expect(picker.getByRole('combobox', { name: 'Gradient type' })).toBeVisible();
+    // the stops keep the spectrum, because a stop is still a colour
+    await expect(picker.locator('.fig-picker-spectrum')).toBeVisible();
+
+    await pick('Pattern');
+    await expect(picker.getByLabel('Stripe width')).toBeVisible();
+    await expect(picker.locator('.fig-picker-ramp')).toBeHidden();
+
+    await pick('Image');
+    await expect(picker.locator('.fig-picker-image-preview')).toBeVisible();
+    await expect(picker.getByLabel('Image URL')).toBeVisible();
+    // an image has no colour to spectrum
+    await expect(picker.locator('.fig-picker-spectrum')).toBeHidden();
+
+    await pick('Video');
+    await expect(picker.getByPlaceholder('https://…/clip.mp4')).toBeVisible();
+
+    await pick('Shader');
+    await expect(picker.locator('.fig-picker-body').getByTitle('Shader')).toBeVisible();
+
+    await pick('Solid');
+    await expect(picker.locator('.fig-picker-spectrum')).toBeVisible();
+    await removeNodes(page, [id]);
+  });
+
+  test('the gradient ramp adds, moves and removes a stop', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'PickMe', x: 40, y: 500, w: 200, h: 120, fill: '#D9D9D9' });
+    await select(page, [id]);
+    await openPicker(page);
+    await page.locator('.fig-picker-type[title="Gradient"] input').click({ force: true });
+    const picker = page.getByTestId('paint-picker');
+
+    await expect(picker.locator('.fig-picker-ramp-stop')).toHaveCount(2);
+    await picker.getByTitle('Add a stop').click();
+    await expect(picker.locator('.fig-picker-ramp-stop')).toHaveCount(3);
+
+    // the new stop sits between the two it was added from
+    const stops = (await doc(page))[id].fill!.match(/(\d+)%/g)!;
+    expect(stops).toEqual(['0%', '50%', '100%']);
+
+    await picker.getByTitle('Remove this stop').click();
+    await expect(picker.locator('.fig-picker-ramp-stop')).toHaveCount(2);
+    await removeNodes(page, [id]);
+  });
+
+  test('the gradient type dropdown rewrites the paint, keeping its stops', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'PickMe', x: 40, y: 500, w: 200, h: 120, fill: '#D9D9D9' });
+    await select(page, [id]);
+    await openPicker(page);
+    await page.locator('.fig-picker-type[title="Gradient"] input').click({ force: true });
+
+    await page.getByRole('combobox', { name: 'Gradient type' }).click();
+    await page.getByRole('option', { name: 'Angular' }).click();
+
+    const fill = (await doc(page))[id].fill!;
+    expect(fill).toContain('conic-gradient');
+    expect(fill).toContain('#DDDDDD');
+    expect(fill).toContain('#A4A4A4');
+    await removeNodes(page, [id]);
+  });
+
+  test('the contrast button reports a ratio against what the layer sits on', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    const id = await page.evaluate((parent) => {
+      const store = window.paperlike!.store;
+      const made = store.create('rect', parent, {
+        name: 'Contrasty', x: 40, y: 40, w: 200, h: 120, fill: '#767676',
+      });
+      store.commit();
+      return made;
+    }, board!.id);
+    await select(page, [id]);
+    await openPicker(page);
+    const picker = page.getByTestId('paint-picker');
+
+    await picker.getByLabel('Check color contrast').click();
+    // #767676 on the board's white is 4.54:1 — the AA threshold, and no more
+    await expect(picker.getByLabel(/^Contrast ratio 4\.5/)).toBeVisible();
+    await expect(picker.locator('.fig-picker-grade[data-pass]', { hasText: 'AA' }).first()).toBeVisible();
+    await expect(picker.locator('.fig-picker-grade', { hasText: 'AAA' }).first()).not.toHaveAttribute('data-pass', '');
+
+    // it used to toggle the colour format instead of checking anything
+    await expect(picker.getByRole('combobox', { name: 'Color format' })).toHaveText(/Hex/);
+    await removeNodes(page, [id]);
+  });
+
+  test('both blend menus offer the same modes, and the panel one is not clipped', async ({ page }) => {
+    const cover = await nodeNamed(page, 'Cover');
+    await select(page, [cover!.id]);
+
+    await page.getByRole('button', { name: /Apply blend mode/ }).click();
+    const list = page.getByRole('listbox', { name: 'Blend mode' });
+    await expect(list.getByRole('option')).toHaveCount(18);
+
+    // the inspector scrolls, so a menu positioned inside it would be cut off
+    const panel = (await page.locator('.fig').first().boundingBox())!;
+    const menu = (await list.boundingBox())!;
+    expect(menu.x).toBeGreaterThanOrEqual(0);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(panel.x + panel.width + 1);
+
+    await page.getByRole('option', { name: 'Plus lighter' }).click();
+    expect((await doc(page))[cover!.id].blend).toBe('plus-lighter');
+  });
+
   test('the format dropdown round-trips a typed value', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'PickMe', x: 40, y: 500, w: 200, h: 120, fill: '#D9D9D9' });
     await select(page, [id]);
@@ -1225,5 +1344,1185 @@ test.describe('control padding', () => {
     const icon = page.locator('.fig-interaction .fig-btn:not([data-text])').first();
     const box = (await icon.boundingBox())!;
     expect(box.width).toBeLessThanOrEqual(28);
+  });
+});
+
+test.describe('export section', () => {
+  test('the button names the kind of layer, not its name', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    await select(page, [board!.id]);
+    await expect(page.locator('.fig-export')).toHaveText('Export Frame');
+
+    const cover = await nodeNamed(page, 'Cover');
+    await select(page, [cover!.id]);
+    await expect(page.locator('.fig-export')).toHaveText('Export Rectangle');
+
+    const caption = await nodeNamed(page, 'Caption');
+    await select(page, [caption!.id]);
+    await expect(page.locator('.fig-export')).toHaveText('Export Text');
+
+    // several at once says how many instead
+    await select(page, [cover!.id, caption!.id]);
+    await expect(page.locator('.fig-export')).toHaveText('Export 2 layers');
+  });
+
+  test('the preview renders the layer and follows the selection', async ({ page }) => {
+    const cover = await nodeNamed(page, 'Cover');
+    await select(page, [cover!.id]);
+    await page.getByRole('button', { name: 'Preview' }).click();
+
+    const preview = page.locator('.fig-export-preview img');
+    await expect(preview).toBeVisible();
+    await expect(page.locator('.fig-export-size')).toHaveText('240 × 240');
+
+    // switching layers re-renders it rather than showing the old one
+    const caption = await nodeNamed(page, 'Caption');
+    await select(page, [caption!.id]);
+    await expect(page.locator('.fig-export-size')).not.toHaveText('240 × 240');
+  });
+});
+
+test.describe('sections', () => {
+  test('⇧S puts the selection on a board without moving it', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    const before = await page.locator(`[data-node-id="${board!.id}"]`).boundingBox();
+
+    await select(page, [board!.id]);
+    await page.locator('.canvas-root, body').first().click({ position: { x: 5, y: 5 } });
+    await select(page, [board!.id]);
+    await page.keyboard.press('Shift+S');
+
+    const section = (await selection(page))[0];
+    const nodes = await doc(page);
+    expect(nodes[section].type).toBe('section');
+    expect(nodes[section].children).toContain(board!.id);
+
+    // the artboard keeps its place on screen
+    const after = await page.locator(`[data-node-id="${board!.id}"]`).boundingBox();
+    expect(after!.x).toBeCloseTo(before!.x, 0);
+    expect(after!.y).toBeCloseTo(before!.y, 0);
+  });
+
+  test('a section names itself on the canvas, and the label selects it', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    await select(page, [board!.id]);
+    await page.keyboard.press('Shift+S');
+    const section = (await selection(page))[0];
+
+    await select(page, []);
+    const label = page.locator('.section-label');
+    await expect(label).toHaveText('Section');
+    // and it steps aside once selected, so it does not double up with the
+    // selection's own name label
+
+    await label.click();
+    expect(await selection(page)).toEqual([section]);
+    await expect(page.locator('.section-label')).toHaveCount(0);
+  });
+
+  test('a frame inside a section is still what a click selects', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    await select(page, [board!.id]);
+    await page.keyboard.press('Shift+S');
+    await select(page, []);
+
+    // clicking a layer inside the artboard selects the artboard, not the section
+    const cover = await nodeNamed(page, 'Cover');
+    await page.locator(`[data-node-id="${cover!.id}"]`).click();
+    expect(await selection(page)).toEqual([board!.id]);
+  });
+
+  test('the export button says Section for one', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    await select(page, [board!.id]);
+    await page.keyboard.press('Shift+S');
+    await expect(page.locator('.fig-export')).toHaveText('Export Section');
+  });
+});
+
+test.describe('panel controls that used to do nothing', () => {
+  test('corner smoothing writes a superellipse the browser can draw', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Squircle', x: 40, y: 500, w: 160, h: 160, fill: '#4CC3F0', radius: 32 });
+    await select(page, [id]);
+
+    await page.getByRole('button', { name: 'Corner settings' }).first().click();
+    await page.getByRole('button', { name: "Apple's squircle — 60%" }).click();
+
+    expect((await doc(page))[id].cornerSmoothing).toBeCloseTo(0.6, 2);
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('corner-shape', 'superellipse(4.4)');
+    await removeNodes(page, [id]);
+  });
+
+  test('individual strokes give each side its own weight', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Edged', x: 40, y: 500, w: 160, h: 120, fill: '#FFFFFF' });
+    await select(page, [id]);
+    await page.evaluate((nodeId) => {
+      window.paperlike!.store.update(nodeId, {
+        border: { width: 2, color: '#111111', style: 'solid', position: 'inside' },
+      });
+    }, id);
+
+    await page.getByRole('button', { name: 'Advanced stroke' }).click();
+    await page.getByRole('button', { name: 'Set a weight for each side' }).click();
+    await page.getByTitle('Bottom').locator('input').fill('8');
+    await page.keyboard.press('Enter');
+
+    const element = page.locator(`[data-node-id="${id}"]`);
+    await expect(element).toHaveCSS('border-bottom-width', '8px');
+    await expect(element).toHaveCSS('border-top-width', '2px');
+    await removeNodes(page, [id]);
+  });
+
+  test('the export suffix reaches the filename', async ({ page }) => {
+    const cover = await nodeNamed(page, 'Cover');
+    await select(page, [cover!.id]);
+
+    await page.getByRole('button', { name: 'More options' }).click();
+    await page.getByPlaceholder('@2x, -dark…').fill('-dark');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Escape');
+
+    await page.locator('.fig-export').click();
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: /Save|Download|Export/ }).last().click();
+    expect((await download).suggestedFilename()).toContain('-dark');
+  });
+
+  test('text case and truncation reach the rendered text', async ({ page }) => {
+    const caption = await nodeNamed(page, 'Caption');
+    await select(page, [caption!.id]);
+
+    await page.getByRole('button', { name: 'Uppercase' }).click();
+    await expect(page.locator(`[data-node-id="${caption!.id}"]`)).toHaveCSS('text-transform', 'uppercase');
+
+    await page.getByTitle(/Truncate after/).locator('input').fill('2');
+    await page.keyboard.press('Enter');
+    await expect(page.locator(`[data-node-id="${caption!.id}"]`)).toHaveCSS('-webkit-line-clamp', '2');
+  });
+});
+
+test('a child id with no node behind it can be cleared', async ({ page }) => {
+  // A document can lose a node and keep the id in its parent's list — a merge
+  // that dropped one side, say. Delete used to skip those, so the stray stayed
+  // for good and every later delete skipped it too.
+  const stray = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const id = store.create('rect', 'root', { name: 'Doomed', x: 0, y: 0, w: 10, h: 10 });
+    // drop the node without touching root's children, as a bad merge would
+    store.ydoc.getMap('nodes').delete(id);
+    store.commit();
+    return id;
+  });
+
+  expect((await doc(page)).root.children).toContain(stray);
+  await removeNodes(page, [stray]);
+  expect((await doc(page)).root.children).not.toContain(stray);
+});
+
+test.describe('effects', () => {
+  /** Adds one effect through the + menu and leaves its dialog open. */
+  const addEffect = async (page: import('@playwright/test').Page, name: string) => {
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Effects$/ }),
+    });
+    await section.getByRole('button', { name: 'Add effect' }).click();
+    await page.getByRole('option', { name, exact: true }).first().click();
+  };
+
+  test('the + menu offers the eight effect types, and adding one writes it to the layer', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Effected', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
+    await select(page, [id]);
+
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Effects$/ }),
+    });
+    await section.getByRole('button', { name: 'Add effect' }).click();
+    const menu = page.getByRole('listbox', { name: 'Add effect' });
+    await expect(menu.getByRole('option')).toHaveText([
+      'Inner shadow',
+      'Drop shadow',
+      'Layer blur',
+      'Background blur',
+      'Noise',
+      'Texture',
+      'Glass',
+      'ShaderBeta',
+    ]);
+
+    await menu.getByRole('option', { name: 'Drop shadow', exact: true }).click();
+    // Figma's defaults, and the settings dialog opens on the effect just added
+    expect((await doc(page))[id].effects?.map((effect) => effect.type)).toEqual(['drop-shadow']);
+    await expect(page.locator('.fig-card')).toBeVisible();
+    await removeNodes(page, [id]);
+  });
+
+  test("a shadow's fields reach the rendered box-shadow", async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Shadowed', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
+    await select(page, [id]);
+    await addEffect(page, 'Drop shadow');
+
+    const card = page.locator('.fig-card');
+    await card.getByTitle('Y offset').locator('input').fill('10');
+    await page.keyboard.press('Enter');
+    await card.getByTitle('Blur', { exact: true }).locator('input').fill('16');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS(
+      'box-shadow',
+      'rgba(0, 0, 0, 0.25) 0px 10px 16px 0px',
+    );
+    await removeNodes(page, [id]);
+  });
+
+  test('the eye keeps an effect but takes it off the layer', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Hidden', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
+    await select(page, [id]);
+    await addEffect(page, 'Drop shadow');
+    await page.locator('.fig-effect').first().click();
+
+    await page.getByRole('button', { name: 'Hide effect' }).click();
+    expect((await doc(page))[id].effects?.[0].visible).toBe(false);
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('box-shadow', 'none');
+
+    await page.getByRole('button', { name: 'Show effect' }).click();
+    await expect(page.locator(`[data-node-id="${id}"]`)).not.toHaveCSS('box-shadow', 'none');
+    await removeNodes(page, [id]);
+  });
+
+  test('a progressive blur paints a masked layer rather than blurring the whole node', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Faded', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
+    await select(page, [id]);
+    await addEffect(page, 'Layer blur');
+
+    // uniform blur is a filter on the node itself
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('filter', 'blur(4px)');
+
+    await page.getByRole('tab', { name: 'Progressive' }).click();
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('filter', 'none');
+    const layer = page.locator(`[data-node-id="${id}"] > div[aria-hidden]`);
+    await expect(layer).toHaveCount(1);
+    await expect(layer).toHaveCSS('backdrop-filter', 'blur(4px)');
+    await removeNodes(page, [id]);
+  });
+
+  test('noise and texture paint their grain on a layer of their own', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Grainy', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
+    await select(page, [id]);
+    await addEffect(page, 'Noise');
+
+    // Duo asks for a second colour, Multi swaps both for an opacity
+    await page.getByRole('tab', { name: 'Duo' }).click();
+    await expect(page.locator('.fig-card').locator('input[aria-label="Color"]')).toHaveCount(2);
+    await page.getByRole('tab', { name: 'Multi' }).click();
+    await expect(page.locator('.fig-card').locator('input[aria-label="Color"]')).toHaveCount(0);
+    await expect(page.locator('.fig-card').getByTitle('Opacity').locator('input')).toHaveValue('15%');
+
+    const layer = page.locator(`[data-node-id="${id}"] > div[aria-hidden]`);
+    await expect(layer).toHaveCount(1);
+    expect(await layer.evaluate((el) => getComputedStyle(el).backgroundImage)).toContain('feTurbulence');
+    await removeNodes(page, [id]);
+  });
+
+  test("an effect's blend mode moves it onto its own layer, where CSS can blend it", async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Blended', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
+    await select(page, [id]);
+    await addEffect(page, 'Inner shadow');
+
+    await page.locator('.fig-card').getByRole('button', { name: /Effect blend mode/ }).click();
+    await page.getByRole('option', { name: 'Multiply' }).click();
+
+    expect((await doc(page))[id].effects?.[0].blend).toBe('multiply');
+    // box-shadow cannot blend, so the shadow moves to a layer that can
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('box-shadow', 'none');
+    const layer = page.locator(`[data-node-id="${id}"] > div[aria-hidden]`);
+    await expect(layer).toHaveCSS('mix-blend-mode', 'multiply');
+    await expect(layer).toHaveCSS('box-shadow', 'rgba(0, 0, 0, 0.25) 0px 4px 4px 0px inset');
+    await removeNodes(page, [id]);
+  });
+
+  test('background blur frosts what is behind, and goes progressive on its own layer', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Panel', x: 40, y: 500, w: 200, h: 140, fill: 'rgba(255,255,255,0.4)' });
+    await select(page, [id]);
+    await addEffect(page, 'Background blur');
+
+    await page.locator('.fig-card').getByTitle('Blur', { exact: true }).locator('input').fill('10');
+    await page.keyboard.press('Enter');
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('backdrop-filter', 'blur(10px)');
+
+    await page.getByRole('tab', { name: 'Progressive' }).click();
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('backdrop-filter', 'none');
+    await expect(page.locator(`[data-node-id="${id}"] > div[aria-hidden]`)).toHaveCSS('backdrop-filter', 'blur(4px)');
+    await removeNodes(page, [id]);
+  });
+
+  test("texture's clip to shape follows the layer's corners", async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Grain', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF', radius: 16 });
+    await select(page, [id]);
+    await addEffect(page, 'Texture');
+
+    const layer = page.locator(`[data-node-id="${id}"] > div[aria-hidden]`);
+    // unclipped, the grain runs square across a rounded card
+    await expect(layer).toHaveCSS('border-radius', '0px');
+    await page.getByRole('checkbox', { name: 'Clip to shape' }).check();
+    expect((await doc(page))[id].effects?.[0].clip).toBe(true);
+    await expect(layer).toHaveCSS('border-radius', '16px');
+    await removeNodes(page, [id]);
+  });
+
+  test('a style from the header applies a whole stack at once', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Styled', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
+    await select(page, [id]);
+
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Effects$/ }),
+    });
+    await section.getByRole('button', { name: 'Effects, apply styles' }).click();
+    await page.getByRole('option', { name: 'Card elevation' }).click();
+
+    expect((await doc(page))[id].effects?.map((effect) => effect.type)).toEqual([
+      'drop-shadow',
+      'drop-shadow',
+    ]);
+    await expect(page.locator('.fig-effect')).toHaveCount(2);
+    await removeNodes(page, [id]);
+  });
+});
+
+test.describe('position more-actions', () => {
+  test('tidy up regularises a ragged grid without resizing it', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      // two ragged rows: overlapping vertically within a row, uneven gaps
+      const boxes = [
+        { x: 700, y: 40, w: 60, h: 60 },
+        { x: 790, y: 46, w: 60, h: 60 },
+        { x: 910, y: 38, w: 60, h: 60 },
+        { x: 700, y: 170, w: 60, h: 60 },
+        { x: 805, y: 174, w: 60, h: 60 },
+      ];
+      const made = boxes.map((b, i) =>
+        store.create('rect', 'root', { name: `Tidy ${i}`, ...b, fill: '#4CC3F0' }),
+      );
+      store.commit();
+      return made;
+    });
+
+    await select(page, ids);
+    await page.getByRole('group', { name: 'Alignment' }).getByLabel('More actions').click();
+    await page.getByRole('button', { name: 'Tidy up' }).click();
+
+    const nodes = await doc(page);
+    const row = ids.slice(0, 3).map((id) => nodes[id]);
+    // the row now starts at the bounding box's left edge and steps evenly
+    expect(row[0].x).toBe(700);
+    expect(row[1].x - (row[0].x + row[0].w)).toBe(row[2].x - (row[1].x + row[1].w));
+    // and shares one baseline
+    expect(new Set(row.map((n) => n.y)).size).toBe(1);
+    // the second row still is a second row, and nothing was resized
+    expect(nodes[ids[3]].y).toBeGreaterThan(row[0].y + row[0].h);
+    expect(nodes[ids[3]].w).toBe(60);
+
+    await removeNodes(page, ids);
+  });
+
+  test('the menu opens inside the window, not clipped by the panel', async ({ page }) => {
+    const cover = await nodeNamed(page, 'Cover');
+    await select(page, [cover!.id]);
+    await page.getByRole('group', { name: 'Alignment' }).getByLabel('More actions').click();
+
+    const menu = page.getByRole('button', { name: 'Tidy up' });
+    await expect(menu).toBeVisible();
+    const panel = (await page.locator('.fig-shell .fig').first().boundingBox())!;
+    const box = (await menu.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(panel.x + panel.width + 1);
+  });
+});
+
+test('swapping an instance rebuilds it from the other component, in place', async ({ page }) => {
+  const { blue, green } = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const a = store.create('frame', 'root', { name: 'Blue', x: 700, y: 40, w: 120, h: 80, fill: '#4CC3F0' });
+    store.create('text', a, { name: 'BlueLabel', x: 8, y: 8, text: 'blue' });
+    const b = store.create('frame', 'root', { name: 'Green', x: 900, y: 40, w: 120, h: 80, fill: '#5FD08A' });
+    store.create('text', b, { name: 'GreenLabel', x: 8, y: 8, text: 'green' });
+    store.createComponent(a);
+    store.createComponent(b);
+    store.commit();
+    return { blue: a, green: b };
+  });
+
+  const instance = await page.evaluate(
+    (id) => window.paperlike!.store.createInstance(id, 'root', { x: 700, y: 200 }),
+    blue,
+  );
+  await select(page, [instance!]);
+
+  await page.getByTitle('Swap instance').click();
+  await page.getByRole('button', { name: 'Green' }).click();
+
+  const next = (await selection(page))[0];
+  const nodes = await doc(page);
+  expect(nodes[next].instanceOf).toBe(green);
+  // it kept its place on the canvas
+  expect(nodes[next].x).toBe(700);
+  expect(nodes[next].y).toBe(200);
+  // and the subtree is the new component's, not the old one's relabelled
+  expect(nodes[nodes[next].children[0]].text).toBe('green');
+  expect(nodes[instance!]).toBeUndefined();
+
+  await removeNodes(page, [blue, green, next]);
+});
+
+test.describe('multi-selection', () => {
+  async function twoUnalike(page: import('@playwright/test').Page) {
+    return page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'A', x: 700, y: 40, w: 60, h: 60, opacity: 1 });
+      const b = store.create('rect', 'root', { name: 'B', x: 900, y: 40, w: 120, h: 60, opacity: 0.5 });
+      store.commit();
+      return [a, b];
+    });
+  }
+
+  test('a field the layers disagree on reads Mixed, not the first one', async ({ page }) => {
+    const ids = await twoUnalike(page);
+    await select(page, ids);
+
+    // they share a height and a Y, so those still show a number
+    await expect(page.getByTitle('Height').locator('input')).toHaveValue('60');
+    await expect(page.getByTitle('Y-position').locator('input')).toHaveValue('40');
+    // and disagree on X, width and opacity
+    await expect(page.getByTitle('X-position').locator('input')).toHaveValue('Mixed');
+    await expect(page.getByTitle('Width').locator('input')).toHaveValue('Mixed');
+    await expect(page.getByTitle('Opacity').locator('input')).toHaveValue('Mixed');
+
+    // and the header names the count rather than one of the layers
+    const name = page.locator('.fig-section input[title]').first();
+    await expect(name).toHaveValue('2 layers');
+    await expect(name).toBeDisabled();
+
+    await removeNodes(page, ids);
+  });
+
+  test('layers with different fills show one Mixed paint, not the first hex', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'Red', x: 700, y: 40, w: 60, h: 60, fill: '#FF0000' });
+      const b = store.create('rect', 'root', { name: 'Blue', x: 800, y: 40, w: 60, h: 60, fill: '#0000FF' });
+      store.commit();
+      return [a, b];
+    });
+
+    await select(page, [ids[0]]);
+    await expect(page.getByLabel('Solid color hex: FF0000')).toBeVisible();
+
+    await select(page, ids);
+    await expect(page.getByLabel('Mixed paint')).toBeVisible();
+
+    // and settling it applies to both, rather than to whichever came first
+    const field = page.locator('.fig-section', { hasText: 'Fill' }).locator('input[aria-label="Color"]').first();
+    await field.fill('00FF00');
+    await field.blur();
+    const nodes = await doc(page);
+    expect(nodes[ids[0]].fill).toBe('#00FF00');
+    expect(nodes[ids[1]].fill).toBe('#00FF00');
+
+    await removeNodes(page, ids);
+  });
+
+  test('a dropdown the layers disagree on reads Mixed and ticks nothing', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const frame = store.create('frame', 'root', { name: 'Hugger', x: 700, y: 40, w: 100, h: 100 });
+      store.create('rect', frame, { name: 'Inner', x: 0, y: 0, w: 40, h: 40 });
+      store.update(frame, { wMode: 'fit' });
+      const fixed = store.create('frame', 'root', { name: 'Fixed', x: 900, y: 40, w: 100, h: 100 });
+      store.create('rect', fixed, { name: 'Inner2', x: 0, y: 0, w: 40, h: 40 });
+      store.commit();
+      return [frame, fixed];
+    });
+
+    await select(page, [ids[0]]);
+    await expect(page.getByTitle('Horizontal resizing')).toHaveText(/Hug contents/);
+
+    await select(page, ids);
+    await expect(page.getByTitle('Horizontal resizing')).toHaveText(/Mixed/);
+    // they agree vertically, so that one still names its value
+    await expect(page.getByTitle('Vertical resizing')).not.toHaveText(/Mixed/);
+
+    // nothing is ticked, because no option is true of the whole selection
+    await page.getByTitle('Horizontal resizing').click();
+    await expect(page.getByRole('listbox').getByText('✓')).toHaveCount(0);
+
+    await removeNodes(page, ids);
+  });
+
+  test('a stroke the layers disagree on reads Mixed too', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'Thin', x: 700, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      const b = store.create('rect', 'root', { name: 'Thick', x: 800, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      store.update(a, { border: { width: 1, color: '#111111', style: 'solid', position: 'inside' } });
+      store.update(b, { border: { width: 6, color: '#FF0000', style: 'solid', position: 'inside' } });
+      store.commit();
+      return [a, b];
+    });
+
+    await select(page, [ids[0]]);
+    await expect(page.getByTitle('Stroke weight').locator('input')).toHaveValue('1');
+
+    await select(page, ids);
+    // the paint and the weight disagree independently, and both say so
+    await expect(page.getByTitle('Stroke weight').locator('input')).toHaveValue('Mixed');
+    await expect(page.locator('.fig-section', { hasText: 'Stroke' }).getByLabel('Mixed paint')).toBeVisible();
+
+    await removeNodes(page, ids);
+  });
+
+  test('typing into a Mixed field settles every layer on that value', async ({ page }) => {
+    const ids = await twoUnalike(page);
+    await select(page, ids);
+
+    await page.getByTitle('Width').locator('input').fill('200');
+    await page.keyboard.press('Enter');
+
+    const nodes = await doc(page);
+    expect(nodes[ids[0]].w).toBe(200);
+    expect(nodes[ids[1]].w).toBe(200);
+    await expect(page.getByTitle('Width').locator('input')).toHaveValue('200');
+
+    await removeNodes(page, ids);
+  });
+});
+
+test.describe('component properties', () => {
+  /** A card component with a toggleable badge and an editable label. */
+  async function card(page: import('@playwright/test').Page) {
+    return page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const main = store.create('frame', 'root', {
+        name: 'Card', x: 700, y: 40, w: 200, h: 100, fill: '#FFFFFF',
+      });
+      const label = store.create('text', main, { name: 'Label', x: 12, y: 12, text: 'Hello' });
+      const badge = store.create('rect', main, { name: 'Badge', x: 160, y: 12, w: 24, h: 24, fill: '#FF5555' });
+      store.createComponent(main);
+
+      const showBadge = store.addComponentProp(main, { name: 'Show badge', type: 'boolean', value: 'true' })!;
+      const text = store.addComponentProp(main, { name: 'Label', type: 'text', value: 'Hello' })!;
+      store.bindProp(badge, { prop: showBadge, field: 'visible' });
+      store.bindProp(label, { prop: text, field: 'text' });
+      store.commit();
+      return { main, label, badge, showBadge, text };
+    });
+  }
+
+  test('an instance starts from the component defaults', async ({ page }) => {
+    const c = await card(page);
+    const instance = await page.evaluate(
+      (id) => window.paperlike!.store.createInstance(id, 'root', { x: 700, y: 200 }),
+      c.main,
+    );
+
+    const nodes = await doc(page);
+    expect(nodes[instance!].propValues![c.showBadge]).toBe('true');
+    expect(nodes[instance!].propValues![c.text]).toBe('Hello');
+    await removeNodes(page, [c.main, instance!]);
+  });
+
+  test('a boolean property hides the layer bound to it, on that instance alone', async ({ page }) => {
+    const c = await card(page);
+    const [one, two] = await page.evaluate((id) => {
+      const store = window.paperlike!.store;
+      return [
+        store.createInstance(id, 'root', { x: 700, y: 200 })!,
+        store.createInstance(id, 'root', { x: 950, y: 200 })!,
+      ];
+    }, c.main);
+
+    await page.evaluate(
+      ([id, prop]) => window.paperlike!.store.setPropValue(id as string, prop as string, 'false'),
+      [one, c.showBadge],
+    );
+    await page.waitForFunction(
+      ([id]) => {
+        const d = window.paperlike!.doc();
+        return d[d[id as string].children[1]]?.visible === false;
+      },
+      [one],
+    );
+
+    const nodes = await doc(page);
+    // the badge is the second child in both; only the one told to went away
+    expect(nodes[nodes[one].children[1]].visible).toBe(false);
+    expect(nodes[nodes[two].children[1]].visible).toBe(true);
+    await removeNodes(page, [c.main, one, two]);
+  });
+
+  test('a text property writes through to the bound layer', async ({ page }) => {
+    const c = await card(page);
+    const instance = await page.evaluate(
+      (id) => window.paperlike!.store.createInstance(id, 'root', { x: 700, y: 200 })!,
+      c.main,
+    );
+    await page.evaluate(
+      ([id, prop]) => window.paperlike!.store.setPropValue(id as string, prop as string, 'Goodbye'),
+      [instance, c.text],
+    );
+    await page.waitForFunction(
+      ([id]) => {
+        const d = window.paperlike!.doc();
+        return d[d[id as string].children[0]]?.text === 'Goodbye';
+      },
+      [instance],
+    );
+    // the main is untouched — a property is an instance's business
+    const nodes = await doc(page);
+    expect(nodes[nodes[c.main].children[0]].text).toBe('Hello');
+    await removeNodes(page, [c.main, instance]);
+  });
+
+  test('the panel publishes a property, binds a layer and sets it on an instance', async ({ page }) => {
+    // build the component through the panel, the way a person would
+    const { main, badge } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const frame = store.create('frame', 'root', { name: 'Chip', x: 700, y: 40, w: 160, h: 60, fill: '#FFFFFF' });
+      const dot = store.create('rect', frame, { name: 'Dot', x: 12, y: 12, w: 20, h: 20, fill: '#FF5555' });
+      store.createComponent(frame);
+      store.commit();
+      return { main: frame, badge: dot };
+    });
+
+    await select(page, [main]);
+    await page.getByRole('button', { name: 'Add property' }).click();
+    await page.getByRole('option', { name: 'Boolean' }).click();
+    await expect(page.getByRole('button', { name: /^Remove Boolean$/ })).toBeVisible();
+
+    // point the dot at it
+    await select(page, [badge]);
+    await page.getByTitle('Applied property').click();
+    await page.getByRole('button', { name: /Boolean · Boolean/ }).click();
+    expect((await doc(page))[badge].bindings![0].field).toBe('visible');
+
+    // and switch it off on an instance
+    const instance = await page.evaluate(
+      (id) => window.paperlike!.store.createInstance(id, 'root', { x: 700, y: 200 })!,
+      main,
+    );
+    await select(page, [instance]);
+    await page.getByLabel('Boolean', { exact: true }).uncheck();
+
+    await page.waitForFunction(
+      ([id]) => {
+        const d = window.paperlike!.doc();
+        return d[d[id as string].children[0]]?.visible === false;
+      },
+      [instance],
+    );
+    await removeNodes(page, [main, instance]);
+  });
+
+  test('retiring a property releases whatever followed it', async ({ page }) => {
+    const c = await card(page);
+    await page.evaluate(
+      ([main, prop]) => window.paperlike!.store.removeComponentProp(main as string, prop as string),
+      [c.main, c.showBadge],
+    );
+
+    const nodes = await doc(page);
+    expect(nodes[c.main].props!.map((p) => p.name)).toEqual(['Label']);
+    expect(nodes[c.badge].bindings ?? []).toEqual([]);
+    await removeNodes(page, [c.main]);
+  });
+});
+
+test.describe('variants', () => {
+  async function pair(page: import('@playwright/test').Page) {
+    return page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('frame', 'root', { name: 'Default', x: 700, y: 40, w: 120, h: 60, fill: '#DDDDDD' });
+      const b = store.create('frame', 'root', { name: 'Hover', x: 860, y: 40, w: 120, h: 60, fill: '#4CC3F0' });
+      store.createComponent(a);
+      store.createComponent(b);
+      const set = store.combineAsVariants([a, b])!;
+      store.commit();
+      return { a, b, set };
+    });
+  }
+
+  test('combining mains makes a set with a property that tells them apart', async ({ page }) => {
+    const { a, b, set } = await pair(page);
+    const nodes = await doc(page);
+
+    expect(nodes[set].isComponentSet).toBe(true);
+    expect(nodes[set].children).toEqual([a, b]);
+    const prop = nodes[set].props![0];
+    expect(prop.type).toBe('variant');
+    expect(prop.options).toEqual(['Default', 'Hover']);
+    expect(nodes[a].variantValues![prop.id]).toBe('Default');
+    expect(nodes[b].variantValues![prop.id]).toBe('Hover');
+    await removeNodes(page, [set]);
+  });
+
+  test('choosing a variant value swaps the instance to that variant', async ({ page }) => {
+    const { a, b, set } = await pair(page);
+    const prop = (await doc(page))[set].props![0];
+    const instance = await page.evaluate(
+      (id) => window.paperlike!.store.createInstance(id, 'root', { x: 700, y: 220 })!,
+      a,
+    );
+
+    const next = await page.evaluate(
+      ([id, propId]) => window.paperlike!.store.setPropValue(id as string, propId as string, 'Hover'),
+      [instance, prop.id],
+    );
+
+    const nodes = await doc(page);
+    expect(nodes[next!].instanceOf).toBe(b);
+    // it stayed where it was put
+    expect(nodes[next!].x).toBe(700);
+    expect(nodes[next!].y).toBe(220);
+    await removeNodes(page, [set, next!]);
+  });
+});
+
+test.describe('styles', () => {
+  test('a style moves every layer wearing it', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'A', x: 700, y: 40, w: 60, h: 60, fill: '#FF0000' });
+      const b = store.create('rect', 'root', { name: 'B', x: 800, y: 40, w: 60, h: 60, fill: '#00FF00' });
+      store.commit();
+      return [a, b];
+    });
+
+    const styleId = await page.evaluate(
+      (id) => window.paperlike!.store.createStyleFrom(id, 'fill', 'Brand'),
+      ids[0],
+    );
+    await page.evaluate(
+      ([list, style]) => window.paperlike!.store.applyStyle(list as string[], style as string, 'fill'),
+      [ids, styleId],
+    );
+    await page.waitForFunction(([id]) => window.paperlike!.doc()[id as string].fill === '#FF0000', [ids[1]]);
+
+    // editing the style moves both, because they follow rather than copy
+    await page.evaluate(
+      (style) =>
+        window.paperlike!.store.updateStyle(style as string, {
+          value: [{ id: 'base', value: '#0000FF', opacity: 1, visible: true }],
+        }),
+      styleId,
+    );
+    await page.waitForFunction(([id]) => window.paperlike!.doc()[id as string].fill === '#0000FF', [ids[0]]);
+    expect((await doc(page))[ids[1]].fill).toBe('#0000FF');
+
+    await page.evaluate((id) => window.paperlike!.store.removeStyle(id as string), styleId);
+    await removeNodes(page, ids);
+  });
+
+  test('detaching keeps the paint and drops the subscription', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Worn', x: 700, y: 40, w: 60, h: 60, fill: '#FF0000' });
+    const styleId = await page.evaluate(
+      (node) => window.paperlike!.store.createStyleFrom(node, 'fill', 'Detachable'),
+      id,
+    );
+
+    await page.evaluate(([node]) => window.paperlike!.store.detachStyle([node as string], 'fill'), [id]);
+    expect((await doc(page))[id].styles?.fill).toBeUndefined();
+
+    // the style moves on; the layer does not follow it any more
+    await page.evaluate(
+      (style) =>
+        window.paperlike!.store.updateStyle(style as string, {
+          value: [{ id: 'base', value: '#00FF00', opacity: 1, visible: true }],
+        }),
+      styleId,
+    );
+    await page.waitForTimeout(300);
+    expect((await doc(page))[id].fill).toBe('#FF0000');
+
+    await page.evaluate((s) => window.paperlike!.store.removeStyle(s as string), styleId);
+    await removeNodes(page, [id]);
+  });
+
+  test('deleting a style releases its layers without repainting them', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Orphan', x: 700, y: 40, w: 60, h: 60, fill: '#AB12CD' });
+    const styleId = await page.evaluate(
+      (node) => window.paperlike!.store.createStyleFrom(node, 'fill', 'Doomed'),
+      id,
+    );
+    await page.evaluate((s) => window.paperlike!.store.removeStyle(s as string), styleId);
+
+    const node = (await doc(page))[id];
+    expect(node.styles?.fill).toBeUndefined();
+    expect(node.fill).toBe('#AB12CD');
+    await removeNodes(page, [id]);
+  });
+
+  test('a text style carries the whole type spec', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('text', 'root', { name: 'H1', x: 700, y: 40, text: 'One' });
+      const b = store.create('text', 'root', { name: 'H2', x: 700, y: 100, text: 'Two' });
+      store.update(a, { font: { family: 'Inter, system-ui, sans-serif', size: 32, weight: 700, lineHeight: 1.2, letterSpacing: 0, align: 'left', color: '#111111' } });
+      store.commit();
+      return [a, b];
+    });
+
+    const styleId = await page.evaluate(
+      (id) => window.paperlike!.store.createStyleFrom(id as string, 'text', 'Heading'),
+      ids[0],
+    );
+    await page.evaluate(
+      ([list, style]) => window.paperlike!.store.applyStyle([(list as string[])[1]], style as string),
+      [ids, styleId],
+    );
+    await page.waitForFunction(([id]) => window.paperlike!.doc()[id as string].font?.size === 32, [ids[1]]);
+
+    const nodes = await doc(page);
+    expect(nodes[ids[1]].font!.weight).toBe(700);
+    await expect(page.locator(`[data-node-id="${ids[1]}"]`)).toHaveCSS('font-size', '32px');
+
+    await page.evaluate((s) => window.paperlike!.store.removeStyle(s as string), styleId);
+    await removeNodes(page, ids);
+  });
+
+  test('the panel creates a style from a layer and puts it on another', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'Source', x: 700, y: 40, w: 60, h: 60, fill: '#123456' });
+      const b = store.create('rect', 'root', { name: 'Target', x: 800, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      store.commit();
+      return [a, b];
+    });
+
+    await select(page, [ids[0]]);
+    await page.getByRole('button', { name: 'Fill, apply styles and variables' }).click();
+    await page.getByRole('button', { name: 'Create style from this layer' }).click();
+    await page.getByPlaceholder('Style name').fill('Ink');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.fig-style-badge', { hasText: 'Ink' })).toBeVisible();
+
+    await select(page, [ids[1]]);
+    await page.getByRole('button', { name: 'Fill, apply styles and variables' }).click();
+
+    // the dialog opens beside the panel and stays inside the window
+    const list = page.getByRole('listbox', { name: 'Styles' });
+    await expect(list).toBeVisible();
+    const dialog = (await list.evaluate((el) => {
+      const box = el.closest('div[style]')!.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom, right: box.right };
+    })) as { top: number; bottom: number; right: number };
+    const viewport = await page.evaluate(() => window.innerHeight);
+    const panelLeft = (await page.locator('.fig-shell .fig').first().boundingBox())!.x;
+    expect(dialog.top).toBeGreaterThanOrEqual(0);
+    expect(dialog.bottom).toBeLessThanOrEqual(viewport);
+    expect(dialog.right).toBeLessThanOrEqual(panelLeft + 1);
+
+    await page.getByRole('option', { name: 'Ink' }).click();
+    await page.waitForFunction(([id]) => window.paperlike!.doc()[id as string].fill === '#123456', [ids[1]]);
+
+    await removeNodes(page, ids);
+  });
+});
+
+test.describe('number variables', () => {
+  test('a bound width renders as the variable and follows it', async ({ page }) => {
+    const { id, token } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const t = store.addToken({ name: 'card-w', type: 'number', value: '160' });
+      const node = store.create('rect', 'root', { name: 'Bound', x: 700, y: 40, w: 60, h: 60, fill: '#4CC3F0' });
+      store.bindVariable([node], 'w', t);
+      store.commit();
+      return { id: node, token: t };
+    });
+
+    // the number is resolved for the geometry, and the CSS carries the var
+    expect((await doc(page))[id].w).toBe(160);
+    const width = await page.locator(`[data-node-id="${id}"]`).evaluate(
+      (el) => (el as HTMLElement).style.width,
+    );
+    expect(width).toBe('calc(var(--card-w) * 1px)');
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('width', '160px');
+
+    // moving the variable moves the layer
+    await page.evaluate((t) => window.paperlike!.store.updateToken(t as string, { value: '240' }), token);
+    await page.waitForFunction(([node]) => window.paperlike!.doc()[node as string].w === 240, [id]);
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS('width', '240px');
+
+    await removeNodes(page, [id]);
+  });
+
+  test('the field names the variable, and detaching gives the number back', async ({ page }) => {
+    const { id } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      store.addToken({ name: 'gap-lg', type: 'number', value: '48' });
+      const node = store.create('rect', 'root', { name: 'Pick', x: 700, y: 40, w: 60, h: 60, fill: '#4CC3F0' });
+      store.commit();
+      return { id: node };
+    });
+    await select(page, [id]);
+
+    await page.getByTitle('Width').getByRole('button', { name: 'Apply variable' }).click();
+    await page.getByRole('option', { name: /gap-lg/ }).click();
+
+    // the field shows the variable's name rather than a number you could type
+    const field = page.getByTitle('Width').locator('input');
+    await expect(field).toHaveAttribute('placeholder', 'gap-lg');
+    await expect(field).toBeDisabled();
+    expect((await doc(page))[id].w).toBe(48);
+
+    await page.getByTitle('Width').getByRole('button', { name: 'Apply variable' }).click();
+    await page.getByRole('button', { name: 'Detach variable' }).click();
+    await expect(page.getByTitle('Width').locator('input')).toBeEnabled();
+    expect((await doc(page))[id].vars?.w).toBeUndefined();
+    // the value it resolved to stays — detaching is not undoing
+    expect((await doc(page))[id].w).toBe(48);
+
+    await removeNodes(page, [id]);
+  });
+});
+
+test.describe('layout grid and text blocks', () => {
+  test('a non-stretch grid pins fixed-width columns to an edge', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    await select(page, [board!.id]);
+    await page.evaluate(
+      (id) =>
+        window.paperlike!.store.update(id, {
+          guides: { type: 'columns', count: 3, gutter: 8, margin: 24, size: 8, color: 'rgba(255,0,80,0.18)', visible: true },
+        }),
+      board!.id,
+    );
+
+    await page.getByTitle('Type').click();
+    await page.getByRole('listbox').getByRole('button', { name: 'Right', exact: true }).click();
+    await page.getByTitle('Column width').locator('input').fill('40');
+    await page.keyboard.press('Enter');
+
+    const guides = (await doc(page))[board!.id].guides!;
+    expect(guides.align).toBe('end');
+    expect(guides.width).toBe(40);
+
+    const track = page.locator(`[data-node-id="${board!.id}"] > div`).last().locator('> div').first();
+    await expect(track).toHaveCSS('width', '40px');
+  });
+
+  test('paragraph spacing and lists turn the lines into real blocks', async ({ page }) => {
+    const id = await makeNode(page, 'text', {
+      name: 'Prose', x: 700, y: 40, w: 240, h: 120, text: 'One\nTwo\nThree',
+    });
+    await select(page, [id]);
+    await page.locator('button[title="Type details"]').click();
+
+    await page.getByTitle('Paragraph spacing').locator('input').fill('12');
+    await page.keyboard.press('Enter');
+    const blocks = page.locator(`[data-node-id="${id}"] > div`);
+    await expect(blocks).toHaveCount(3);
+    await expect(blocks.nth(1)).toHaveCSS('margin-top', '12px');
+
+    await page.getByTitle('List style').click();
+    await page.getByRole('button', { name: 'Numbered' }).click();
+    await expect(page.locator(`[data-node-id="${id}"] ol li`)).toHaveCount(3);
+
+    await removeNodes(page, [id]);
+  });
+});
+
+test('the stroke-style menu opens inside the panel, with its own glyph', async ({ page }) => {
+  const cover = await nodeNamed(page, 'Cover');
+  await select(page, [cover!.id]);
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, {
+      border: { width: 2, color: '#111111', style: 'solid', position: 'inside' },
+    });
+  }, cover!.id);
+
+  const style = page.getByRole('button', { name: 'Stroke style' });
+  const advanced = page.getByRole('button', { name: 'Advanced stroke' });
+  // adjacent buttons must not draw the same icon
+  const glyph = (l: typeof style) => l.locator('svg').first().evaluate((el) => el.outerHTML);
+  expect(await glyph(style)).not.toBe(await glyph(advanced));
+
+  await style.click();
+  const item = page.getByRole('button', { name: 'Dash', exact: true });
+  await expect(item).toBeVisible();
+  const panel = (await page.locator('.fig-shell .fig').first().boundingBox())!;
+  const box = (await item.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(panel.x + panel.width + 1);
+
+  await item.click();
+  expect((await doc(page))[cover!.id].border!.style).toBe('dashed');
+});
+
+// ── Auto layout ──────────────────────────────────────────────────────────
+
+test.describe('auto layout', () => {
+  /** A frame with three boxes laid out as a row: 24px padding, 20px gaps. */
+  async function rowFrame(page: import('@playwright/test').Page): Promise<string> {
+    const frame = await makeNode(page, 'frame', {
+      name: 'AutoProbe', x: 700, y: 40, w: 328, h: 128, fill: '#FFFFFF', flex: null,
+    });
+    await page.evaluate((id) => {
+      const store = window.paperlike!.store;
+      for (let i = 0; i < 3; i++) {
+        store.create('rect', id, {
+          name: `Item ${i + 1}`, x: 24 + i * 100, y: 24, w: 80, h: 80, fill: '#4CC3F0',
+        });
+      }
+      store.commit();
+    }, frame);
+    return frame;
+  }
+
+  test('the panel button reads the flow back out of where the children sit', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    await page.locator('button[title="Add auto layout"]').click();
+
+    const flex = (await doc(page))[frame].flex!;
+    expect(flex.direction).toBe('row');
+    expect(flex.gap).toBe(20);
+    // top/right/bottom/left, measured off the children's bounding box
+    expect(flex.padding).toEqual([24, 24, 24, 24]);
+    await removeNodes(page, [frame]);
+  });
+
+  test('dropping the layout leaves the children where they looked', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    await page.locator('button[title="Add auto layout"]').click();
+    // shift the gap so the laid-out positions differ from the original x/y
+    await page.evaluate((id) => {
+      const node = window.paperlike!.doc()[id];
+      window.paperlike!.store.update(id, { flex: { ...node.flex!, gap: 40 } });
+    }, frame);
+
+    const before = await page
+      .locator(`[data-node-id="${frame}"] > [data-node-id]`)
+      .nth(2)
+      .boundingBox();
+
+    await page.locator('button[title="Remove auto layout"]').click();
+
+    const after = await page
+      .locator(`[data-node-id="${frame}"] > [data-node-id]`)
+      .nth(2)
+      .boundingBox();
+    expect(after!.x).toBeCloseTo(before!.x, 0);
+    expect(after!.y).toBeCloseTo(before!.y, 0);
+    expect((await doc(page))[frame].flex).toBeNull();
+    await removeNodes(page, [frame]);
+  });
+
+  test('resize to fit shrink-wraps a freeform frame without moving its content', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    const before = await page.locator(`[data-node-id="${frame}"] > [data-node-id]`).first().boundingBox();
+
+    await page.locator('button[title="Resize to fit"]').click();
+
+    const node = (await doc(page))[frame];
+    expect(node.w).toBe(280);
+    expect(node.h).toBe(80);
+    const after = await page.locator(`[data-node-id="${frame}"] > [data-node-id]`).first().boundingBox();
+    expect(after!.x).toBeCloseTo(before!.x, 0);
+    expect(after!.y).toBeCloseTo(before!.y, 0);
+    await removeNodes(page, [frame]);
+  });
+
+  test('resize to fit hugs an auto-layout frame instead of pinning a size', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    await page.locator('button[title="Add auto layout"]').click();
+    await page.locator('button[title="Resize to fit"]').click();
+
+    const node = (await doc(page))[frame];
+    expect(node.wMode).toBe('fit');
+    expect(node.hMode).toBe('fit');
+    await removeNodes(page, [frame]);
+  });
+
+  test('absolute position takes a child out of the flow but leaves it in the frame', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    await page.locator('button[title="Add auto layout"]').click();
+
+    const child = (await doc(page))[frame].children[2];
+    await select(page, [child]);
+    const before = await page.locator(`[data-node-id="${child}"]`).boundingBox();
+    await page.locator('button[title="Absolute position"]').click();
+
+    const node = (await doc(page))[child];
+    expect(node.absolute).toBe(true);
+    expect(node.parent).toBe(frame);
+    await expect(page.locator(`[data-node-id="${child}"]`)).toHaveCSS('position', 'absolute');
+    const after = await page.locator(`[data-node-id="${child}"]`).boundingBox();
+    expect(after!.x).toBeCloseTo(before!.x, 0);
+    await removeNodes(page, [frame]);
+  });
+
+  test('wrap adds the second gap, and it lands on the cross axis', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    await page.locator('button[title="Add auto layout"]').click();
+    await page.locator('button[title="Wrap"]').click();
+
+    await page.evaluate((id) => {
+      const node = window.paperlike!.doc()[id];
+      window.paperlike!.store.update(id, { flex: { ...node.flex!, gap: 12, crossGap: 30 } });
+    }, frame);
+
+    const element = page.locator(`[data-node-id="${frame}"]`);
+    await expect(element).toHaveCSS('flex-wrap', 'wrap');
+    // a row flows across, so the second gap is the space between its lines
+    await expect(element).toHaveCSS('row-gap', '30px');
+    await expect(element).toHaveCSS('column-gap', '12px');
+    await removeNodes(page, [frame]);
+  });
+
+  test('a plain shape inside a layout can still be told to fill it', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    await page.locator('button[title="Add auto layout"]').click();
+
+    const child = (await doc(page))[frame].children[0];
+    await select(page, [child]);
+    // a rectangle is not a container, but the layout still sizes it
+    await page.getByTitle('Horizontal resizing').click();
+    await page.getByRole('button', { name: 'Fill container' }).click();
+    expect((await doc(page))[child].wMode).toBe('fill');
+    await removeNodes(page, [frame]);
+  });
+
+  test('the picker stays on screen when a taller body opens', async ({ page }) => {
+    const frame = await rowFrame(page);
+    const child = (await doc(page))[frame].children[0];
+    await select(page, [child]);
+    await page.locator('.fig-section', { hasText: 'Fill' }).locator('.fig-swatch').first().click();
+
+    const bottom = async () =>
+      page.evaluate(() => document.querySelector('[data-testid="paint-picker"]')!.getBoundingClientRect().bottom);
+    expect(await bottom()).toBeLessThanOrEqual(await page.evaluate(() => window.innerHeight));
+
+    // the gradient ramp makes the dialog taller; it has to move up to suit
+    await page.locator('.fig-picker-type[title="Gradient"] input').click({ force: true });
+    await expect(page.locator('.fig-picker-ramp')).toBeVisible();
+    expect(await bottom()).toBeLessThanOrEqual(await page.evaluate(() => window.innerHeight));
+    await removeNodes(page, [frame]);
+  });
+
+  test('canvas stacking puts the first layer in front', async ({ page }) => {
+    const frame = await rowFrame(page);
+    await select(page, [frame]);
+    await page.locator('button[title="Add auto layout"]').click();
+    await page.locator('button[title="Advanced layout settings"]').click();
+    await page.locator('button[title="First layer on top"]').click();
+
+    const first = (await doc(page))[frame].children[0];
+    await expect(page.locator(`[data-node-id="${first}"]`)).toHaveCSS('z-index', '3');
+    await removeNodes(page, [frame]);
   });
 });

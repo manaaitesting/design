@@ -23,6 +23,17 @@ export interface Viewport {
   zoom: number;
 }
 
+/** One line of the Export section — Figma lets a layer carry several. */
+export interface ExportRow {
+  id: string;
+  scale: number;
+  format: ExportFormat;
+  /** appended to the filename, before the extension */
+  suffix?: string;
+  /** export what is inside the frame without the frame's own background */
+  contentsOnly?: boolean;
+}
+
 export interface UIState {
   tool: Tool;
   setTool: (tool: Tool) => void;
@@ -127,9 +138,14 @@ export interface UIState {
   setExportScale: (scale: number) => void;
 
   /** Figma keeps a list of export settings per layer; this is the app-level one */
-  exportRows: { id: string; scale: number; format: ExportFormat }[];
+  exportRows: ExportRow[];
+  /** the suffix and contents-only flag the Export dialog is acting on */
+  exportSuffix: string;
+  setExportSuffix: (suffix: string) => void;
+  exportContentsOnly: boolean;
+  setExportContentsOnly: (only: boolean) => void;
   addExportRow: () => void;
-  updateExportRow: (id: string, patch: Partial<{ scale: number; format: ExportFormat }>) => void;
+  updateExportRow: (id: string, patch: Partial<Omit<ExportRow, 'id'>>) => void;
   removeExportRow: (id: string) => void;
 }
 
@@ -319,6 +335,10 @@ export const useUI = create<UIState>((set) => ({
   setExportScale: (exportScale) => set({ exportScale }),
 
   exportRows: [{ id: 'default', scale: 2, format: 'png' }],
+  exportSuffix: '',
+  setExportSuffix: (exportSuffix) => set({ exportSuffix }),
+  exportContentsOnly: false,
+  setExportContentsOnly: (exportContentsOnly) => set({ exportContentsOnly }),
   addExportRow: () =>
     set((state) => ({
       exportRows: [

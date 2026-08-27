@@ -19,6 +19,38 @@ function Svg({ children, size = 16, ...rest }: SVGProps<SVGSVGElement> & { child
   );
 }
 
+/** an evenly spaced dot field, for the blur and texture glyphs */
+function grid(step: number, radius: number): ReactNode {
+  const dots = [];
+  for (let row = 0; row < step; row++) {
+    for (let column = 0; column < step; column++) {
+      dots.push(
+        <circle
+          key={`${row}-${column}`}
+          cx={3.2 + (column * 9.6) / (step - 1)}
+          cy={3.2 + (row * 9.6) / (step - 1)}
+          r={radius}
+          fill="currentColor"
+          strokeWidth={0}
+        />,
+      );
+    }
+  }
+  return dots;
+}
+
+/** a deliberately irregular dot field — noise, not a grid */
+function scatter(): ReactNode {
+  const points: [number, number, number][] = [
+    [3.2, 3.6, 1.05], [7.4, 2.9, 0.75], [11.8, 4.2, 1.05], [5.1, 6.6, 0.75],
+    [9.4, 7.2, 1.05], [2.9, 9.8, 0.9], [12.4, 9.1, 0.75], [6.6, 11.4, 1.05],
+    [10.4, 12.2, 0.9],
+  ];
+  return points.map(([cx, cy, r], index) => (
+    <circle key={index} cx={cx} cy={cy} r={r} fill="currentColor" strokeWidth={0} />
+  ));
+}
+
 export const Icon = {
   // ── Tools ──────────────────────────────────────────────────────────────
   Move: () => (
@@ -44,6 +76,13 @@ export const Icon = {
   Frame: () => (
     <Svg>
       <path d="M2.5 5.5h11M2.5 10.5h11M5.5 2.5v11M10.5 2.5v11" />
+    </Svg>
+  ),
+  /** Figma's section: a board with bracketed corners, not the frame's cross. */
+  Section: () => (
+    <Svg>
+      <path d="M2.6 5.6V3.6a1 1 0 0 1 1-1h2M10.4 2.6h2a1 1 0 0 1 1 1v2M13.4 10.4v2a1 1 0 0 1-1 1h-2M5.6 13.4h-2a1 1 0 0 1-1-1v-2" />
+      <path d="M6.6 8h2.8" strokeWidth={1} />
     </Svg>
   ),
   Square: () => (
@@ -212,6 +251,13 @@ export const Icon = {
     <Svg size={13}>
       <path d="M2.6 3.4v9.2M13.4 3.4v9.2" />
       <path d="M6 8h4M8.6 6.4 10.2 8 8.6 9.6M7.4 6.4 5.8 8l1.6 1.6" strokeWidth={1} />
+    </Svg>
+  ),
+  /** The second gap Figma reveals once a layout can wrap: space between lines. */
+  GapCross: () => (
+    <Svg size={13}>
+      <path d="M3.4 2.6h9.2M3.4 13.4h9.2" />
+      <path d="M8 6v4M6.4 7.4 8 5.8l1.6 1.6M6.4 8.6 8 10.2l1.6-1.6" strokeWidth={1} />
     </Svg>
   ),
   PadV: () => (
@@ -387,10 +433,105 @@ export const Icon = {
       <path d="M5.6 4.4 8 2.6 6.2 0.4" transform="translate(0,1.6)" />
     </Svg>
   ),
-  FitContent: () => (
+  /** Figma's "Resize to fit": four brackets closing in on the content. */
+  ResizeToFit: () => (
     <Svg size={14}>
       <path d="M6 2.6H3.9a1.3 1.3 0 0 0-1.3 1.3V6M10 2.6h2.1a1.3 1.3 0 0 1 1.3 1.3V6M13.4 10v2.1a1.3 1.3 0 0 1-1.3 1.3H10M6 13.4H3.9a1.3 1.3 0 0 1-1.3-1.3V10" />
       <path d="M6.4 6.4h3.2v3.2H6.4z" />
+    </Svg>
+  ),
+  /** Figma's auto-layout mark: items packed inside a frame with a gap between. */
+  AutoLayout: () => (
+    <Svg size={14}>
+      <rect x={2.2} y={2.2} width={11.6} height={11.6} rx={2} />
+      <rect x={4.5} y={4.6} width={2.8} height={6.8} rx={0.9} fill="currentColor" strokeWidth={0} />
+      <rect x={8.7} y={4.6} width={2.8} height={6.8} rx={0.9} fill="currentColor" strokeWidth={0} />
+    </Svg>
+  ),
+  /** Figma's "Absolute position": a layer pinned to a corner, out of the flow. */
+  Absolute: () => (
+    <Svg size={14}>
+      <rect x={2.4} y={2.4} width={11.2} height={11.2} rx={2} strokeDasharray="1.6 1.4" strokeWidth={1} />
+      <rect x={7.4} y={7.4} width={4.6} height={4.6} rx={1} fill="currentColor" strokeWidth={0} />
+    </Svg>
+  ),
+  /** Text baseline alignment — glyphs sitting on a shared rule. */
+  Baseline: () => (
+    <Svg size={14}>
+      <path d="M2.4 12.2h11.2" strokeWidth={1.4} />
+      <path d="M4 9.6 5.8 4.4h.4l1.8 5.2M4.6 8.2h3M10.2 9.6V5" strokeWidth={1.1} />
+    </Svg>
+  ),
+  /** Canvas stacking — which of two overlapping siblings paints in front. */
+  Stack: ({ first = false }: { first?: boolean }) => (
+    <Svg size={14}>
+      {first ? (
+        <>
+          <rect x={6.6} y={6.6} width={6.6} height={6.6} rx={1.2} strokeWidth={1} />
+          <rect x={2.8} y={2.8} width={6.6} height={6.6} rx={1.2} fill="currentColor" strokeWidth={0} />
+        </>
+      ) : (
+        <>
+          <rect x={2.8} y={2.8} width={6.6} height={6.6} rx={1.2} strokeWidth={1} />
+          <rect x={6.6} y={6.6} width={6.6} height={6.6} rx={1.2} fill="currentColor" strokeWidth={0} />
+        </>
+      )}
+    </Svg>
+  ),
+  /** Strokes included in layout — the border counted inside the box. */
+  StrokeInLayout: () => (
+    <Svg size={14}>
+      <rect x={2.4} y={2.4} width={11.2} height={11.2} rx={2} strokeWidth={1.6} />
+      <rect x={5.6} y={5.6} width={4.8} height={4.8} rx={1} strokeWidth={1} strokeDasharray="1.4 1.2" />
+    </Svg>
+  ),
+  // ── Effects ────────────────────────────────────────────────────────────
+  // Figma draws each effect as its own 16px glyph, which is what makes the
+  // add-effect menu readable at a glance; a row of identical squares would not.
+  InnerShadow: () => (
+    <Svg>
+      <rect x={2.6} y={2.6} width={10.8} height={10.8} rx={2} />
+      <path d="M4.6 6.4a2 2 0 0 1 2-2h4.8" strokeWidth={2} opacity={0.45} />
+    </Svg>
+  ),
+  DropShadow: () => (
+    <Svg>
+      <rect x={2.2} y={2.2} width={9.4} height={9.4} rx={2} />
+      <path d="M5.2 13.6h6.6a2 2 0 0 0 2-2V5.2" strokeWidth={2} opacity={0.45} />
+    </Svg>
+  ),
+  LayerBlur: () => <Svg>{grid(3, 1.05)}</Svg>,
+  BackgroundBlur: () => (
+    <Svg>
+      <rect x={2.6} y={2.6} width={10.8} height={10.8} rx={1.6} />
+      <path d="M6.2 2.6v10.8M9.8 2.6v10.8M2.6 6.2h10.8M2.6 9.8h10.8" opacity={0.5} />
+    </Svg>
+  ),
+  Noise: () => <Svg>{scatter()}</Svg>,
+  Texture: () => <Svg>{grid(4, 0.7)}</Svg>,
+  Glass: () => (
+    <Svg>
+      <circle cx={8} cy={8} r={5.4} />
+      <path d="M5.2 10.8a4 4 0 0 0 5.6-5.6" opacity={0.55} />
+    </Svg>
+  ),
+  Waves: () => (
+    <Svg>
+      <path d="M2.4 6c1.1-1.3 2.2-1.3 3.3 0s2.2 1.3 3.3 0 2.2-1.3 3.3 0" />
+      <path d="M2.4 10c1.1-1.3 2.2-1.3 3.3 0s2.2 1.3 3.3 0 2.2-1.3 3.3 0" />
+    </Svg>
+  ),
+  /** spread and radius: a circle with rays, the way Figma marks a soft edge */
+  Spread: () => (
+    <Svg>
+      <circle cx={8} cy={8} r={2.4} />
+      <path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.9 3.9l1.1 1.1M11 11l1.1 1.1M12.1 3.9 11 5M5 11l-1.1 1.1" opacity={0.7} />
+    </Svg>
+  ),
+  /** the blend-mode droplet in an effect's settings header */
+  Droplet: () => (
+    <Svg>
+      <path d="M8 2.4 4.9 6.6a3.9 3.9 0 1 0 6.2 0L8 2.4Z" />
     </Svg>
   ),
   Dots: () => (
@@ -404,6 +545,33 @@ export const Icon = {
     <Svg size={14}>
       <path d="M2.6 4.4h8.2a2.4 2.4 0 0 1 0 4.8H4.2" />
       <path d="M6.2 7.2 4 9.2l2.2 2" />
+    </Svg>
+  ),
+
+  /** Figma's Text case: the same two letters, cased four ways. */
+  TextCase: ({ at }: { at: 'none' | 'upper' | 'lower' | 'title' }) => (
+    <Svg size={14}>
+      <text
+        x={8}
+        y={11}
+        textAnchor="middle"
+        fontSize={9.5}
+        fontWeight={600}
+        fill="currentColor"
+        stroke="none"
+        fontFamily="Inter, system-ui, sans-serif"
+      >
+        {at === 'upper' ? 'AA' : at === 'lower' ? 'aa' : at === 'title' ? 'Aa' : '—'}
+      </text>
+    </Svg>
+  ),
+  /** Truncate: lines, the last one cut short by an ellipsis. */
+  Truncate: () => (
+    <Svg size={13}>
+      <path d="M2.6 4.4h10.8M2.6 8h10.8M2.6 11.6h4.6" />
+      <circle cx={9.6} cy={11.6} r={0.7} fill="currentColor" strokeWidth={0} />
+      <circle cx={11.6} cy={11.6} r={0.7} fill="currentColor" strokeWidth={0} />
+      <circle cx={13.6} cy={11.6} r={0.7} fill="currentColor" strokeWidth={0} />
     </Svg>
   ),
 

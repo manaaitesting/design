@@ -17,6 +17,7 @@ import { toWorld, type Viewport } from '../state/ui';
 /** What "Copy properties" carries: paint and type, never position or size. */
 const STYLE_KEYS = [
   'fill',
+  'fills',
   'fillVisible',
   'fillOpacity',
   'opacity',
@@ -28,6 +29,7 @@ const STYLE_KEYS = [
   'shadow',
   'innerShadow',
   'filters',
+  'effects',
   'font',
 ] as const satisfies readonly (keyof SceneNode)[];
 
@@ -67,12 +69,18 @@ const cssClass = (node: SceneNode) =>
   (node.name || node.type).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'layer';
 
 /** One CSS rule per layer, from the same style function the canvas renders. */
-export function cssFor(rootId: string, doc: Doc, deep: boolean): string {
+export function cssFor(
+  rootId: string,
+  doc: Doc,
+  deep: boolean,
+  /** token ids to names, so a bound field copies out as its variable */
+  varNames: Record<string, string> = {},
+): string {
   const rules: string[] = [];
   const visit = (id: string) => {
     const node = doc[id];
     if (!node) return;
-    rules.push(`.${cssClass(node)} {\n${styleToCss(nodeStyle(node, doc))}\n}`);
+    rules.push(`.${cssClass(node)} {\n${styleToCss(nodeStyle(node, doc, varNames))}\n}`);
     if (deep) node.children.forEach(visit);
   };
   visit(rootId);

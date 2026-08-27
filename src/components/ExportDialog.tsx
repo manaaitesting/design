@@ -11,6 +11,11 @@ import { ROOT_ID } from '../document/types';
 
 const CODE_FORMATS: ExportFormat[] = ['react', 'html', 'json'];
 
+/** The suffix goes into a filename, so it is filtered like one. */
+function safeSuffix(suffix: string): string {
+  return suffix.trim().replace(/[^a-zA-Z0-9._@-]+/g, '-').replace(/-$/, '');
+}
+
 export function ExportDialog() {
   const open = useUI((s) => s.exportOpen);
   const setOpen = useUI((s) => s.setExportOpen);
@@ -19,6 +24,8 @@ export function ExportDialog() {
   const setFormat = useUI((s) => s.setExportFormat);
   const scale = useUI((s) => s.exportScale);
   const setScale = useUI((s) => s.setExportScale);
+  const suffix = useUI((s) => s.exportSuffix);
+  const contentsOnly = useUI((s) => s.exportContentsOnly);
   const zoom = useUI((s) => s.viewport.zoom);
 
   const doc = useDoc();
@@ -56,12 +63,12 @@ export function ExportDialog() {
     setBusy(true);
     setStatus(null);
     try {
-      const name = safeFilename(target.name);
+      const name = safeFilename(target.name) + safeSuffix(suffix);
       if (format === 'png') {
-        const blob = await nodeToPng(targetId, zoom, scale, tokenVars);
+        const blob = await nodeToPng(targetId, zoom, scale, tokenVars, contentsOnly);
         download(blob, `${name}@${scale}x.png`);
       } else {
-        const serialised = nodeToSvg(targetId, zoom, tokenVars);
+        const serialised = nodeToSvg(targetId, zoom, tokenVars, contentsOnly);
         if (!serialised) throw new Error('That layer is not on screen.');
         download(new Blob([serialised.svg], { type: 'image/svg+xml' }), `${name}.svg`);
       }

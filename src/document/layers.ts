@@ -25,7 +25,7 @@ export interface LayerRow {
 
 /** Containers you can drop into. Everything else only takes a neighbour drop. */
 export function isContainer(node: SceneNode | undefined): boolean {
-  return node?.type === 'frame' || node?.type === 'page';
+  return node?.type === 'frame' || node?.type === 'page' || node?.type === 'section';
 }
 
 /**

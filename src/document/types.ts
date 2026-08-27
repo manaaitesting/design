@@ -7,7 +7,16 @@
  * so what you see on the artboard and what `export/toReact` emits cannot drift.
  */
 
-export type NodeType = 'page' | 'frame' | 'text' | 'rect' | 'ellipse' | 'image' | 'shader' | 'vector';
+export type NodeType =
+  | 'page'
+  | 'section'
+  | 'frame'
+  | 'text'
+  | 'rect'
+  | 'ellipse'
+  | 'image'
+  | 'shader'
+  | 'vector';
 
 /** `fixed` → px · `fit` → fit-content · `fill` → stretch to the parent's cross axis */
 export type SizeMode = 'fixed' | 'fit' | 'fill';
@@ -16,18 +25,43 @@ export type Axis = 'row' | 'column';
 export type Align = 'start' | 'center' | 'end' | 'stretch';
 export type Justify = 'start' | 'center' | 'end' | 'between';
 
+/** How wrapped rows share the leftover cross-axis space — Figma's Align content. */
+export type AlignContent = Align | 'between';
+
+/** Which sibling paints on top inside an auto-layout frame. */
+export type Stacking = 'first' | 'last';
+
 export interface FlexSpec {
   /** Figma's Flow: flex in a direction, or a wrapping grid */
   mode?: 'flex' | 'grid';
   /** columns, when mode is 'grid' */
   columns?: number;
+  /** rows, when mode is 'grid'; 0 means "as many as the children need" */
+  rows?: number;
   direction: Axis;
+  /** spacing along the direction items flow in */
   gap: number;
+  /**
+   * Spacing between wrapped lines, and between grid rows. Figma exposes this as
+   * a second gap field the moment a layout can wrap; undefined means "same as
+   * `gap`", which is what a non-wrapping row has always done.
+   */
+  crossGap?: number;
   /** [top, right, bottom, left] */
   padding: [number, number, number, number];
   align: Align;
   justify: Justify;
   wrap: boolean;
+  /** only meaningful once the layout wraps onto more than one line */
+  alignContent?: AlignContent;
+  /**
+   * Figma's advanced settings. Defaults match Figma's: strokes sit outside the
+   * layout, later siblings paint on top, and text aligns by its box rather than
+   * its baseline.
+   */
+  strokesIncluded?: boolean;
+  stacking?: Stacking;
+  baseline?: boolean;
 }
 
 /** One paint in a stack. The first entry is the front-most, as in Figma. */
@@ -46,6 +80,17 @@ export interface BorderSpec {
   style: LineStyle;
   /** where the stroke sits relative to the edge, as in Figma */
   position: 'inside' | 'center' | 'outside';
+  /**
+   * Figma's individual strokes — [top, right, bottom, left]. Null means every
+   * side takes `width`, which is what a stroke has always done.
+   */
+  sides?: [number, number, number, number] | null;
+  /** dash pattern in px; a vector draws these literally, a box rounds to CSS */
+  dash?: number;
+  gap?: number;
+  /** how a vector's open ends and corners are finished */
+  cap?: 'butt' | 'round' | 'square';
+  join?: 'miter' | 'round' | 'bevel';
 }
 
 /** CSS `outline` — sits outside the box, unlike a border. */
@@ -103,6 +148,15 @@ export interface Interaction {
   transition: TransitionSpec;
 }
 
+/**
+ * How a set of columns or rows sits in its frame — Figma's grid Type.
+ *
+ * `stretch` fills the frame and honours the margin; the other three pin a run
+ * of fixed-width tracks to one edge or the middle, where the margin has nothing
+ * to say and a width does.
+ */
+export type GuideAlign = 'stretch' | 'start' | 'end' | 'center';
+
 /** Layout guides — a design aid drawn over a frame, never exported. */
 export interface GuideSpec {
   type: 'columns' | 'rows' | 'grid';
@@ -113,6 +167,10 @@ export interface GuideSpec {
   size: number;
   color: string;
   visible: boolean;
+  /** columns and rows only; defaults to stretch, as Figma's do */
+  align?: GuideAlign;
+  /** track thickness when not stretching */
+  width?: number;
 }
 
 export interface VideoSpec {
@@ -124,6 +182,8 @@ export interface VideoSpec {
 }
 
 export interface UnderlineSpec {
+  /** Figma offers the two lines under one Decoration control */
+  line?: 'underline' | 'strikethrough';
   style: 'solid' | 'wavy' | 'dashed' | 'dotted' | 'double';
   color: string;
   thickness: number;
@@ -157,6 +217,112 @@ export interface ShadowSpec {
   color: string;
 }
 
+/**
+ * One entry in the Effects list.
+ *
+ * Every type shares one parameter bag: Blur means the same thing to a shadow
+ * and to a layer blur, so switching an effect's type keeps what the two have
+ * in common instead of resetting the row. `src/document/effects.ts` says which
+ * fields each type reads, and turns the list into CSS.
+ */
+export type EffectType =
+  | 'inner-shadow'
+  | 'drop-shadow'
+  | 'layer-blur'
+  | 'background-blur'
+  | 'noise'
+  | 'texture'
+  | 'glass'
+  | 'shader';
+
+export interface Effect {
+  id: string;
+  type: EffectType;
+  /** the eye beside the row — keeps the settings while hiding the effect */
+  visible: boolean;
+
+  /** shadows: offset, radius and spread, with the colour carrying its own alpha */
+  x: number;
+  y: number;
+  blur: number;
+  spread: number;
+  color: string;
+  opacity: number;
+  /** the shadow's own blend mode, behind the droplet in its popover */
+  blend: string;
+
+  /** blurs: uniform takes `blur`, progressive ramps `start` → `end` */
+  progressive: boolean;
+  start: number;
+  end: number;
+
+  /** noise: mono tints with `color`, duo adds `color2`, multi is full colour */
+  variant: 'mono' | 'duo' | 'multi';
+  sizeX: number;
+  sizeY: number;
+  density: number;
+  color2: string;
+  opacity2: number;
+  /** how strong full-colour noise reads */
+  grain: number;
+
+  /** texture */
+  radius: number;
+  clip: boolean;
+
+  /** glass */
+  refraction: number;
+  depth: number;
+
+  /** shader — the same spec a shader node carries */
+  shader?: ShaderSpec | null;
+}
+
+/**
+ * Component properties.
+ *
+ * A main component publishes a list of properties; layers inside it say which
+ * property drives them; an instance chooses a value for each. Values are held
+ * as strings throughout — a boolean is "true"/"false" — because a Yjs map is
+ * happier with one scalar type than with a union, and every control that reads
+ * one already has to parse text.
+ */
+export type PropType = 'boolean' | 'text' | 'instance' | 'variant';
+
+export interface ComponentProp {
+  id: string;
+  name: string;
+  type: PropType;
+  /** what an instance starts with */
+  value: string;
+  /** variant only: the values this property offers, in menu order */
+  options?: string[];
+}
+
+/**
+ * What a layer inside a component does with a property: `visible` hides it,
+ * `text` writes its content, `instance` swaps what it points at.
+ */
+export interface PropBinding {
+  prop: string;
+  field: 'visible' | 'text' | 'instance';
+}
+
+/**
+ * Styles.
+ *
+ * A variable is one value; a style is a whole set of them — the paints on a
+ * fill, an entire type spec, a stack of effects. Layers subscribe rather than
+ * copy, so editing the style moves everything wearing it.
+ */
+export type StyleKind = 'paint' | 'text' | 'effect';
+
+/** Which part of a layer a style is worn on. */
+export type StyleSlot = 'fill' | 'stroke' | 'text' | 'effect';
+
+/** The numeric fields a number variable can drive. */
+export type NumericField = 'x' | 'y' | 'w' | 'h' | 'radius' | 'opacity';
+
 /** A GPU shader bound to a node, with its uniform values. */
 export interface ShaderSpec {
   id: string;
@@ -171,6 +337,14 @@ export interface FontSpec {
   letterSpacing: number;
   align: 'left' | 'center' | 'right';
   color: string;
+  /** Figma's Text case */
+  case?: 'none' | 'upper' | 'lower' | 'title';
+  /** Figma's "Truncate text" — 0 keeps every line */
+  maxLines?: number;
+  /** px of space between paragraphs — a paragraph is a line of the text */
+  paragraphSpacing?: number;
+  /** Figma's list style */
+  list?: 'none' | 'bullet' | 'number';
 }
 
 export interface SceneNode {
@@ -194,6 +368,13 @@ export interface SceneNode {
 
   /** Non-null turns this node into a flex container; children then flow. */
   flex: FlexSpec | null;
+  /**
+   * Figma's "Absolute position": this child keeps its own x/y and stops taking
+   * part in its parent's auto layout, without leaving the frame.
+   */
+  absolute?: boolean;
+  /** Overrides the parent's cross-axis alignment for this child alone. */
+  alignSelf?: Align | 'auto';
   clip: boolean;
 
   fill: string | null;
@@ -208,6 +389,11 @@ export interface SceneNode {
   radius: number;
   /** non-null overrides `radius` with per-corner values */
   radii: Radii | null;
+  /**
+   * Figma's corner smoothing, 0–1. 0 is an ordinary circular corner; 0.6 is the
+   * iOS squircle. CSS calls the same thing a superellipse.
+   */
+  cornerSmoothing?: number;
   border: BorderSpec | null;
   outline: OutlineSpec | null;
   shadow: ShadowSpec | null;
@@ -215,6 +401,8 @@ export interface SceneNode {
   shadows?: ShadowSpec[];
   innerShadow: ShadowSpec | null;
   filters: FilterSpec | null;
+  /** the Effects list; when present it supersedes `shadow` and `filters` */
+  effects?: Effect[];
   guides: GuideSpec | null;
   video: VideoSpec | null;
   flipH: boolean;
@@ -247,6 +435,28 @@ export interface SceneNode {
   isComponent?: boolean;
   /** this subtree is an instance of that main component */
   instanceOf?: string;
+
+  /** the properties this main component publishes to its instances */
+  props?: ComponentProp[];
+  /** what this layer inside a component follows */
+  bindings?: PropBinding[];
+  /** what an instance has chosen, keyed by property id */
+  propValues?: Record<string, string>;
+  /** this frame groups the variants of one component */
+  isComponentSet?: boolean;
+  /** for a main inside a set: which variant it is, keyed by property id */
+  variantValues?: Record<string, string>;
+  /** the styles this layer wears, by slot */
+  styles?: Partial<Record<StyleSlot, string>>;
+  /**
+   * Number variables bound to numeric fields, by field name.
+   *
+   * The field keeps its resolved number so every geometry calculation — snap,
+   * resize, bounds — carries on working in plain arithmetic; the binding is
+   * what makes the rendered CSS a `var()`, and what the store re-resolves when
+   * the variable moves.
+   */
+  vars?: Partial<Record<NumericField, string>>;
   /**
    * Properties edited locally inside an instance. Propagation from the main
    * skips these, which is what makes an instance useful rather than a copy.
@@ -263,15 +473,45 @@ export type Doc = Record<string, SceneNode>;
 
 export const ROOT_ID = 'root';
 
-/** A node sitting directly on the page — an artboard — is positioned in world space. */
+/**
+ * A section groups artboards on the canvas rather than laying anything out.
+ *
+ * It behaves like the page as far as its children are concerned — a frame
+ * inside one is still a top-level artboard, not a nested layer — which is what
+ * keeps clicking, framing and export working the way they did before sections
+ * existed.
+ */
+export function isCanvasRoot(node: SceneNode | undefined): boolean {
+  return node?.type === 'page' || node?.type === 'section';
+}
+
+/** A node sitting directly on the page or in a section — an artboard. */
 export function isArtboard(node: SceneNode, doc: Doc): boolean {
-  return node.parent !== null && doc[node.parent]?.type === 'page';
+  return node.parent !== null && isCanvasRoot(doc[node.parent]);
 }
 
 /** True when the parent controls this node's position (i.e. it's in flex flow). */
 export function isInFlow(node: SceneNode, doc: Doc): boolean {
+  if (node.absolute) return false;
   const parent = node.parent ? doc[node.parent] : null;
-  return !!parent && parent.type !== 'page' && parent.flex !== null;
+  return !!parent && !isCanvasRoot(parent) && parent.flex !== null;
+}
+
+/** True when this node sits inside an auto-layout frame, flowed or not. */
+export function inAutoLayout(node: SceneNode, doc: Doc): boolean {
+  const parent = node.parent ? doc[node.parent] : null;
+  return !!parent && !isCanvasRoot(parent) && parent.flex !== null;
+}
+
+/**
+ * The component set a variant belongs to.
+ *
+ * A variant is a main component whose parent is a set — there is no separate
+ * back-pointer to keep in step, because the tree already says it.
+ */
+export function setOf(main: SceneNode | undefined, doc: Doc): SceneNode | null {
+  const parent = main?.parent ? doc[main.parent] : null;
+  return parent?.isComponentSet ? parent : null;
 }
 
 /** The instance root this node lives inside, if any. */
@@ -298,7 +538,7 @@ export function ancestors(id: string, doc: Doc): SceneNode[] {
 export function topLevelOf(id: string, doc: Doc): string {
   let cur = doc[id];
   if (!cur) return id;
-  while (cur.parent && doc[cur.parent] && doc[cur.parent].type !== 'page') {
+  while (cur.parent && doc[cur.parent] && !isCanvasRoot(doc[cur.parent])) {
     cur = doc[cur.parent];
   }
   return cur.id;

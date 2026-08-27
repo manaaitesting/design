@@ -433,6 +433,15 @@ select {
   .fig-input > .fig-value:first-child {
     padding-left: 8px;
   }
+  /* a field that is along for the ride — noise's Y, which follows X */
+  .fig-input:has(> input:disabled) {
+    color: var(--fig-dim);
+  }
+  .fig-input > input:disabled {
+    color: var(--fig-dim);
+    cursor: default;
+  }
+
   /* the label a select shows, and the caret at its trailing edge */
   .fig-input > .fig-value {
     flex: 1;
@@ -553,6 +562,232 @@ select {
   }
   .fig-paint > input.fig-paint-alpha::before {
     content: '';
+  }
+
+  /* Selection colors splits the opacity off into its own box, the way Figma's
+     panel does — the swatch and hex keep the wide field, the % gets 60px. */
+  .fig-input.fig-paint-alpha-field {
+    flex: none;
+    width: 60px;
+    padding-right: 4px;
+  }
+  .fig-input.fig-paint-alpha-field > input.fig-paint-alpha {
+    flex: 1;
+    width: auto;
+    padding-left: 8px;
+    text-align: left;
+  }
+
+  /* the row's action hides until the row is hovered, so the list reads as a
+     column of colours rather than a column of buttons */
+  .fig-paint-trailing {
+    position: absolute;
+    right: 2px;
+    display: inline-flex;
+    opacity: 0;
+    transition: opacity 80ms linear;
+  }
+  .fig-row:hover > .fig-input > .fig-paint-trailing,
+  .fig-paint-trailing:focus-within {
+    opacity: 1;
+  }
+
+  /* ─── Dark floating menus ─────────────────────────────────────────────
+     Blend modes and the add-effect list belong to the canvas rather than the
+     panel, so they take the right-click menu's colours, not the panel's. */
+  .fig-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 26px;
+    padding: 0 10px 0 6px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 400;
+    text-align: left;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .fig-menu-item:hover {
+    background: var(--fig-blue);
+  }
+  .fig-menu-mark {
+    width: 16px;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+  }
+  .fig-menu-sep {
+    height: 1px;
+    margin: 5px 6px;
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .fig-menu-tag {
+    margin-left: 2px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.16);
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  /* ─── Effects ─────────────────────────────────────────────────────────
+     A row names the effect and opens its settings; the eye and the − sit
+     outside it, as they do beside a fill. */
+  .fig-effect {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    border: 1px solid var(--fig-line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--fig-ink);
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .fig-effect:hover {
+    background: var(--fig-field);
+  }
+  .fig-effect[data-open='true'] {
+    background: var(--fig-selected);
+    border-color: var(--fig-blue);
+    color: var(--fig-blue);
+  }
+  .fig-effect > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fig-effect[data-hidden='true'] {
+    color: var(--fig-dim);
+  }
+
+  /* the settings dialog an effect opens, beside the panel */
+  .fig-card {
+    padding: 12px;
+  }
+  .fig-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    margin: -4px 0 8px;
+    font-weight: 550;
+  }
+  .fig-card-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 550;
+    cursor: default;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .fig-card-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  /* the grey caption column down the left of a settings dialog */
+  .fig-card-label {
+    width: 58px;
+    flex: none;
+    color: var(--fig-dim);
+  }
+  /* a paint row brings its own .fig-row, which has to share the dialog's width */
+  .fig-card-row > .fig-row {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-top: 0;
+  }
+
+  /* the segmented switch inside a dialog: a grey track, the active pill white */
+  .fig-pills {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 7px;
+    background: var(--fig-field);
+  }
+  .fig-pills > button {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 24px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fig-dim);
+    font: inherit;
+    cursor: default;
+  }
+  .fig-pills > button[data-on='true'] {
+    background: #fff;
+    color: var(--fig-ink);
+    font-weight: 550;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+
+  /* a checkbox row at the foot of a dialog — "Clip to shape" */
+  .fig-card-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px -12px -12px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--fig-line);
+  }
+  .fig-card-check > input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--fig-blue);
+  }
+
+  /* "See all 13 colors" — a centred, quiet footer under a truncated list */
+  .fig-more {
+    width: 100%;
+    height: 24px;
+    margin-top: 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fig-dim);
+    font: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .fig-more:hover {
+    background: var(--fig-hover);
+    color: var(--fig-ink);
+  }
+  .fig-more-dots {
+    display: inline-flex;
+    transform: rotate(90deg);
   }
 
   /* the visibility toggle is a checkbox; the label carries the eye */
@@ -1333,4 +1568,170 @@ select {
 }
 .fig-picker-stop[data-on] {
   box-shadow: 0 0 0 2px var(--fig-blue);
+}
+
+/* ── Paint picker: the gradient, pattern and image bodies ─────────────
+   Each paint type gets its own controls under the type row, the way
+   Figma swaps the picker's body when you change what the paint is. */
+.fig-picker-gradient,
+.fig-picker-image {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--fig-line);
+}
+.fig-picker-gradient-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* the ramp itself: the live gradient, with a draggable chit per stop */
+.fig-picker-ramp {
+  position: relative;
+  height: 20px;
+  /* the end stops sit on the rail's edges, so it is inset by their radius —
+     otherwise the first and last chits are sliced in half */
+  margin: 0 6px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+.fig-picker-ramp-stop {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  cursor: ew-resize;
+}
+.fig-picker-ramp-stop[data-on] {
+  box-shadow: 0 0 0 2px var(--fig-blue);
+}
+.fig-picker-image-preview {
+  height: 120px;
+  border-radius: 4px;
+  background-color: var(--fig-field);
+  background-size: cover;
+  background-position: center;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+/* Video and Shader borrow the layer's own controls, so the body only has
+   to give them the picker's padding */
+.fig-picker-body {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px 8px;
+}
+
+/* Figma's contrast check, opened from the picker's type row */
+.fig-picker-contrast {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--fig-line);
+}
+.fig-picker-contrast-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fig-picker-contrast-sample {
+  width: 40px;
+  height: 28px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+.fig-picker-contrast-grades {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.fig-picker-grade {
+  padding: 3px 0;
+  border-radius: 4px;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 600;
+  background: var(--fig-field);
+  color: var(--fig-dim);
+}
+.fig-picker-grade[data-pass] {
+  background: #cff7d3;
+  color: #077d2b;
+}
+
+/* Export preview — the thumbnail under the Design tab's Export section */
+.fig-export-preview {
+  position: relative;
+  margin-top: 6px;
+  min-height: 96px;
+  max-height: 200px;
+  padding: 8px;
+  border-radius: 5px;
+  border: 1px solid var(--fig-line);
+  background: var(--fig-checker);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.fig-export-preview > img {
+  max-width: 100%;
+  max-height: 168px;
+  object-fit: contain;
+}
+.fig-export-size {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+/* A section's name, drawn on the canvas above its board. Always visible —
+   it is how you tell one board from another without selecting anything. */
+.section-label {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink-dim, #7a7a7a);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+  pointer-events: auto;
+}
+.section-label:hover,
+.section-label[data-on] {
+  color: var(--color-select-line);
+}
+
+/* The name of the style a layer is wearing — Figma shows it where the raw
+   value would otherwise be, so you know the value is not yours to edit. */
+.fig-style-badge {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: var(--fig-selected);
+  color: var(--fig-blue);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

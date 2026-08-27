@@ -23,11 +23,32 @@ declare global {
         setFlowStart(id: string, name: string | null): void;
         createInstance(main: string, parent: string, at?: { x: number; y: number }): string | null;
         detachInstance(id: string): void;
+        addComponentProp(main: string, prop: Record<string, unknown>): string | null;
+        removeComponentProp(main: string, propId: string): void;
+        bindProp(layer: string, binding: Record<string, unknown> | null): void;
+        setPropValue(instance: string, propId: string, value: string): string | null;
+        combineAsVariants(ids: string[]): string | null;
+        swapInstance(id: string, mainId: string): string | null;
         commit(): void;
         addToken(token: { name: string; type: string; value: string }): string;
+        addStyle(style: { name: string; kind: string; value: unknown }): string;
+        updateStyle(id: string, patch: Record<string, unknown>): void;
+        removeStyle(id: string): void;
+        listStyles(kind?: string): { id: string; name: string; kind: string }[];
+        applyStyle(ids: string[], styleId: string, slot?: string): void;
+        detachStyle(ids: string[], slot: string): void;
+        createStyleFrom(id: string, slot: string, name: string): string | null;
         removeToken(id: string): void;
         listTokens(): { id: string; name: string }[];
-        ydoc: { getMap(name: string): { set(k: string, v: unknown): void; entries(): Iterable<[string, unknown]> } };
+        updateToken(id: string, patch: Record<string, unknown>): void;
+        bindVariable(ids: string[], field: string, tokenId: string | null): void;
+        ydoc: {
+          getMap(name: string): {
+            set(k: string, v: unknown): void;
+            delete(k: string): void;
+            entries(): Iterable<[string, unknown]>;
+          };
+        };
         undo(): void;
         redo(): void;
       };
@@ -70,9 +91,26 @@ export async function resetDoc(page: Page): Promise<void> {
     const doc = window.paperlike!.doc();
     const top = doc.root?.children ?? [];
     if (top.length) store.remove([...top]);
-    // tokens are not nodes, so removing the layers does not clear them — and a
-    // suite that leaves them behind accumulates duplicates run after run
+
+    // A run killed mid-write — a crashed sync server, a timed-out page — can
+    // leave a node behind whose parent went with the fixture. Nothing reaches
+    // it again, but `nodeNamed` still finds it, and the test then waits on an
+    // element that will never render. Sweep whatever the page cannot reach.
+    const reachable = new Set<string>(['root']);
+    const walk = (id: string) => {
+      for (const child of window.paperlike!.doc()[id]?.children ?? []) {
+        reachable.add(child);
+        walk(child);
+      }
+    };
+    walk('root');
+    const orphans = Object.keys(window.paperlike!.doc()).filter((id) => !reachable.has(id));
+    if (orphans.length) store.remove(orphans);
+    // tokens and styles are not nodes, so removing the layers does not clear
+    // them — and a suite that leaves them behind accumulates duplicates run
+    // after run, until a locator that names one of them matches several
     for (const [id] of store.ydoc.getMap('tokens').entries()) store.removeToken(id);
+    for (const [id] of store.ydoc.getMap('styles').entries()) store.removeStyle(id);
 
     const board = store.create('frame', 'root', {
       name: 'Fixture Board', x: 0, y: 0, w: 600, h: 400, fill: '#FFFFFF', flex: null,

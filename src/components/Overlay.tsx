@@ -81,15 +81,21 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const entered = useUI((s) => s.entered);
   const lockedHint = useUI((s) => s.lockedHint);
   const guides = useUI((s) => s.guides);
+  const pageId = useUI((s) => s.page);
+  const select = useUI((s) => s.select);
   const presence = usePresence();
 
   const remoteIds = presence.flatMap((p) => p.selection);
+  // Figma keeps a section's name on the canvas at all times — it is how you
+  // tell one board from another without selecting anything
+  const sections = (doc[pageId]?.children ?? []).filter((id) => doc[id]?.type === 'section');
   const tracked = [...new Set([
     ...selection,
     ...(hover ? [hover] : []),
     ...(entered ? [entered] : []),
     ...(lockedHint ? [lockedHint] : []),
     ...remoteIds,
+    ...sections,
   ])];
   const rects = useRects(tracked, containerRef);
 
@@ -382,6 +388,31 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           ))}
         </>
       )}
+
+      {/* section names — always on, and clicking one selects the board */}
+      {sections.map((id) => {
+        const rect = rects[id];
+        const node = doc[id];
+        if (!rect || !node || !node.visible) return null;
+        // the selection draws its own name in the same place — two labels on
+        // top of each other read as a rendering fault
+        if (selection.includes(id)) return null;
+        return (
+          <button
+            key={`section-${id}`}
+            type="button"
+            className="section-label"
+            data-on={selection.includes(id) || undefined}
+            style={{ left: rect.x, top: rect.y - 20 }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              select([id]);
+            }}
+          >
+            {node.name}
+          </button>
+        );
+      })}
 
       {/* selection */}
       {selection.map((id) => {

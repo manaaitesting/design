@@ -334,7 +334,13 @@ export function Editor({ fileName }: { fileName: string }) {
 
       if (event.shiftKey && event.key.toLowerCase() === 'a' && selection.length) {
         event.preventDefault();
-        const id = store.wrapInFlex(selection);
+        const id = store.autoLayoutSelection(selection);
+        if (id) select([id]);
+        return;
+      }
+      if (event.shiftKey && event.key.toLowerCase() === 's' && selection.length) {
+        event.preventDefault();
+        const id = store.wrapInSection(selection);
         if (id) select([id]);
         return;
       }

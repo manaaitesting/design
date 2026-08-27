@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useDoc, useStore, useTokenVars, useTokens } from './Session';
+import { useDoc, useStore, useTokenVars, useTokens, useVarNames } from './Session';
 import { hasNodes, readNodes, writeNodes } from '../lib/clipboard';
 import {
   copyAsPng,
@@ -143,6 +143,7 @@ type OpenMenu = NonNullable<ReturnType<typeof useUI.getState>['contextMenu']>;
 function Menu({ menu }: { menu: OpenMenu }) {
   const store = useStore();
   const doc = useDoc();
+  const varNames = useVarNames();
   const tokens = useTokens();
   const tokenVars = useTokenVars();
   const selection = useUI((s) => s.selection);
@@ -198,8 +199,8 @@ function Menu({ menu }: { menu: OpenMenu }) {
   }
 
   const codeItems: Item[] = [
-    { label: 'CSS', disabled: !one, run: () => writeText(cssFor(target, doc, false)) },
-    { label: 'CSS (all layers)', disabled: !one, run: () => writeText(cssFor(target, doc, true)) },
+    { label: 'CSS', disabled: !one, run: () => writeText(cssFor(target, doc, false, varNames)) },
+    { label: 'CSS (all layers)', disabled: !one, run: () => writeText(cssFor(target, doc, true, varNames)) },
     {
       label: 'React',
       disabled: !one,
@@ -307,12 +308,29 @@ function Menu({ menu }: { menu: OpenMenu }) {
     },
 
     {
+      label: 'Create section',
+      shortcut: '⇧S',
+      disabled: !has,
+      run: () => {
+        const id = store.wrapInSection(selection);
+        if (id) select([id]);
+      },
+    },
+    {
       label: 'Add auto layout',
       shortcut: '⇧A',
       divider: true,
       disabled: !has,
       run: () => {
-        const id = store.wrapInFlex(selection);
+        const id = store.autoLayoutSelection(selection);
+        if (id) select([id]);
+      },
+    },
+    {
+      label: 'Combine as variants',
+      disabled: selection.filter((id) => doc[id]?.isComponent).length < 2,
+      run: () => {
+        const id = store.combineAsVariants(selection);
         if (id) select([id]);
       },
     },
