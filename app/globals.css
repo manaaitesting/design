@@ -1,0 +1,1336 @@
+@import "tailwindcss";
+
+/* ─── Design tokens, measured from app.paper.design ─────────────────────── */
+@theme {
+  --color-canvas: #f5f5f5;
+  --color-panel: #f2f2f2;
+  --color-line: #e2e2e2;
+  --color-control: #f9f9f9;
+  --color-row-active: #e0e0e0;
+  --color-ink: rgba(0, 0, 0, 0.8);
+  --color-ink-muted: rgba(0, 0, 0, 0.6);
+  --color-ink-dim: rgba(0, 0, 0, 0.425);
+  --color-select: #0d99ff;
+  /* selection chrome sits on top of artwork, so it runs a shade darker than
+     the accent used for controls — otherwise 1.5px of #0d99ff disappears
+     against light fills */
+  --color-select-line: #0a7ad4;
+
+  --rail-left: 240px;
+  --rail-tools: 42px;
+  --rail-right: 281px;
+}
+
+:root {
+  /* the signature Paper control: a white top highlight over a soft ambient drop */
+  --shadow-control:
+    inset 0 1px 0 rgba(255, 255, 255, 0.533),
+    inset 0 0 1px 1px rgba(255, 255, 255, 0.533),
+    0 0.5px 1px rgba(0, 0, 0, 0.067),
+    0 0 1px rgba(0, 0, 0, 0.133),
+    0 0 4px -1px rgba(0, 0, 0, 0.133);
+  --shadow-pop:
+    0 0 0 1px rgba(0, 0, 0, 0.06),
+    0 8px 24px -6px rgba(0, 0, 0, 0.18),
+    0 2px 6px -2px rgba(0, 0, 0, 0.1);
+}
+
+html,
+body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, system-ui, "Inter", sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Chrome must never inherit the artboard's own typography */
+input,
+button,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+@layer components {
+  /* ── Panels ──────────────────────────────────────────────────────────── */
+  .panel {
+    background: var(--color-panel);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .panel-head {
+    height: 41px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--color-line);
+  }
+  .panel-section {
+    border-bottom: 1px solid var(--color-line);
+    padding: 0 12px 12px;
+  }
+  .section-head {
+    height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    user-select: none;
+  }
+  .section-head[data-empty="true"] {
+    color: var(--color-ink-dim);
+  }
+
+  /* ── Controls ────────────────────────────────────────────────────────── */
+  .control {
+    height: 24px;
+    border-radius: 5px;
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+    border: 0;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .btn {
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 5px;
+    border: 0;
+    background: transparent;
+    font-weight: 500;
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: default;
+    user-select: none;
+  }
+  .btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  .btn-raised {
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+    color: var(--color-ink);
+  }
+  .btn-raised:hover {
+    background: #fff;
+  }
+
+  /* Numeric field: 24px icon gutter on the left, per Paper's inputs */
+  .field {
+    position: relative;
+    height: 24px;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .field > svg,
+  .field > .field-glyph {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-ink-dim);
+    pointer-events: none;
+  }
+  .field > input {
+    width: 100%;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 5px;
+    border: 0;
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+    outline: none;
+  }
+  /* only a field that actually has a glyph reserves room for one */
+  .field > .field-glyph + input {
+    padding-left: 24px;
+  }
+  .field > input:focus {
+    box-shadow:
+      var(--shadow-control),
+      0 0 0 1.5px var(--color-select);
+  }
+  .field[data-scrub="true"] > svg,
+  .field[data-scrub="true"] > .field-glyph {
+    cursor: ew-resize;
+    pointer-events: auto;
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  /* ── Segmented control ───────────────────────────────────────────────── */
+  .seg {
+    display: flex;
+    height: 24px;
+    padding: 1px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.05);
+    gap: 1px;
+  }
+  .seg > button {
+    flex: 1 1 0;
+    height: 22px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    font-weight: 500;
+    color: var(--color-ink-muted);
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+  }
+  .seg > button[data-on="true"] {
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+    color: var(--color-ink);
+  }
+
+  /* ── Tool rail ───────────────────────────────────────────────────────── */
+  .tool {
+    width: 28px;
+    height: 28px;
+    margin: 1px 7px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+  }
+  .tool:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  .tool[data-on="true"] {
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+  }
+  /* ── Layer rows ──────────────────────────────────────────────────────── */
+  .layer-row {
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 8px;
+    border-radius: 0;
+    cursor: default;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .layer-row:hover {
+    background: rgba(0, 0, 0, 0.04);
+  }
+  .layer-row[data-on="true"] {
+    background: var(--color-row-active);
+  }
+  .layer-row[data-hidden="true"] {
+    opacity: 0.5;
+  }
+  /* visibility toggle stays out of the way until the row is hovered */
+  .layer-eye {
+    opacity: 0;
+  }
+  .layer-row:hover .layer-eye,
+  .layer-row[data-hidden="true"] .layer-eye {
+    opacity: 1;
+  }
+}
+
+/* Scrollbars stay out of the way until you need them */
+.scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+}
+
+/* ─── Figma inspector ────────────────────────────────────────────────────
+   Measured from Figma's own right panel: 348px wide, #F5F5F5 fields at 24px
+   with a 24px glyph gutter, 9px/500 sub-labels above field groups, and
+   11px/550 section headers that dim to 50% when the section is empty.      */
+@layer components {
+  .fig {
+    --fig-line: #e6e6e6;
+    --fig-ink: rgba(0, 0, 0, 0.898);
+    --fig-dim: rgba(0, 0, 0, 0.5);
+    --fig-field: #f5f5f5;
+    --fig-blue: #0d99ff;
+    /* components and instances are purple in Figma, everywhere they appear */
+    --fig-purple: #8638e5;
+    /* the transparency checkerboard behind alpha sliders and swatches */
+    --fig-checker: url("data:image/svg+xml;utf8,%3Csvg width='8' height='8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h4v4H0zM4 4h4v4H4z' fill='%23e1e1e1'/%3E%3C/svg%3E") 0 0 / 8px 8px, #fff;
+    --fig-selected: #e5f4ff;
+    --fig-hover: rgba(0, 0, 0, 0.06);
+    --fig-icon-3: rgba(0, 0, 0, 0.3);
+
+    width: 355px;
+    flex: none;
+    background: #fff;
+    border-left: 1px solid var(--fig-line);
+    font-size: 11px;
+    color: var(--fig-ink);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .fig-tabs {
+    height: 40px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    /* 6px here plus the tab's own 10px puts the label on the 16px gutter the
+       rest of the panel uses */
+    padding: 0 6px;
+    border-bottom: 1px solid var(--fig-line);
+  }
+  /* A segmented control: the selected tab is a filled pill, not an underline.
+     The pill is always laid out — only its paint changes — so switching tabs
+     never reflows the label. */
+  .fig-tab {
+    height: 24px;
+    border: 0;
+    background: transparent;
+    color: var(--fig-dim);
+    font-size: 11px;
+    font-weight: 550;
+    cursor: default;
+    padding: 0 10px;
+    border-radius: 5px;
+    transition: background-color 80ms ease-out, color 80ms ease-out;
+  }
+  .fig-tab:hover {
+    background: rgba(0, 0, 0, 0.03);
+    color: var(--fig-ink);
+  }
+  .fig-tab[data-on='true'],
+  .fig-tab[data-on='true']:hover {
+    color: var(--fig-ink);
+    background: var(--fig-hover);
+  }
+
+  .fig-section {
+    padding: 0 8px 12px 16px;
+    border-bottom: 1px solid var(--fig-line);
+  }
+  /* Figma's rows are 48px apart when captioned (16 label + 24 field + 8) and
+     32px when not — the gap below is what produces that rhythm */
+  .fig-head {
+    height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-weight: 550;
+    color: var(--fig-ink);
+  }
+  .fig-head[data-empty='true'] {
+    color: var(--fig-dim);
+  }
+  .fig-title {
+    flex: 1;
+    font: inherit;
+    font-weight: 550;
+    margin: 0;
+  }
+
+  /* the styles-and-variables button fades out until the header is hovered,
+     the way the chevron already does */
+  .fig-head-fade {
+    display: inline-flex;
+    opacity: 0;
+    transition: opacity 80ms linear;
+  }
+  .fig-head:hover > .fig-head-fade,
+  .fig-head-fade:focus-within {
+    opacity: 1;
+  }
+
+  /* the small grey caption Figma puts above each group of fields */
+  .fig-label {
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--fig-dim);
+    margin-top: 4px;
+  }
+
+  .fig-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .fig-input {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    border-radius: 5px;
+    background: var(--fig-field);
+  }
+  .fig-input:hover {
+    background: #ededed;
+  }
+  .fig-input:focus-within {
+    background: #fff;
+    box-shadow: inset 0 0 0 1px var(--fig-blue);
+  }
+  .fig-input > .glyph {
+    width: 24px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--fig-dim);
+    cursor: ew-resize;
+    user-select: none;
+  }
+  .fig-input > input {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding-right: 8px;
+    border: 0;
+    background: transparent;
+    outline: none;
+    color: inherit;
+    font: inherit;
+  }
+  /* Figma insets a field's content by 8px. A leading glyph already holds that
+     space in its own 24px box, so the inset applies only when the content is
+     first in the field — otherwise the value would sit off-centre from it. */
+  .fig-input > input:first-child,
+  .fig-input > .fig-value:first-child {
+    padding-left: 8px;
+  }
+  /* the label a select shows, and the caret at its trailing edge */
+  .fig-input > .fig-value {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fig-input > .fig-caret {
+    display: flex;
+    flex: none;
+    padding-right: 8px;
+    color: var(--fig-dim);
+  }
+
+  .fig-btn {
+    height: 24px;
+    min-width: 24px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fig-ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: default;
+    font: inherit;
+  }
+  /* An icon-only button is a 24px square with the icon centred; one carrying a
+     label needs Figma's 8px sides, or the text touches the hover fill. */
+  .fig-btn[data-text='true'] {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .fig-btn:hover {
+    background: var(--fig-hover);
+  }
+  .fig-btn[data-on='true'] {
+    background: var(--fig-selected);
+    color: var(--fig-blue);
+  }
+  .fig-btn:disabled {
+    color: rgba(0, 0, 0, 0.25);
+  }
+  .fig-btn:disabled:hover {
+    background: transparent;
+  }
+
+  /* Figma's segmented controls are one continuous #F5F5F5 bar */
+  .fig-seg {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    gap: 1px;
+  }
+  .fig-seg > button {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 24px;
+    border: 0;
+    border-radius: 0;
+    background: var(--fig-field);
+    color: var(--fig-ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+    font: inherit;
+  }
+  .fig-seg > button:first-child {
+    border-radius: 5px 0 0 5px;
+  }
+  .fig-seg > button:last-child {
+    border-radius: 0 5px 5px 0;
+  }
+  .fig-seg > button:hover {
+    background: #ededed;
+  }
+  .fig-seg > button[data-on='true'] {
+    background: var(--fig-selected);
+    color: var(--fig-blue);
+  }
+
+  .fig-swatch {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    flex: none;
+    margin-left: 4px;
+    padding: 0;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 3px;
+    cursor: default;
+    overflow: hidden;
+  }
+  /* Figma's chit shows transparency as a wedge across the swatch, not by
+     fading the whole thing — the colour stays readable at any opacity. */
+  .fig-swatch-alpha {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(to top right, #fff 49.5%, rgba(0, 0, 0, 0.1) 49.5%, rgba(0, 0, 0, 0.1) 50.5%, transparent 50.5%);
+    pointer-events: none;
+  }
+
+  /* swatch | hex | opacity | % all in one field, as the reference panel has it */
+  .fig-paint > input.fig-paint-alpha {
+    flex: none;
+    width: 34px;
+    text-align: right;
+    padding-right: 0;
+  }
+  .fig-paint > .fig-paint-percent {
+    width: 18px;
+  }
+  .fig-paint > input.fig-paint-alpha::before {
+    content: '';
+  }
+
+  /* the visibility toggle is a checkbox; the label carries the eye */
+  .fig-check {
+    position: relative;
+  }
+  .fig-check > input {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    opacity: 0;
+    cursor: default;
+  }
+  .fig-check > input:focus-visible + label {
+    box-shadow: inset 0 0 0 1px var(--fig-blue);
+    border-radius: 5px;
+  }
+  /* sized like the icon so the checkbox occupies the same 32px box the
+     neighbouring icon buttons do — otherwise the eye and the minus misalign */
+  .fig-check > label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    pointer-events: none;
+  }
+}
+
+@layer components {
+  /* Figma reveals these two affordances only when you approach the row */
+  .fig-variable {
+    position: absolute;
+    right: 2px;
+    top: 2px;
+    width: 20px;
+    height: 20px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fig-dim);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    cursor: default;
+  }
+  .fig-input:hover .fig-variable,
+  .fig-input:focus-within .fig-variable {
+    opacity: 1;
+  }
+  .fig-variable:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--fig-ink);
+  }
+
+  .fig-chevron {
+    width: 16px;
+    flex: none;
+    margin-left: -16px;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--fig-dim);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    cursor: default;
+  }
+  .fig-section:hover .fig-chevron {
+    opacity: 1;
+  }
+  .fig-chevron[data-hidden='true'] {
+    visibility: hidden;
+  }
+}
+
+/* ─── Figma shell ────────────────────────────────────────────────────────
+   57px icon rail · 241px left panel · light canvas · floating toolbar.    */
+@layer components {
+  .fig-shell {
+    --fig-line: #e6e6e6;
+    --fig-ink: rgba(0, 0, 0, 0.898);
+    --fig-dim: rgba(0, 0, 0, 0.5);
+    --fig-field: #f5f5f5;
+    --fig-blue: #0d99ff;
+    /* components and instances are purple in Figma, everywhere they appear */
+    --fig-purple: #8638e5;
+    /* the transparency checkerboard behind alpha sliders and swatches */
+    --fig-checker: url("data:image/svg+xml;utf8,%3Csvg width='8' height='8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h4v4H0zM4 4h4v4H4z' fill='%23e1e1e1'/%3E%3C/svg%3E") 0 0 / 8px 8px, #fff;
+    --fig-selected: #e5f4ff;
+    --fig-hover: rgba(0, 0, 0, 0.06);
+    --fig-icon-3: rgba(0, 0, 0, 0.3);
+    font-size: 11px;
+    color: var(--fig-ink);
+  }
+
+  .fig-rail {
+    width: 42px;
+    flex: none;
+    background: #fff;
+    border-right: 1px solid var(--fig-line);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 8px;
+  }
+  .fig-rail-divider {
+    height: 1px;
+    margin: 7px 10px;
+    background: var(--fig-line);
+  }
+  /* 28px button plus 7px either side is the rail's full 42px width */
+  .fig-tool {
+    width: 28px;
+    height: 28px;
+    margin: 2px 7px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fig-ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+  }
+  .fig-tool:hover {
+    background: var(--fig-hover);
+  }
+  .fig-tool[data-on='true'] {
+    background: var(--fig-selected);
+    color: var(--fig-blue);
+  }
+
+  .fig-left {
+    width: 241px;
+    flex: none;
+    background: #fff;
+    border-right: 1px solid var(--fig-line);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  /* ─── Right-click menu ───────────────────────────────────────────────
+     Dark, like Figma's: it floats over the canvas rather than belonging to a
+     panel, so it borrows none of the surrounding chrome's colours. */
+  .ctx {
+    position: fixed;
+    z-index: 300;
+    padding: 6px;
+    background: #1e1e1e;
+    border-radius: 10px;
+    box-shadow:
+      0 0 0 0.5px rgba(255, 255, 255, 0.08),
+      0 2px 6px rgba(0, 0, 0, 0.25),
+      0 10px 34px rgba(0, 0, 0, 0.4);
+    color: #fff;
+    user-select: none;
+  }
+  .ctx-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    height: 26px;
+    padding: 0 10px 0 12px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 400;
+    text-align: left;
+    cursor: default;
+    white-space: nowrap;
+  }
+  .ctx-row:hover:not(:disabled),
+  .ctx-row[data-open='true'] {
+    background: var(--fig-blue, #0d99ff);
+  }
+  .ctx-row:disabled {
+    color: rgba(255, 255, 255, 0.32);
+  }
+  .ctx-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ctx-shortcut {
+    color: rgba(255, 255, 255, 0.5);
+    flex: none;
+  }
+  .ctx-row:hover:not(:disabled) .ctx-shortcut,
+  .ctx-row[data-open='true'] .ctx-shortcut {
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .ctx-row:disabled .ctx-shortcut {
+    color: rgba(255, 255, 255, 0.24);
+  }
+  .ctx-arrow {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 14px;
+    line-height: 1;
+    flex: none;
+  }
+  .ctx-row:hover:not(:disabled) .ctx-arrow,
+  .ctx-row[data-open='true'] .ctx-arrow {
+    color: #fff;
+  }
+  .ctx-sep {
+    height: 1px;
+    margin: 5px 6px;
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  /* Drag handle between a panel and the canvas.
+
+     It carries no layout width: the grab area and the highlight are
+     pseudo-elements straddling the panel's own 1px border, so the handle
+     can be added or removed without nudging anything beside it. */
+  .fig-resizer {
+    width: 0;
+    flex: none;
+    position: relative;
+    z-index: 5;
+    outline: none;
+  }
+  .fig-resizer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    /* 7px of grab area, biased into the canvas rather than the panel, whose
+       edge rows are clickable controls */
+    left: -2px;
+    right: -5px;
+    cursor: col-resize;
+  }
+  .fig-resizer[data-side='right']::before {
+    left: -5px;
+    right: -2px;
+  }
+  .fig-resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -1px;
+    width: 2px;
+    background: var(--fig-blue);
+    opacity: 0;
+    transition: opacity 100ms ease-out;
+  }
+  .fig-resizer[data-side='right']::after {
+    left: auto;
+    right: -1px;
+  }
+  .fig-resizer:hover::after,
+  .fig-resizer:focus-visible::after,
+  .fig-resizer[data-dragging='true']::after {
+    opacity: 1;
+  }
+  /* the pointer is captured mid-drag, so the cursor has to be held globally */
+  body.fig-resizing,
+  body.fig-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
+  }
+
+  .fig-left-head {
+    height: 48px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px 0 16px;
+  }
+  .fig-left-section {
+    height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 8px 0 16px;
+    font-weight: 550;
+  }
+
+  /* A layer row behaves like a button: it sits in its own rounded slot, greys
+     under the pointer and fills blue once it is the selected one — the same
+     hover/on pair `.fig-btn` uses, so the panel reads as one control set. */
+  .fig-layer {
+    position: relative;
+    /* 24px, so the row is exactly as tall as the .fig-btn glyphs it holds */
+    height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 6px;
+    padding-right: 4px;
+    border-radius: 5px;
+    cursor: default;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .fig-layer:hover {
+    background: var(--fig-hover);
+  }
+  .fig-layer[data-on='true'] {
+    background: var(--fig-selected);
+    color: var(--fig-ink);
+  }
+  .fig-layer[data-hidden='true'] {
+    color: var(--fig-dim);
+  }
+  .fig-layer .fig-layer-icons {
+    opacity: 0;
+    display: flex;
+  }
+  .fig-layer:hover .fig-layer-icons {
+    opacity: 1;
+  }
+
+  /* Drop feedback: a line at the depth the layers would land at, or a ring
+     around the frame they would land in. */
+  .fig-layer-drop {
+    position: absolute;
+    right: 4px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--fig-blue);
+    pointer-events: none;
+  }
+  .fig-layer-drop[data-where='above'] {
+    top: -1px;
+  }
+  .fig-layer-drop[data-where='below'] {
+    bottom: -1px;
+  }
+  .fig-layer[data-drop='inside'] {
+    box-shadow: inset 0 0 0 1.5px var(--fig-blue);
+  }
+
+  /* ── Prototype ───────────────────────────────────────────────────────
+     The connection chrome on the canvas, and the panel rows that describe
+     what it does. */
+  .fig-flow-badge {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 20px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--fig-blue);
+    color: #fff;
+    font: inherit;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .fig-flow-badge[data-ghost='true'] {
+    background: #fff;
+    color: var(--fig-blue);
+    box-shadow: 0 0 0 1px var(--fig-blue);
+  }
+  /* the dot you drag out of a selected layer to draw a connection */
+  .fig-proto-handle {
+    position: absolute;
+    width: 13px;
+    height: 13px;
+    margin: -6.5px 0 0 -6.5px;
+    padding: 0;
+    border: 1.5px solid #fff;
+    border-radius: 999px;
+    background: var(--fig-blue);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    cursor: crosshair;
+  }
+  .fig-interaction {
+    padding: 0 0 6px;
+  }
+  .fig-interaction + .fig-interaction {
+    border-top: 1px solid var(--fig-line);
+    padding-top: 6px;
+  }
+
+  /* ── Present ─────────────────────────────────────────────────────────
+     A full-screen player over the editor. The artwork is the same DOM the
+     canvas renders, so only the chrome lives here. */
+  .fig-present {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    background: #1e1e1e;
+    color: #fff;
+  }
+  .fig-present-bar {
+    height: 44px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+    background: #2c2c2c;
+  }
+  .fig-present-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 550;
+    padding-left: 4px;
+  }
+  .fig-present-btn {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #fff;
+    cursor: default;
+  }
+  .fig-present-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .fig-present-btn[data-off='true'] {
+    opacity: 0.35;
+  }
+  .fig-present-stage {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+  .fig-present-frame {
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+  }
+  .fig-present-screen {
+    position: absolute;
+    left: 0;
+    top: 0;
+    overflow: hidden;
+  }
+  /* the incoming frame has to sit over the one it is replacing */
+  .fig-present-screen[data-role='incoming'] {
+    z-index: 1;
+  }
+  .fig-hotspot {
+    position: absolute;
+    z-index: 2;
+    border-radius: 3px;
+    background: rgba(13, 153, 255, 0.35);
+    outline: 1px solid var(--fig-blue);
+    pointer-events: none;
+    animation: fig-hotspot-flash 500ms ease-out;
+  }
+  @keyframes fig-hotspot-flash {
+    from {
+      opacity: 0;
+    }
+    30% {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+
+}
+
+@layer components {
+  /* the bordered white action button Figma uses for "Export <layer>" */
+  .fig-export {
+    flex: 1;
+    height: 28px;
+    border: 1px solid var(--fig-line);
+    border-radius: 5px;
+    background: #fff;
+    color: var(--fig-ink);
+    font: inherit;
+    cursor: default;
+  }
+  .fig-export:hover {
+    background: var(--fig-field);
+  }
+}
+
+/* The base `.scroll` rule below is unlayered, so an override inside
+   @layer components can never beat it — these have to be unlayered too.
+   Figma's panel scrollbar overlays the content; a native gutter would eat
+   11px and shrink every column in the inspector grid. */
+.fig .scroll {
+  scrollbar-width: none;
+}
+.fig .scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.fig .fig-section {
+  padding: 0 8px 12px 16px;
+}
+
+/* ── Paint picker ──────────────────────────────────────────────────────────
+   Figma's colour dialog. Unlayered, like the scrollbar rules above, because
+   these need to beat the panel defaults they sit inside. */
+.fig-picker {
+  position: fixed;
+  z-index: 90;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 10px 32px -8px rgba(0, 0, 0, 0.3);
+  color: var(--fig-ink);
+  font-size: 11px;
+  user-select: none;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+.fig-picker .fig-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.fig-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px 0;
+}
+.fig-picker-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+}
+.fig-picker-tab {
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fig-dim);
+  font: inherit;
+  font-weight: 550;
+  cursor: default;
+}
+.fig-picker-tab[aria-selected='true'] {
+  background: var(--fig-field);
+  color: var(--fig-ink);
+}
+.fig-picker-head-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.fig-picker-types {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--fig-line);
+}
+.fig-picker-types > fieldset {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.fig-picker-type {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--fig-ink);
+  cursor: default;
+}
+.fig-picker-type[data-on='true'] {
+  background: var(--fig-field);
+}
+.fig-picker-type > input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: default;
+}
+.fig-picker-type > input:focus-visible ~ svg {
+  outline: 1px solid var(--fig-blue);
+  border-radius: 3px;
+}
+.fig-picker-type-actions {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.fig-picker-spectrum {
+  position: relative;
+  margin: 12px 16px 0;
+}
+.fig-picker-surface {
+  width: 208px;
+  height: 208px;
+  border-radius: 5px;
+  outline: 1px solid rgba(0, 0, 0, 0.08);
+  outline-offset: -1px;
+  cursor: crosshair;
+}
+.fig-picker-reticle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 4px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+.fig-picker-reticle:focus-visible {
+  outline: 2px solid var(--fig-blue);
+  outline-offset: 2px;
+}
+
+.fig-picker-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+.fig-picker-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.fig-picker-slider {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  cursor: default;
+}
+.fig-picker-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.fig-picker-format,
+.fig-picker-swatches {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+.fig-picker-swatches {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 12px;
+  padding-bottom: 16px;
+  border-top: 1px solid var(--fig-line);
+  padding-top: 12px;
+}
+.fig-picker-format > .fig-input {
+  flex: 1;
+}
+.fig-picker-select {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--fig-field);
+  color: inherit;
+  font: inherit;
+  cursor: default;
+  white-space: nowrap;
+}
+/* the label takes the slack so the chevron sits at the trailing edge, rather
+   than trailing the text in the middle of a full-width control */
+.fig-picker-select > span:first-child {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fig-picker-select[data-on] {
+  box-shadow: inset 0 0 0 1px var(--fig-blue);
+}
+.fig-picker-list {
+  position: absolute;
+  left: 0;
+  top: 28px;
+  min-width: 120px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px -6px rgba(0, 0, 0, 0.24);
+  z-index: 2;
+}
+.fig-picker-chits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+}
+.fig-picker-chit {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.fig-picker-libraries {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.fig-picker-stops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+.fig-picker-stops-preview {
+  height: 24px;
+  flex: 1;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.fig-picker-stops-chits {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.fig-picker-stop {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+.fig-picker-stop[data-on] {
+  box-shadow: 0 0 0 2px var(--fig-blue);
+}

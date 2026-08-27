@@ -1,0 +1,348 @@
+'use client';
+
+import { create } from 'zustand';
+import type { SnapGuide } from '../document/snapping';
+
+export type Tool =
+  | 'move'
+  | 'pan'
+  | 'frame'
+  | 'rect'
+  | 'ellipse'
+  | 'pen'
+  | 'text'
+  | 'comment'
+  | 'image'
+  | 'svg'
+  | 'shaders';
+
+export interface Viewport {
+  /** World-space offset of the viewport origin, in screen px. */
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface UIState {
+  tool: Tool;
+  setTool: (tool: Tool) => void;
+
+  selection: string[];
+  select: (ids: string[]) => void;
+  toggle: (id: string) => void;
+  clearSelection: () => void;
+
+  hover: string | null;
+  setHover: (id: string | null) => void;
+
+  /**
+   * Layer rows that are open in the panel. Figma ships containers collapsed and
+   * opens them as you drill in, so absence means closed. Expansion lives here
+   * rather than in the rows themselves: selecting on the canvas has to be able
+   * to open every ancestor of the selection, which a row cannot do for itself.
+   */
+  expanded: Record<string, boolean>;
+  toggleExpanded: (id: string) => void;
+  setExpanded: (ids: string[], open: boolean) => void;
+
+  /**
+   * The row a range-select measures from — the last one clicked without shift,
+   * exactly as a file list behaves.
+   */
+  anchor: string | null;
+  setAnchor: (id: string | null) => void;
+
+  /**
+   * The container you have drilled into. While set, a single click selects
+   * siblings at that level instead of jumping back out to the artboard.
+   */
+  entered: string | null;
+  setEntered: (id: string | null) => void;
+
+  viewport: Viewport;
+  setViewport: (next: Viewport | ((prev: Viewport) => Viewport)) => void;
+
+  /** id of the text node currently being edited in place */
+  editing: string | null;
+  setEditing: (id: string | null) => void;
+
+  leftPanel: boolean;
+  toggleLeftPanel: () => void;
+
+  /**
+   * Panel widths, in px. Both sides are drag-resizable and persist per
+   * browser; the setters clamp so the canvas between them never disappears.
+   */
+  leftWidth: number;
+  rightWidth: number;
+  setLeftWidth: (width: number) => void;
+  setRightWidth: (width: number) => void;
+  resetLeftWidth: () => void;
+  resetRightWidth: () => void;
+  /** reads the saved widths — call once on mount, never during render */
+  hydratePanels: () => void;
+  tab: 'design' | 'theme';
+  setTab: (tab: 'design' | 'theme') => void;
+
+  /**
+   * The right panel's tab. It lives here rather than in the panel because the
+   * canvas draws prototype connections whenever Prototype is showing, exactly
+   * as Figma does.
+   */
+  inspectorTab: 'design' | 'prototype';
+  setInspectorTab: (tab: 'design' | 'prototype') => void;
+
+  /** the frame Present is playing, or null when it is closed */
+  presenting: string | null;
+  present: (frame: string | null) => void;
+
+  /** the page currently on the canvas */
+  page: string;
+  setPage: (id: string) => void;
+
+  /** briefly flags a layer the pointer hit but could not select */
+  lockedHint: string | null;
+  setLockedHint: (id: string | null) => void;
+
+  /** alignment guides shown while dragging */
+  guides: SnapGuide[];
+  setGuides: (guides: SnapGuide[]) => void;
+
+  contextMenu: { x: number; y: number; stack: string[] } | null;
+  setContextMenu: (menu: { x: number; y: number; stack: string[] } | null) => void;
+
+  shadersOpen: boolean;
+  setShadersOpen: (open: boolean) => void;
+
+  /** the floating bottom prompt bar, used by Create image / Create SVG */
+  prompt: 'image' | 'svg' | null;
+  setPrompt: (kind: 'image' | 'svg' | null) => void;
+
+  exportOpen: boolean;
+  setExportOpen: (open: boolean) => void;
+
+  exportFormat: ExportFormat;
+  setExportFormat: (format: ExportFormat) => void;
+  exportScale: number;
+  setExportScale: (scale: number) => void;
+
+  /** Figma keeps a list of export settings per layer; this is the app-level one */
+  exportRows: { id: string; scale: number; format: ExportFormat }[];
+  addExportRow: () => void;
+  updateExportRow: (id: string, patch: Partial<{ scale: number; format: ExportFormat }>) => void;
+  removeExportRow: (id: string) => void;
+}
+
+export type ExportFormat = 'react' | 'html' | 'json' | 'png' | 'svg';
+
+/**
+ * Panel geometry. `base` is the width the panel ships at — the same number the
+ * stylesheet uses, so an un-dragged panel looks identical either way.
+ */
+export const PANEL = {
+  left: { min: 180, max: 480, base: 241 },
+  right: { min: 280, max: 640, base: 355 },
+  /** the icon rail, which is not resizable */
+  toolRail: 42,
+  /** however hard you drag, this much canvas survives between the panels */
+  canvasMin: 240,
+  /** each panel is separated from the canvas by a 1px border */
+  border: 1,
+} as const;
+
+interface PanelBounds {
+  min: number;
+  max: number;
+  base: number;
+}
+
+const clamp = (value: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, value));
+
+/**
+ * Clamp a panel to its own bounds, then again against the space the other
+ * panel leaves. Without the second pass, dragging hard on a narrow window
+ * squeezes the canvas out of existence.
+ */
+function fitPanel(width: number, bounds: PanelBounds, otherWidth: number): number {
+  const wanted = clamp(Math.round(width), bounds.min, bounds.max);
+  if (typeof window === 'undefined') return wanted;
+  const spare =
+    window.innerWidth - PANEL.toolRail - PANEL.canvasMin - otherWidth - PANEL.border * 2;
+  // `spare` can fall below the minimum on a very narrow window; the minimum
+  // wins there, since a panel narrower than that is unusable anyway.
+  return Math.max(bounds.min, Math.min(wanted, spare));
+}
+
+const PANEL_KEY = 'paperlike:panels';
+
+/** Storage is unavailable in private windows and blocked by some settings. */
+function persistPanels(leftWidth: number, rightWidth: number): void {
+  try {
+    localStorage.setItem(PANEL_KEY, JSON.stringify({ leftWidth, rightWidth }));
+  } catch {
+    // a panel width is not worth breaking a drag over
+  }
+}
+
+function readPanels(): { leftWidth?: number; rightWidth?: number } | null {
+  try {
+    const raw = localStorage.getItem(PANEL_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const { leftWidth, rightWidth } = parsed as Record<string, unknown>;
+    return {
+      leftWidth: typeof leftWidth === 'number' && Number.isFinite(leftWidth) ? leftWidth : undefined,
+      rightWidth:
+        typeof rightWidth === 'number' && Number.isFinite(rightWidth) ? rightWidth : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export const useUI = create<UIState>((set) => ({
+  tool: 'move',
+  setTool: (tool) => set({ tool, prompt: tool === 'image' ? 'image' : tool === 'svg' ? 'svg' : null }),
+
+  selection: [],
+  select: (selection) => set({ selection }),
+  toggle: (id) =>
+    set((state) => ({
+      selection: state.selection.includes(id)
+        ? state.selection.filter((s) => s !== id)
+        : [...state.selection, id],
+    })),
+  clearSelection: () => set({ selection: [], editing: null, entered: null }),
+
+  hover: null,
+  setHover: (hover) => set({ hover }),
+
+  expanded: {},
+  toggleExpanded: (id) =>
+    set((state) => ({ expanded: { ...state.expanded, [id]: !state.expanded[id] } })),
+  setExpanded: (ids, open) =>
+    set((state) => {
+      // no-op writes would re-render every row, and this runs on every selection
+      if (ids.every((id) => !!state.expanded[id] === open)) return {};
+      const expanded = { ...state.expanded };
+      for (const id of ids) expanded[id] = open;
+      return { expanded };
+    }),
+
+  anchor: null,
+  setAnchor: (anchor) => set({ anchor }),
+
+  entered: null,
+  setEntered: (entered) => set({ entered }),
+
+  viewport: { x: 0, y: 0, zoom: 1 },
+  setViewport: (next) =>
+    set((state) => ({ viewport: typeof next === 'function' ? next(state.viewport) : next })),
+
+  editing: null,
+  setEditing: (editing) => set({ editing }),
+
+  leftPanel: true,
+  toggleLeftPanel: () => set((state) => ({ leftPanel: !state.leftPanel })),
+
+  leftWidth: PANEL.left.base,
+  rightWidth: PANEL.right.base,
+  setLeftWidth: (width) =>
+    set((state) => {
+      const leftWidth = fitPanel(width, PANEL.left, state.rightWidth);
+      persistPanels(leftWidth, state.rightWidth);
+      return { leftWidth };
+    }),
+  setRightWidth: (width) =>
+    set((state) => {
+      const rightWidth = fitPanel(width, PANEL.right, state.leftPanel ? state.leftWidth : 0);
+      persistPanels(state.leftWidth, rightWidth);
+      return { rightWidth };
+    }),
+  resetLeftWidth: () =>
+    set((state) => {
+      persistPanels(PANEL.left.base, state.rightWidth);
+      return { leftWidth: PANEL.left.base };
+    }),
+  resetRightWidth: () =>
+    set((state) => {
+      persistPanels(state.leftWidth, PANEL.right.base);
+      return { rightWidth: PANEL.right.base };
+    }),
+  hydratePanels: () =>
+    set((state) => {
+      const saved = readPanels();
+      if (!saved) return {};
+      const leftWidth = fitPanel(saved.leftWidth ?? state.leftWidth, PANEL.left, 0);
+      return { leftWidth, rightWidth: fitPanel(saved.rightWidth ?? state.rightWidth, PANEL.right, leftWidth) };
+    }),
+  tab: 'design',
+  setTab: (tab) => set({ tab }),
+
+  inspectorTab: 'design',
+  // leaving the tab drops any half-drawn connection, and entering it drops the
+  // drawing tool: you cannot rubber-band a rectangle over the noodles
+  setInspectorTab: (inspectorTab) =>
+    set((state) => ({
+      inspectorTab,
+      tool: inspectorTab === 'prototype' && state.tool !== 'pan' ? 'move' : state.tool,
+    })),
+
+  presenting: null,
+  present: (presenting) => set({ presenting, editing: null }),
+
+  page: 'root',
+  setPage: (page) => set({ page, selection: [], entered: null, editing: null }),
+
+  lockedHint: null,
+  setLockedHint: (lockedHint) => set({ lockedHint }),
+
+  guides: [],
+  setGuides: (guides) => set({ guides }),
+
+  contextMenu: null,
+  setContextMenu: (contextMenu) => set({ contextMenu }),
+
+  shadersOpen: false,
+  setShadersOpen: (shadersOpen) => set({ shadersOpen, tool: shadersOpen ? 'shaders' : 'move' }),
+
+  prompt: null,
+  setPrompt: (prompt) => set({ prompt }),
+
+  exportOpen: false,
+  setExportOpen: (exportOpen) => set({ exportOpen }),
+
+  exportFormat: 'react',
+  setExportFormat: (exportFormat) => set({ exportFormat }),
+  exportScale: 2,
+  setExportScale: (exportScale) => set({ exportScale }),
+
+  exportRows: [{ id: 'default', scale: 2, format: 'png' }],
+  addExportRow: () =>
+    set((state) => ({
+      exportRows: [
+        ...state.exportRows,
+        { id: Math.random().toString(36).slice(2, 8), scale: 1, format: 'png' },
+      ],
+    })),
+  updateExportRow: (id, patch) =>
+    set((state) => ({
+      exportRows: state.exportRows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    })),
+  removeExportRow: (id) =>
+    set((state) => ({
+      // never leave the list empty — Figma keeps at least one row once opened
+      exportRows: state.exportRows.length > 1 ? state.exportRows.filter((row) => row.id !== id) : state.exportRows,
+    })),
+}));
+
+/** Screen px → world coordinates. */
+export function toWorld(vp: Viewport, sx: number, sy: number): { x: number; y: number } {
+  return { x: (sx - vp.x) / vp.zoom, y: (sy - vp.y) / vp.zoom };
+}
+
+/** World coordinates → screen px. */
+export function toScreen(vp: Viewport, wx: number, wy: number): { x: number; y: number } {
+  return { x: wx * vp.zoom + vp.x, y: wy * vp.zoom + vp.y };
+}

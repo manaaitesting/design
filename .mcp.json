@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "paperlike": {
+      "command": "npx",
+      "args": ["-y", "tsx", "server/mcp.ts"],
+      "cwd": ".",
+      "env": {
+        "SYNC_URL": "ws://localhost:1234"
+      }
+    }
+  }
+}
