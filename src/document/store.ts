@@ -1,7 +1,24 @@
 import * as Y from 'yjs';
-import { DEFAULT_FLEX, makeNode, nameFor } from './defaults';
+import { BOOLEAN_LABEL, DEFAULT_FLEX, makeNode, nameFor } from './defaults';
 import { applyConstraints } from './constraints';
 import { newInteraction } from './prototype';
+import {
+  anchorBounds,
+  cloneAnchor,
+  isClosedShape,
+  isPathType,
+  outlineAnchors,
+  placedRegion,
+  regionBounds,
+  regionOf,
+  scaleAnchors,
+  shiftRegion,
+  subpathBounds,
+  subpathsFromRegion,
+  type Anchor,
+} from './geometry';
+import { clip, clipAll, strokeRegion } from './clipper';
+import { booleanRegion } from './boolean';
 import {
   descendants,
   instanceRoot,
@@ -11,6 +28,7 @@ import {
   ROOT_ID,
   type Align,
   type Axis,
+  type BooleanOp,
   type ComponentProp,
   type Doc,
   type FlexSpec,
@@ -21,9 +39,13 @@ import {
   type PropBinding,
   type SceneNode,
   type StyleKind,
+  type VectorPath,
   type StyleSlot,
+  type Token,
 } from './types';
 import { newId } from '../lib/id';
+import type { CustomFont } from '../lib/fonts';
+import { DEFAULT_COLLECTION, DEFAULT_COLLECTION_ID, type Collection } from './variables';
 
 /** Tag for edits made by this client, so the UndoManager only rewinds our own work. */
 export const LOCAL_ORIGIN = Symbol('local');
@@ -44,6 +66,9 @@ const NOT_INHERITED = new Set([
   // a main publishes properties and says which variant it is; an instance
   // chooses values. Neither side wants the other's half copied onto it.
   'props', 'isComponentSet', 'variantValues', 'propValues',
+  // where a main came from is the main's business; an instance of it is not
+  // itself an import, and saying so would offer the update twice
+  'libraryId', 'libraryVersion',
 ]);
 
 function toY(node: SceneNode): YNode {
@@ -209,12 +234,7 @@ export interface Comment {
   replies: { authorName: string; authorColor: string; body: string; createdAt: number }[];
 }
 
-export interface Token {
-  id: string;
-  name: string;
-  type: 'color' | 'number' | 'text';
-  value: string;
-}
+export type { Token };
 
 /**
  * A style: a named set of properties layers subscribe to.
@@ -238,9 +258,21 @@ export class DocStore {
   /** page ids, in tab order */
   readonly pages: Y.Array<string>;
   readonly tokens: Y.Map<Token>;
+  readonly collections: Y.Map<Collection>;
+  readonly fonts: Y.Map<CustomFont>;
   readonly styles: Y.Map<Style>;
   readonly comments: Y.Map<Comment>;
   readonly undoManager: Y.UndoManager;
+
+  /**
+   * A viewer's store.
+   *
+   * Every structural mutation funnels through `transact`, so one flag here
+   * stops the whole editor writing — the panels, the canvas, the shortcuts and
+   * anything added later. Comments are deliberately outside it: a viewer can
+   * still say something about the design, as they can in Figma.
+   */
+  readOnly = false;
 
   private snap: Doc = {};
   private listeners = new Set<() => void>();
@@ -255,10 +287,12 @@ export class DocStore {
     this.nodes = ydoc.getMap<YNode>('nodes');
     this.pages = ydoc.getArray<string>('pages');
     this.tokens = ydoc.getMap<Token>('tokens');
+    this.collections = ydoc.getMap<Collection>('collections');
+    this.fonts = ydoc.getMap<CustomFont>('fonts');
     this.styles = ydoc.getMap<Style>('styles');
     this.comments = ydoc.getMap<Comment>('comments');
     // comments are conversation, not document history — undo must not eat them
-    this.undoManager = new Y.UndoManager([this.nodes, this.pages, this.tokens, this.styles], {
+    this.undoManager = new Y.UndoManager([this.nodes, this.pages, this.tokens, this.styles, this.collections], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
       captureTimeout: 350,
     });
@@ -271,6 +305,8 @@ export class DocStore {
     this.nodes.observeDeep(notify);
     this.pages.observe(notify);
     this.tokens.observe(notify);
+    this.collections.observe(notify);
+    this.fonts.observe(notify);
     this.styles.observe(notify);
     this.comments.observe(notify);
   }
@@ -303,7 +339,8 @@ export class DocStore {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────
-  private transact<T>(fn: () => T): T {
+  private transact<T>(fn: () => T): T | undefined {
+    if (this.readOnly) return undefined;
     return this.ydoc.transact(fn, LOCAL_ORIGIN);
   }
 
@@ -325,6 +362,7 @@ export class DocStore {
 
   /** Creates the page if the document is empty. Safe to call from every client. */
   ensureRoot(): void {
+    if (this.readOnly) return;
     this.ydoc.transact(() => {
       if (!this.nodes.has(ROOT_ID)) {
         this.nodes.set(ROOT_ID, toY(makeNode(ROOT_ID, 'page', null, { name: 'Page 1' })));
@@ -372,6 +410,153 @@ export class DocStore {
     return [...this.tokens.values()]
       .filter((token): token is Token => !!token && typeof token.name === 'string')
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // ── Fonts ──────────────────────────────────────────────────────────────
+  //
+  // A face uploaded here travels in the document, so a file opened by someone
+  // who does not have the font installed still renders the design rather than
+  // a fallback. That is the same trade images make, and the same size ceiling
+  // applies for the same reason.
+
+  listFonts(): CustomFont[] {
+    return [...this.fonts.values()].filter((font): font is CustomFont => !!font?.name);
+  }
+
+  addFont(font: Omit<CustomFont, 'id'>): string {
+    const id = newId();
+    this.transact(() => this.fonts.set(id, { ...font, id }));
+    return id;
+  }
+
+  removeFont(id: string): void {
+    this.transact(() => this.fonts.delete(id));
+  }
+
+  /**
+   * The variable collections in the document.
+   *
+   * A file that has never made one still has a collection — the default, with a
+   * single mode — so every caller can resolve through the same path instead of
+   * special-casing "no modes yet".
+   */
+  listCollections(): Collection[] {
+    const stored = [...this.collections.values()].filter(
+      (entry): entry is Collection => !!entry && Array.isArray(entry.modes) && entry.modes.length > 0,
+    );
+    const hasDefault = stored.some((entry) => entry.id === DEFAULT_COLLECTION_ID);
+    return hasDefault ? stored : [DEFAULT_COLLECTION, ...stored];
+  }
+
+  addCollection(name: string): string {
+    const id = newId();
+    const modeId = newId();
+    this.transact(() =>
+      this.collections.set(id, {
+        id,
+        name,
+        modes: [{ id: modeId, name: 'Mode 1' }],
+        defaultMode: modeId,
+      }),
+    );
+    return id;
+  }
+
+  updateCollection(id: string, patch: Partial<Collection>): void {
+    this.transact(() => {
+      const existing = this.collections.get(id) ?? (id === DEFAULT_COLLECTION_ID ? DEFAULT_COLLECTION : null);
+      if (existing) this.collections.set(id, { ...existing, ...patch, id });
+    });
+    this.schedulePropagation();
+  }
+
+  /** Adds a mode, seeded from the one the collection already shows. */
+  addMode(collectionId: string, name?: string): string | null {
+    const collection =
+      this.collections.get(collectionId) ??
+      (collectionId === DEFAULT_COLLECTION_ID ? DEFAULT_COLLECTION : null);
+    if (!collection) return null;
+    const modeId = newId();
+    const from = collection.defaultMode;
+
+    this.transact(() => {
+      this.collections.set(collectionId, {
+        ...collection,
+        modes: [...collection.modes, { id: modeId, name: name ?? `Mode ${collection.modes.length + 1}` }],
+      });
+      // A new mode that resolves to nothing would blank every layer wearing one
+      // of its variables, so it starts as a copy of what you were looking at.
+      for (const token of this.listTokens()) {
+        if ((token.collection ?? DEFAULT_COLLECTION_ID) !== collectionId) continue;
+        const current = token.values?.[from] ?? token.value;
+        this.tokens.set(token.id, {
+          ...token,
+          values: { ...(token.values ?? {}), [modeId]: current },
+        });
+      }
+    });
+    return modeId;
+  }
+
+  removeMode(collectionId: string, modeId: string): void {
+    const collection =
+      this.collections.get(collectionId) ??
+      (collectionId === DEFAULT_COLLECTION_ID ? DEFAULT_COLLECTION : null);
+    if (!collection || collection.modes.length <= 1) return;
+
+    this.transact(() => {
+      const modes = collection.modes.filter((mode) => mode.id !== modeId);
+      this.collections.set(collectionId, {
+        ...collection,
+        modes,
+        defaultMode: collection.defaultMode === modeId ? modes[0].id : collection.defaultMode,
+      });
+      for (const token of this.listTokens()) {
+        if (!token.values || !(modeId in token.values)) continue;
+        const values = { ...token.values };
+        delete values[modeId];
+        this.tokens.set(token.id, { ...token, values });
+      }
+      // and any frame still asking for the mode that just went away
+      for (const [id, ymap] of this.nodes) {
+        const node = this.snap[id];
+        if (node?.modes?.[collectionId] !== modeId) continue;
+        const modesLeft = { ...node.modes };
+        delete modesLeft[collectionId];
+        ymap.set('modes', modesLeft);
+      }
+    });
+    this.schedulePropagation();
+  }
+
+  /** Sets one variable's value in one mode. */
+  setTokenValue(tokenId: string, modeId: string, value: string): void {
+    this.transact(() => {
+      const token = this.tokens.get(tokenId);
+      if (!token) return;
+      const collection = this.listCollections().find(
+        (entry) => entry.id === (token.collection ?? DEFAULT_COLLECTION_ID),
+      );
+      const isDefault = !collection || collection.defaultMode === modeId;
+      this.tokens.set(tokenId, {
+        ...token,
+        // the default mode stays in `value`, so a document that never uses
+        // modes reads exactly as it always did
+        ...(isDefault ? { value } : null),
+        values: { ...(token.values ?? {}), [modeId]: value },
+      });
+    });
+    this.schedulePropagation();
+  }
+
+  /** Points a frame at a mode, or clears the override when `modeId` is null. */
+  setNodeMode(id: string, collectionId: string, modeId: string | null): void {
+    const node = this.snap[id];
+    if (!node) return;
+    const modes = { ...(node.modes ?? {}) };
+    if (modeId) modes[collectionId] = modeId;
+    else delete modes[collectionId];
+    this.update(id, { modes });
   }
 
   addToken(token: Omit<Token, 'id'>): string {
@@ -1171,6 +1356,538 @@ export class DocStore {
   }
 
   /**
+   * Combines layers into a live boolean group.
+   *
+   * The children keep their own geometry — the group is a rule for reading them,
+   * not a new outline baked over the top, which is why the operation can be
+   * changed afterwards and the parts can still be moved inside it.
+   */
+  booleanGroup(ids: string[], op: BooleanOp): string | null {
+    const items = ids
+      .map((id) => this.snap[id])
+      .filter((node): node is SceneNode => !!node && !!node.parent);
+    if (items.length < 2) return null;
+    const parentId = items[0].parent!;
+
+    const minX = Math.min(...items.map((n) => n.x));
+    const minY = Math.min(...items.map((n) => n.y));
+    const maxX = Math.max(...items.map((n) => n.x + n.w));
+    const maxY = Math.max(...items.map((n) => n.y + n.h));
+
+    const order = this.snap[parentId]?.children ?? [];
+    const insertAt = Math.min(...items.map((n) => order.indexOf(n.id)).filter((i) => i >= 0));
+
+    // Figma gives the result the frontmost member's paint, which is what makes
+    // a boolean look like an edit of the shape you were working on
+    const lead = items[items.length - 1];
+
+    const groupId = this.create(
+      'boolean',
+      parentId,
+      {
+        name: BOOLEAN_LABEL[op],
+        op,
+        x: minX,
+        y: minY,
+        w: Math.max(1, maxX - minX),
+        h: Math.max(1, maxY - minY),
+        fill: lead.fill,
+        fills: lead.fills ? lead.fills.map((paint) => ({ ...paint })) : undefined,
+        fillOpacity: lead.fillOpacity,
+        fillVisible: lead.fillVisible,
+        border: lead.border ? { ...lead.border } : null,
+        clip: false,
+      },
+      Number.isFinite(insertAt) ? insertAt : undefined,
+    );
+
+    this.transact(() => {
+      const kids = this.childrenOf(groupId);
+      if (!kids) return;
+      for (const item of items) {
+        this.detach(item.id);
+        const node = this.nodes.get(item.id);
+        if (!node) continue;
+        node.set('parent', groupId);
+        node.set('x', item.x - minX);
+        node.set('y', item.y - minY);
+        kids.push([item.id]);
+      }
+    });
+    return groupId;
+  }
+
+  /** Changes which operation a boolean group applies. */
+  setBooleanOp(id: string, op: BooleanOp): void {
+    const node = this.snap[id];
+    if (!node || node.type !== 'boolean') return;
+    const renamed = Object.values(BOOLEAN_LABEL).includes(node.name);
+    this.update(id, { op, ...(renamed ? { name: BOOLEAN_LABEL[op] } : null) });
+  }
+
+  /**
+   * Turns the selection into mask layers, or back.
+   *
+   * A mask shapes the siblings painted above it, so it has to be the *lowest*
+   * of the layers it applies to — Figma moves it there for you, and so does
+   * this: the alternative is a mask that silently masks nothing.
+   */
+  toggleMask(ids: string[]): void {
+    const items = ids.map((id) => this.snap[id]).filter(Boolean) as SceneNode[];
+    if (!items.length) return;
+    const turningOn = items.some((node) => !node.isMask);
+
+    this.transact(() => {
+      for (const item of items) {
+        const node = this.nodes.get(item.id);
+        if (!node) continue;
+        node.set('isMask', turningOn);
+        if (turningOn && !item.maskType) node.set('maskType', 'alpha');
+      }
+      if (!turningOn) return;
+
+      // drop each new mask to the bottom of its parent's stack
+      for (const item of items) {
+        const siblings = item.parent ? this.childrenOf(item.parent) : null;
+        if (!siblings) continue;
+        const index = siblings.toArray().indexOf(item.id);
+        if (index > 0) {
+          siblings.delete(index, 1);
+          siblings.insert(0, [item.id]);
+        }
+      }
+    });
+  }
+
+  /**
+   * Replaces a vector's anchors and re-fits its box around them.
+   *
+   * The path is stored relative to the layer, so an edit that moves a point
+   * outside the old box has to move the box as well — otherwise dragging a
+   * point would slowly detach the outline from the thing you can select.
+   */
+  setAnchors(id: string, anchors: Anchor[]): void {
+    const node = this.snap[id];
+    if (!node) return;
+    const box = anchorBounds(anchors);
+    if (!box) {
+      this.update(id, { anchors: anchors.map(cloneAnchor) });
+      return;
+    }
+    const shifted = anchors.map((anchor) => ({
+      ...cloneAnchor(anchor),
+      x: anchor.x - box.minX,
+      y: anchor.y - box.minY,
+    }));
+    this.update(id, {
+      anchors: shifted,
+      x: Math.round(node.x + box.minX),
+      y: Math.round(node.y + box.minY),
+      w: Math.max(1, Math.round(box.maxX - box.minX)),
+      h: Math.max(1, Math.round(box.maxY - box.minY)),
+      wMode: 'fixed',
+      hMode: 'fixed',
+      // a point list is the geometry now; the legacy field would win on reload
+      points: undefined,
+    });
+  }
+
+  /**
+   * Replaces a vector's subpaths and re-fits its box around them.
+   *
+   * The single-anchor-list case goes through here too, so a path that grows a
+   * hole and a path that never does are stored and re-fitted the same way.
+   */
+  setPaths(id: string, paths: VectorPath[]): void {
+    const node = this.snap[id];
+    if (!node) return;
+    const box = subpathBounds(paths);
+    if (!box) return;
+
+    const shifted = paths.map((sub) => ({
+      closed: sub.closed,
+      anchors: sub.anchors.map((anchor) => ({
+        ...cloneAnchor(anchor),
+        x: anchor.x - box.minX,
+        y: anchor.y - box.minY,
+      })),
+    }));
+
+    this.update(id, {
+      paths: shifted,
+      // keep the shorthand in step: one subpath is still one anchor list, and
+      // everything that reads `anchors` should see the same geometry
+      anchors: shifted.length === 1 ? shifted[0].anchors : undefined,
+      closed: shifted.length === 1 ? shifted[0].closed : undefined,
+      x: Math.round(node.x + box.minX),
+      y: Math.round(node.y + box.minY),
+      w: Math.max(1, Math.round(box.maxX - box.minX)),
+      h: Math.max(1, Math.round(box.maxY - box.minY)),
+      wMode: 'fixed',
+      hMode: 'fixed',
+      points: undefined,
+    });
+  }
+
+  /**
+   * Brings a published component into this file.
+   *
+   * The payload is the same one the clipboard carries, so importing is a paste
+   * — and what lands is a *local* main component that remembers where it came
+   * from. Instances point at that local main, which is what lets an update from
+   * the library be applied in one place and reach every instance at once.
+   */
+  importComponent(
+    payload: string,
+    parentId: string,
+    library: { id: string; version: number },
+    at?: { x: number; y: number },
+  ): string | null {
+    const pasted = this.paste(payload, parentId, at ?? { x: 0, y: 0 });
+    const main = pasted.map((id) => this.snap[id]).find((node) => node?.isComponent) ?? this.snap[pasted[0]];
+    if (!main) return null;
+    // whatever the payload said about *its* library, this copy's provenance is
+    // the entry it was taken from
+    this.update(main.id, {
+      isComponent: true,
+      libraryId: library.id,
+      libraryVersion: library.version,
+    });
+    return main.id;
+  }
+
+  /**
+   * Takes a newer revision of a library component.
+   *
+   * The main keeps its id — every instance in the file is pointing at it — and
+   * its contents are replaced by the new payload's. Propagation then rebuilds
+   * the instances, exactly as it does when a main is edited by hand.
+   */
+  updateFromLibrary(mainId: string, payload: string, version: number): boolean {
+    const main = this.snap[mainId];
+    if (!main?.parent) return false;
+
+    const libraryId = main.libraryId ?? null;
+    // paste the new revision beside it, move its contents across, drop the shell
+    const pasted = this.paste(payload, main.parent, { x: 0, y: 0 });
+    const fresh = pasted.map((id) => this.snap[id]).find((node) => node?.isComponent) ?? this.snap[pasted[0]];
+    if (!fresh) return false;
+    // The payload carries the library markers of the file it was published
+    // from. Left on the copy, they would make it look like a second import of
+    // the same component — so they come off before anything else happens.
+    this.update(fresh.id, { libraryId: undefined, libraryVersion: undefined, isComponent: false });
+
+    this.transact(() => {
+      const target = this.nodes.get(mainId);
+      const kids = this.childrenOf(mainId);
+      if (!target || !kids) return;
+
+      // the main's own properties, minus the ones that say where it sits
+      for (const [key, value] of Object.entries(fresh)) {
+        if (NOT_INHERITED.has(key) || key === 'children') continue;
+        target.set(key, value);
+      }
+      target.set('libraryId', libraryId);
+      target.set('libraryVersion', version);
+
+      // hand the new revision's children over rather than copying them again
+      const incoming = [...fresh.children];
+      for (let i = kids.length - 1; i >= 0; i--) {
+        const gone = kids.toArray()[i];
+        for (const child of descendants(gone, this.snap)) this.nodes.delete(child);
+        kids.delete(i, 1);
+        this.nodes.delete(gone);
+      }
+      for (const child of incoming) {
+        const node = this.nodes.get(child);
+        if (!node) continue;
+        node.set('parent', mainId);
+        kids.push([child]);
+      }
+      // the shell the paste created has given up its children
+      const shell = this.childrenOf(fresh.id);
+      if (shell) shell.delete(0, shell.length);
+    });
+
+    this.remove([fresh.id]);
+    this.update(mainId, { libraryVersion: version });
+    this.schedulePropagation();
+    return true;
+  }
+
+  /**
+   * Figma's Flatten.
+   *
+   * A boolean group is a rule for reading its parts; flattening asks the
+   * geometry kernel what that rule actually produces and keeps the answer as
+   * one editable path. It is a one-way door, which is exactly why it is a
+   * separate command from making the group in the first place.
+   */
+  flatten(ids: string[]): string | null {
+    const items = ids
+      .map((id) => this.snap[id])
+      .filter((node): node is SceneNode => !!node && !!node.parent);
+    if (!items.length) return null;
+
+    const target = items[0];
+    // A single ordinary shape flattens exactly, through its own curves — the
+    // kernel would answer the same question with sampled polygons, and losing
+    // the béziers of an ellipse to a flatten nobody asked for is a poor trade.
+    if (items.length === 1 && target.type !== 'boolean') {
+      const [outlined] = this.outlineShape([target.id]);
+      return outlined ?? null;
+    }
+
+    // one boolean group flattens to what it was already showing; several layers
+    // flatten to their union, which is what selecting them and asking implies
+    const region =
+      items.length === 1 && target.type === 'boolean'
+        ? booleanRegion(target, target.children.map((id) => this.snap[id]).filter(Boolean))
+        : clipAll(items.map((node) => placedRegion(node)), 'union');
+
+    const box = regionBounds(region);
+    if (!box) return null;
+
+    const parentId = target.parent!;
+    const order = this.snap[parentId]?.children ?? [];
+    const insertAt = Math.min(...items.map((n) => order.indexOf(n.id)).filter((i) => i >= 0));
+
+    const id = this.create(
+      'vector',
+      parentId,
+      {
+        name: target.name,
+        x: Math.round(box.minX),
+        y: Math.round(box.minY),
+        w: Math.max(1, Math.round(box.maxX - box.minX)),
+        h: Math.max(1, Math.round(box.maxY - box.minY)),
+        paths: subpathsFromRegion(shiftRegion(region, -box.minX, -box.minY)),
+        closed: true,
+        fill: target.fill,
+        fills: target.fills ? target.fills.map((paint) => ({ ...paint })) : undefined,
+        fillOpacity: target.fillOpacity,
+        fillVisible: target.fillVisible,
+        border: target.border ? { ...target.border } : null,
+        opacity: target.opacity,
+        blend: target.blend,
+        effects: target.effects ? target.effects.map((effect) => ({ ...effect })) : undefined,
+      },
+      Number.isFinite(insertAt) ? insertAt : undefined,
+    );
+
+    this.remove(items.map((node) => node.id));
+    return id;
+  }
+
+  /**
+   * Figma's "Outline stroke".
+   *
+   * The stroke becomes a filled shape — the region a round pen of that width
+   * sweeps along the path, trimmed to the side the alignment asked for. A layer
+   * that also had a fill keeps it: the outline is added beside it rather than
+   * replacing what was there.
+   */
+  outlineStroke(ids: string[]): string[] {
+    const made: string[] = [];
+
+    for (const id of ids) {
+      const node = this.snap[id];
+      if (!node?.parent || !node.border || node.border.width <= 0) continue;
+
+      const outline = regionOf(node);
+      if (!outline.length) continue;
+      const closed = isClosedShape(node);
+      const band = strokeRegion(outline, node.border.width, closed);
+      const region =
+        !closed || node.border.position === 'center'
+          ? band
+          : node.border.position === 'inside'
+            ? clip(band, outline, 'intersect')
+            : clip(band, outline, 'difference');
+
+      const box = regionBounds(region);
+      if (!box) continue;
+
+      const order = this.snap[node.parent]?.children ?? [];
+      const at = order.indexOf(id);
+
+      const strokeId = this.create(
+        'vector',
+        node.parent,
+        {
+          name: `${node.name} stroke`,
+          x: Math.round(node.x + box.minX),
+          y: Math.round(node.y + box.minY),
+          w: Math.max(1, Math.round(box.maxX - box.minX)),
+          h: Math.max(1, Math.round(box.maxY - box.minY)),
+          paths: subpathsFromRegion(shiftRegion(region, -box.minX, -box.minY)),
+          closed: true,
+          fill: node.border.color,
+          fillVisible: true,
+          fillOpacity: 1,
+          border: null,
+        },
+        at >= 0 ? at + 1 : undefined,
+      );
+      made.push(strokeId);
+
+      // the stroke is a shape now, so the layer it came from stops drawing one;
+      // a layer with nothing left to paint goes with it
+      const paints = node.fills?.length ? node.fills.some((paint) => paint.visible !== false) : !!node.fill;
+      if (paints) this.update(id, { border: null });
+      else this.remove([id]);
+    }
+    return made;
+  }
+
+  /**
+   * "Outline shape" — turns a parametric shape into editable points.
+   *
+   * A polygon knows it has five sides; a vector only knows where its corners
+   * are. Converting is one-way for that reason, and it is what you do when you
+   * want to move one vertex of a star rather than all of them at once.
+   */
+  outlineShape(ids: string[]): string[] {
+    const converted: string[] = [];
+    for (const id of ids) {
+      const node = this.snap[id];
+      if (!node || node.type === 'vector' || !isPathType(node.type)) {
+        // a rectangle and an ellipse can be outlined too — they are just boxes
+        if (!node || (node.type !== 'rect' && node.type !== 'ellipse')) continue;
+      }
+      const anchors = outlineAnchors(node);
+      if (anchors.length < 2) continue;
+      this.update(id, {
+        type: 'vector',
+        anchors: anchors.map(cloneAnchor),
+        closed: isClosedShape(node),
+        smooth: 0,
+        radius: 0,
+        radii: null,
+        sides: undefined,
+        innerRatio: undefined,
+        arcStart: undefined,
+        arcEnd: undefined,
+        innerRadius: undefined,
+      });
+      converted.push(id);
+    }
+    return converted;
+  }
+
+  /**
+   * Figma's scale tool.
+   *
+   * A resize changes a box; a scale changes everything inside it — type sizes,
+   * corner radii, stroke weights, padding and gaps all move together, which is
+   * the difference between scaling a card and stretching it.
+   */
+  scaleNodes(
+    ids: string[],
+    factor: number,
+    origin?: { x: number; y: number },
+    /**
+     * The state the factor is measured against. A live drag passes the document
+     * as it was when the gesture started, so every frame scales the original
+     * rather than compounding on what the last frame produced.
+     */
+    baseline?: Doc,
+  ): void {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    const source = baseline ?? this.snap;
+    const roots = ids.map((id) => source[id]).filter(Boolean) as SceneNode[];
+    if (!roots.length) return;
+
+    this.transact(() => {
+      for (const root of roots) {
+        const anchor = origin ?? { x: root.x, y: root.y };
+        const node = this.nodes.get(root.id);
+        if (node) {
+          node.set('x', Math.round(anchor.x + (root.x - anchor.x) * factor));
+          node.set('y', Math.round(anchor.y + (root.y - anchor.y) * factor));
+        }
+        for (const id of [root.id, ...descendants(root.id, source)]) {
+          this.scaleOne(id, factor, id === root.id, source);
+        }
+      }
+    });
+    this.schedulePropagation();
+  }
+
+  /** Scales one node's own metrics. Position is the caller's business. */
+  private scaleOne(id: string, factor: number, isRoot: boolean, from: Doc): void {
+    const source = from[id];
+    const node = this.nodes.get(id);
+    if (!source || !node) return;
+
+    node.set('w', Math.max(1, Math.round(source.w * factor)));
+    node.set('h', Math.max(1, Math.round(source.h * factor)));
+    node.set('wMode', 'fixed');
+    node.set('hMode', 'fixed');
+    if (!isRoot) {
+      node.set('x', Math.round(source.x * factor));
+      node.set('y', Math.round(source.y * factor));
+    }
+    if (source.radius) node.set('radius', source.radius * factor);
+    if (source.radii) node.set('radii', source.radii.map((r) => r * factor));
+    if (source.border) node.set('border', { ...source.border, width: source.border.width * factor });
+    if (source.font) node.set('font', { ...source.font, size: source.font.size * factor });
+    if (source.anchors?.length) {
+      node.set('anchors', scaleAnchors(source.anchors, factor, factor).map(cloneAnchor));
+    }
+    if (source.points?.length) {
+      node.set('points', source.points.map(([x, y]) => [x * factor, y * factor]));
+    }
+    if (source.flex) {
+      node.set('flex', {
+        ...source.flex,
+        gap: source.flex.gap * factor,
+        crossGap: source.flex.crossGap === undefined ? undefined : source.flex.crossGap * factor,
+        padding: source.flex.padding.map((p) => p * factor) as FlexSpec['padding'],
+      });
+    }
+    if (source.effects?.length) {
+      node.set(
+        'effects',
+        source.effects.map((effect) => ({
+          ...effect,
+          x: effect.x * factor,
+          y: effect.y * factor,
+          blur: effect.blur * factor,
+          spread: effect.spread * factor,
+        })),
+      );
+    }
+  }
+
+  // ── Ruler guides ───────────────────────────────────────────────────────
+  //
+  // Guides belong to the page rather than to the file: they are a drafting aid
+  // for one board, they sync like everything else, and they never export.
+
+  addRulerGuide(pageId: string, axis: 'x' | 'y', at: number): void {
+    const page = this.snap[pageId];
+    if (!page) return;
+    this.update(pageId, {
+      rulerGuides: [...(page.rulerGuides ?? []), { axis, at: Math.round(at) }],
+    });
+  }
+
+  moveRulerGuide(pageId: string, index: number, at: number): void {
+    const guides = [...(this.snap[pageId]?.rulerGuides ?? [])];
+    if (!guides[index]) return;
+    guides[index] = { ...guides[index], at: Math.round(at) };
+    this.update(pageId, { rulerGuides: guides });
+  }
+
+  removeRulerGuide(pageId: string, index: number): void {
+    const guides = [...(this.snap[pageId]?.rulerGuides ?? [])];
+    if (!guides[index]) return;
+    guides.splice(index, 1);
+    this.update(pageId, { rulerGuides: guides });
+  }
+
+  /**
    * Figma's "Tidy up".
    *
    * Rows are read off the artwork rather than assumed: anything whose vertical
@@ -1449,6 +2166,10 @@ export class DocStore {
               isComponent: false,
               instanceOf: isRoot ? mainId : undefined,
               overridden: [],
+              // an instance is not itself an import from the library; only the
+              // main it follows carries that provenance
+              libraryId: undefined,
+              libraryVersion: undefined,
               x: isRoot ? (at?.x ?? source.x + 40) : source.x,
               y: isRoot ? (at?.y ?? source.y + 40) : source.y,
             }),

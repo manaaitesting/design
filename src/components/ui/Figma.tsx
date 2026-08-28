@@ -389,14 +389,29 @@ export function FigSelect<T extends string>({
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ x: 0, y: 0, w: 0 });
+  const list = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ x: 0, y: 0, w: 0, ready: false });
   const current = options.find((o) => o.value === value);
 
+  /**
+   * Below the field, unless below runs off the window.
+   *
+   * A panel is tall and a select near its bottom would otherwise open into
+   * nothing — the menu is measured first, then placed above the field if that
+   * is where it fits, and nudged up if neither side has room.
+   */
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const rect = anchor.current.getBoundingClientRect();
-    setPos({ x: rect.left, y: rect.bottom + 4, w: rect.width });
-  }, [open]);
+    const height = list.current?.getBoundingClientRect().height ?? 0;
+    const below = window.innerHeight - rect.bottom - 8;
+    const above = rect.top - 8;
+    const flip = height > below && above > below;
+    const top = flip
+      ? Math.max(8, rect.top - height - 4)
+      : Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - height - 8));
+    setPos({ x: rect.left, y: top, w: rect.width, ready: true });
+  }, [open, options.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -427,11 +442,15 @@ export function FigSelect<T extends string>({
 
       {open && (
         <div
+          ref={list}
           role="listbox"
           style={{
             position: 'fixed',
             left: pos.x,
             top: pos.y,
+            // measured before it is placed; showing it first would flash it in
+            // the wrong spot on every open
+            visibility: pos.ready ? 'visible' : 'hidden',
             minWidth: Math.max(pos.w, 120),
             maxHeight: '58vh',
             overflowY: 'auto',

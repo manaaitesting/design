@@ -81,6 +81,9 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const entered = useUI((s) => s.entered);
   const lockedHint = useUI((s) => s.lockedHint);
   const guides = useUI((s) => s.guides);
+  // point editing replaces the selection chrome with the anchors themselves,
+  // exactly as Figma's does — two sets of handles would fight for the pointer
+  const vectorEdit = useUI((s) => s.vectorEdit);
   const pageId = useUI((s) => s.page);
   const select = useUI((s) => s.select);
   const presence = usePresence();
@@ -89,6 +92,10 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   // Figma keeps a section's name on the canvas at all times — it is how you
   // tell one board from another without selecting anything
   const sections = (doc[pageId]?.children ?? []).filter((id) => doc[id]?.type === 'section');
+  // a slice is invisible by design, so its outline has to be permanent chrome
+  const slices = Object.values(doc)
+    .filter((node) => node.type === 'slice' && node.visible)
+    .map((node) => node.id);
   const tracked = [...new Set([
     ...selection,
     ...(hover ? [hover] : []),
@@ -96,6 +103,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     ...(lockedHint ? [lockedHint] : []),
     ...remoteIds,
     ...sections,
+    ...slices,
   ])];
   const rects = useRects(tracked, containerRef);
 
@@ -389,6 +397,44 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         </>
       )}
 
+      {/* slices: an export region, drawn as chrome because it paints nothing */}
+      {slices.map((id) => {
+        const rect = rects[id];
+        if (!rect) return null;
+        return (
+          <div key={`slice-${id}`} style={{ position: 'absolute', left: rect.x, top: rect.y }}>
+            <div
+              style={{
+                width: rect.w,
+                height: rect.h,
+                border: '1px dashed rgba(245,166,35,0.9)',
+                background: 'rgba(245,166,35,0.05)',
+              }}
+            />
+            <span className="fig-slice-label">{doc[id]?.name}</span>
+          </div>
+        );
+      })}
+
+      {/* a layer someone has marked ready to build, flagged the way Figma
+          flags it — visible without having to select anything */}
+      {tracked.map((id) => {
+        const rect = rects[id];
+        const node = doc[id];
+        const status = node?.devStatus;
+        if (!rect || !node || !status || status === 'none') return null;
+        return (
+          <span
+            key={`status-${id}`}
+            className="fig-status"
+            data-status={status}
+            style={{ left: rect.x + rect.w - 52, top: rect.y - 18 }}
+          >
+            {status === 'ready' ? 'Ready for dev' : 'Built'}
+          </span>
+        );
+      })}
+
       {/* section names — always on, and clicking one selects the board */}
       {sections.map((id) => {
         const rect = rects[id];
@@ -418,7 +464,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
       {selection.map((id) => {
         const rect = rects[id];
         const node = doc[id];
-        if (!rect || !node) return null;
+        if (!rect || !node || id === vectorEdit) return null;
         const single = selection.length === 1;
         const flowed = isInFlow(node, doc);
 

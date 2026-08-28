@@ -5,9 +5,17 @@ import { nodeStyle } from '../document/css';
 import { effectLayers, effectsOf } from '../document/effects';
 import { ShaderSurface } from './ShaderSurface';
 import { Guides } from './Guides';
-import { VectorShape } from './VectorShape';
-import { useDoc, useStore, useVarNames } from './Session';
+import { BooleanShape, PathShape } from './Shape';
+import { PaintLayers } from './PaintLayers';
+import { useDefaultModes, useDoc, useStore, useTokens, useVarNames } from './Session';
 import { useUI } from '../state/ui';
+import { paintsWithPath } from '../document/geometry';
+import { maskStyles } from '../document/mask';
+import { modeVars } from '../document/variables';
+import { ensureFont } from '../lib/fonts';
+import { isPlain, plainText, runLines, runStyle, runsOf, type TextRun } from '../document/text';
+import { TextEditor } from './TextEditor';
+import type { CSSProperties } from 'react';
 import type { SceneNode } from '../document/types';
 
 /**
@@ -23,22 +31,54 @@ import type { SceneNode } from '../document/types';
  * Plain text stays one `pre-wrap` block, which is what it has always been and
  * what keeps a single line cheap. Paragraph spacing and lists both need the
  * lines to be real blocks before CSS has anything to space or mark, so those
- * turn the same string into one element per line.
+ * turn the same string into one element per line — and styled runs are spans
+ * inside whichever of those shapes is in play, so a bold word works in a list
+ * exactly as it works in a paragraph.
  */
 function TextBody({ node }: { node: SceneNode }) {
   const font = node.font;
   const spacing = font?.paragraphSpacing ?? 0;
   const list = font?.list && font.list !== 'none' ? font.list : null;
-  const text = node.text ?? '';
-  if (!spacing && !list) return <>{text}</>;
+  const runs = runsOf(node);
+  const plain = isPlain(runs);
 
-  const lines = text.split('\n');
+  if (plain && !spacing && !list) return <>{plainText(runs)}</>;
+
+  const lines = runLines(runs);
+  const body = (line: TextRun[]) =>
+    plain ? (
+      line.map((run) => run.text).join('')
+    ) : (
+      <>
+        {line.map((run, index) => (
+          <span key={index} style={runStyle(run, font)}>
+            {run.text}
+          </span>
+        ))}
+      </>
+    );
+
+  if (!list && !spacing) {
+    // styled, but a single flowing block: the spans carry the styling and the
+    // newlines are still newlines, because the box is `pre-wrap`
+    return (
+      <>
+        {lines.map((line, index) => (
+          <span key={index}>
+            {index ? '\n' : ''}
+            {body(line)}
+          </span>
+        ))}
+      </>
+    );
+  }
+
   if (!list) {
     return (
       <>
         {lines.map((line, index) => (
           <div key={index} style={index ? { marginTop: spacing } : undefined}>
-            {line}
+            {body(line)}
           </div>
         ))}
       </>
@@ -50,17 +90,26 @@ function TextBody({ node }: { node: SceneNode }) {
     <Tag style={{ margin: 0, paddingLeft: '1.4em' }}>
       {lines.map((line, index) => (
         <li key={index} style={index ? { marginTop: spacing } : undefined}>
-          {line}
+          {body(line)}
         </li>
       ))}
     </Tag>
   );
 }
 
-export const NodeView = memo(function NodeView({ id }: { id: string }) {
+export const NodeView = memo(function NodeView({
+  id,
+  mask,
+}: {
+  id: string;
+  /** clip or mask handed down by a masking sibling, merged over the node's own style */
+  mask?: CSSProperties;
+}) {
   const doc = useDoc();
   const store = useStore();
   const varNames = useVarNames();
+  const tokens = useTokens();
+  const baseModes = useDefaultModes();
   const editing = useUI((s) => s.editing);
   const setEditing = useUI((s) => s.setEditing);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -87,7 +136,16 @@ export const NodeView = memo(function NodeView({ id }: { id: string }) {
 
   if (!node || !node.visible) return null;
 
-  const style = nodeStyle(node, doc, varNames);
+  // A frame that overrides a variable mode re-declares those variables on
+  // itself; everything inside then inherits them through the ordinary cascade.
+  const style = {
+    ...nodeStyle(node, doc, varNames),
+    ...mask,
+    ...modeVars(node, tokens, baseModes),
+  } as CSSProperties;
+  // masks are resolved by the parent, because which layers one covers is a
+  // question about the sibling order rather than about any single layer
+  const masking = node.children.length ? maskStyles(node, doc) : null;
   // Noise, texture, progressive blur and glass need a surface of their own —
   // they paint over the node instead of styling it.
   const layers = effectLayers(effectsOf(node), node.clip);
@@ -97,31 +155,11 @@ export const NodeView = memo(function NodeView({ id }: { id: string }) {
     </div>
   ));
 
+  // a web family has to be fetched before it can render; this is idempotent
+  if (node.font) ensureFont(node.font.family);
+
   if (node.type === 'text') {
-    if (isEditing) {
-      return (
-        <div
-          ref={editorRef}
-          data-node-id={id}
-          contentEditable
-          suppressContentEditableWarning
-          style={{ ...style, outline: '1.5px solid var(--color-select)', cursor: 'text' }}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              (e.currentTarget as HTMLElement).blur();
-            }
-          }}
-          onBlur={(e) => {
-            store.update(id, { text: e.currentTarget.innerText ?? '' });
-            setEditing(null);
-          }}
-        >
-          {node.text}
-        </div>
-      );
-    }
+    if (isEditing) return <TextEditor node={node} style={style} />;
     return (
       <div data-node-id={id} style={style}>
         <TextBody node={node} />
@@ -130,10 +168,37 @@ export const NodeView = memo(function NodeView({ id }: { id: string }) {
     );
   }
 
-  if (node.type === 'vector') {
+  // A slice paints nothing: it marks a region to export. The dashed outline
+  // that shows where it is belongs to the editor chrome, not to the design, so
+  // it is drawn by the overlay and never lands in an export.
+  if (node.type === 'slice') {
+    return <div data-node-id={id} data-slice="" style={{ ...style, background: 'none' }} />;
+  }
+
+  if (paintsWithPath(node)) {
+    // A line's box is one axis thin, and a thin box is impossible to click.
+    // A transparent pad carrying the same id widens what hit-testing sees
+    // without changing what the layer measures or exports as.
+    const thin = node.w < 12 || node.h < 12;
     return (
       <div data-node-id={id} style={style}>
-        <VectorShape node={node} />
+        <PathShape node={node} />
+        {thin && (
+          <span
+            data-node-id={id}
+            aria-hidden
+            style={{ position: 'absolute', inset: -6, display: 'block' }}
+          />
+        )}
+        {overlays}
+      </div>
+    );
+  }
+
+  if (node.type === 'boolean') {
+    return (
+      <div data-node-id={id} style={style}>
+        <BooleanShape node={node} doc={doc} />
         {overlays}
       </div>
     );
@@ -149,7 +214,16 @@ export const NodeView = memo(function NodeView({ id }: { id: string }) {
   }
 
   return (
-    <div data-node-id={id} style={style}>
+    <div
+      data-node-id={id}
+      // Scrolling and pinning are playback behaviour, not canvas behaviour, so
+      // the intent is published as data and the Present stylesheet is what acts
+      // on it. The canvas stays a flat board, as Figma's does.
+      data-scroll={node.scroll && node.scroll !== 'none' ? node.scroll : undefined}
+      data-fix={node.scrollBehavior && node.scrollBehavior !== 'scrolls' ? node.scrollBehavior : undefined}
+      style={style}
+    >
+      <PaintLayers node={node} />
       {node.video?.src && (
         <video
           key={node.video.src}
@@ -171,7 +245,7 @@ export const NodeView = memo(function NodeView({ id }: { id: string }) {
         />
       )}
       {node.children.map((childId) => (
-        <NodeView key={childId} id={childId} />
+        <NodeView key={childId} id={childId} mask={masking?.styles[childId]} />
       ))}
       {node.guides && <Guides guides={node.guides} />}
       {overlays}

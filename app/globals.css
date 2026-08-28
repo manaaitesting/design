@@ -923,6 +923,590 @@ select {
     color: var(--fig-blue);
   }
 
+  /* the shape flyout's caret, tucked into the corner of its button */
+  .fig-tool-caret {
+    position: absolute;
+    right: 4px;
+    bottom: 1px;
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--fig-icon-3);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+  }
+  .fig-tool-caret:hover {
+    color: var(--fig-ink);
+  }
+  .fig-flyout {
+    position: absolute;
+    left: 38px;
+    top: 0;
+    z-index: 60;
+    min-width: 168px;
+    padding: 5px;
+    background: #fff;
+    border: 1px solid var(--fig-line);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  }
+  .fig-flyout-row {
+    width: 100%;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fig-ink);
+    font-size: 11px;
+    cursor: default;
+  }
+  .fig-flyout-row:hover {
+    background: var(--fig-blue);
+    color: #fff;
+  }
+  .fig-flyout-row[data-on='true'] {
+    color: var(--fig-blue);
+  }
+  .fig-flyout-row[data-on='true']:hover {
+    color: #fff;
+  }
+  .fig-flyout-icon {
+    width: 16px;
+    display: inline-flex;
+    justify-content: center;
+  }
+  .fig-flyout-key {
+    opacity: 0.55;
+  }
+
+  /* variable modes: one chip per mode, the shown one highlighted */
+  .fig-modes {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding: 6px 8px 6px 12px;
+    border-bottom: 1px solid var(--fig-line);
+  }
+  .fig-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 20px;
+    padding: 0 4px 0 7px;
+    border-radius: 10px;
+    background: var(--fig-hover);
+    color: var(--fig-ink);
+    cursor: default;
+  }
+  .fig-mode[data-on='true'] {
+    background: var(--fig-selected);
+    color: var(--fig-blue);
+  }
+  .fig-mode-x {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    opacity: 0.45;
+    cursor: default;
+    padding: 0 2px;
+  }
+  .fig-mode-x:hover {
+    opacity: 1;
+  }
+  .fig-plain-select {
+    height: 22px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fig-ink);
+    font: inherit;
+    padding: 0 4px;
+  }
+  .fig-plain-select:hover {
+    background: var(--fig-hover);
+  }
+
+  /* Scrolling frames, while the prototype is playing. The canvas ignores all
+     of this: a board on the canvas is flat, however tall its content is. */
+  .fig-present [data-scroll='vertical'] {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .fig-present [data-scroll='horizontal'] {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .fig-present [data-scroll='both'] {
+    overflow: auto;
+  }
+  /* a child that stays put while its frame scrolls under it */
+  .fig-present [data-fix='fixed'],
+  .fig-present [data-fix='sticky'] {
+    position: sticky;
+    z-index: 3;
+  }
+
+  .fig-present-device {
+    height: 24px;
+    border: 0;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    font: inherit;
+    font-size: 11px;
+    padding: 0 6px;
+  }
+  .fig-present-device option {
+    color: #111;
+  }
+
+  /* the device bezel around a prototype */
+  .fig-device {
+    padding: 14px;
+    border-radius: 34px;
+    background: #1b1b1b;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    position: relative;
+  }
+  .fig-device[data-device='laptop'] {
+    padding: 16px 16px 26px;
+    border-radius: 16px;
+  }
+  .fig-device[data-device='tablet'] {
+    padding: 20px;
+    border-radius: 26px;
+  }
+  .fig-device[data-device='phone']::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 18px;
+    transform: translateX(-50%);
+    width: 96px;
+    height: 22px;
+    border-radius: 12px;
+    background: #000;
+    z-index: 6;
+  }
+  .fig-device[data-device='laptop']::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 9px;
+    transform: translateX(-50%);
+    width: 64px;
+    height: 4px;
+    border-radius: 2px;
+    background: #3a3a3a;
+  }
+
+  /* prototype overlays: a frame drawn over the one you were on */
+  .fig-overlay-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    z-index: 5;
+  }
+  .fig-overlay-layer[data-dim='true'] {
+    background: rgba(0, 0, 0, 0.35);
+  }
+  .fig-overlay {
+    position: absolute;
+    overflow: hidden;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    border-radius: 6px;
+  }
+  .fig-overlay[data-at='center'] {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .fig-overlay[data-at='top'] {
+    left: 50%;
+    top: 0;
+    transform: translateX(-50%);
+  }
+  .fig-overlay[data-at='bottom'] {
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+  }
+  .fig-overlay[data-at='top-left'] {
+    left: 0;
+    top: 0;
+  }
+  .fig-overlay[data-at='top-right'] {
+    right: 0;
+    top: 0;
+  }
+  .fig-overlay[data-at='bottom-left'] {
+    left: 0;
+    bottom: 0;
+  }
+  .fig-overlay[data-at='bottom-right'],
+  .fig-overlay[data-at='manual'] {
+    right: 0;
+    bottom: 0;
+  }
+
+  /* someone named in a comment, and a pin that names you */
+  .fig-mention {
+    color: var(--fig-blue);
+    font-weight: 500;
+  }
+  .fig-pin[data-mine] {
+    box-shadow:
+      0 1px 4px rgba(0, 0, 0, 0.25),
+      0 0 0 2px #fff,
+      0 0 0 4px var(--fig-blue) !important;
+  }
+
+  /* observation mode: the ring around the canvas and the bar that names it */
+  .fig-follow-ring {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 30;
+  }
+  .fig-follow-bar {
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    z-index: 31;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 6px 0 10px;
+    border-radius: 14px;
+    background: #111;
+    color: #fff;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .fig-follow-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    display: inline-block;
+  }
+  .fig-follow-exit {
+    height: 20px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+    font: inherit;
+    cursor: default;
+  }
+  .fig-follow-exit:hover {
+    background: rgba(255, 255, 255, 0.28);
+  }
+
+  /* cursor chat */
+  .fig-cursor-chat {
+    position: fixed;
+    z-index: 300;
+    border-radius: 12px;
+    padding: 3px 4px 3px 10px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  }
+  .fig-cursor-chat input {
+    width: 190px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    outline: none;
+  }
+  .fig-cursor-chat input::placeholder {
+    color: currentColor;
+    opacity: 0.6;
+  }
+
+  /* quick actions */
+  .fig-palette-row {
+    width: 100%;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+    border: 0;
+    background: transparent;
+    color: var(--fig-ink);
+    font: inherit;
+    cursor: default;
+  }
+  .fig-palette-row[data-on='true'] {
+    background: var(--fig-selected);
+  }
+
+  /* a variable's scope editor, opened from its row */
+  .fig-scope {
+    margin: 2px 0 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--fig-hover);
+  }
+  .fig-scope-head {
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .fig-scope-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 8px;
+  }
+  .fig-scope-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 20px;
+    cursor: default;
+  }
+  .fig-scope-note {
+    width: 100%;
+    margin-top: 8px;
+    height: 22px;
+    border: 0;
+    border-radius: 5px;
+    padding: 0 6px;
+    background: #fff;
+    outline: none;
+    font: inherit;
+  }
+
+  /* the bar over a text selection, for the styling that varies within a line */
+  .fig-range-bar {
+    position: fixed;
+    z-index: 320;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 30px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: #111;
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
+  .fig-range-bar button {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 5px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: default;
+  }
+  .fig-range-bar button:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+  .fig-range-bar button[data-on] {
+    background: var(--fig-blue);
+  }
+  .fig-range-bar input[type='color'] {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+  }
+  .fig-range-bar input[type='number'] {
+    width: 40px;
+    height: 22px;
+    border: 0;
+    border-radius: 5px;
+    padding: 0 4px;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    font: inherit;
+    font-size: 11px;
+  }
+  .fig-range-sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 3px;
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  /* an annotation, written into the layer for whoever builds it */
+  .fig-annotation {
+    flex: 1;
+    min-height: 52px;
+    resize: vertical;
+    border: 0;
+    border-radius: 5px;
+    padding: 6px 8px;
+    background: var(--fig-field);
+    color: var(--fig-ink);
+    font: inherit;
+    line-height: 1.45;
+    outline: none;
+  }
+  .fig-annotation:focus {
+    outline: 1.5px solid var(--fig-blue);
+  }
+  /* a layer marked ready for development, flagged on the canvas */
+  .fig-status {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 8px;
+    font-size: 9px;
+    font-weight: 500;
+    pointer-events: none;
+  }
+  .fig-status[data-status='ready'] {
+    background: #e7f6ec;
+    color: #17663a;
+  }
+  .fig-status[data-status='done'] {
+    background: #eee;
+    color: #666;
+  }
+
+  /* the Inspect tab: label/value pairs and a code block */
+  .fig-inspect-grid {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 4px 10px;
+    padding: 2px 12px 8px;
+    line-height: 1.5;
+  }
+  .fig-inspect-grid > span:nth-child(odd) {
+    color: var(--fig-icon-3);
+  }
+  .fig-code {
+    margin: 6px 12px 10px;
+    padding: 8px 10px;
+    max-height: 320px;
+    overflow: auto;
+    border-radius: 6px;
+    background: #f5f5f5;
+    color: #202020;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+    line-height: 1.55;
+    white-space: pre;
+  }
+
+  /* one row of the version-history list */
+  .fig-version {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--fig-line);
+  }
+  .fig-version:last-child {
+    border-bottom: 0;
+  }
+  .fig-diff {
+    flex-basis: 100%;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--fig-hover);
+    color: var(--fig-ink);
+    line-height: 1.55;
+  }
+  .fig-version-pin {
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #fdf0d5;
+    color: #8a5a00;
+    font-weight: 400;
+  }
+  .fig-hint {
+    margin: 0;
+    padding: 10px 16px;
+    color: var(--fig-icon-3);
+    line-height: 1.5;
+  }
+
+  /* a quiet explanatory line inside a panel section */
+  .fig-note {
+    padding: 2px 10px 8px 34px;
+    color: var(--fig-icon-3);
+    line-height: 1.45;
+  }
+
+  /* rulers: two strips over the canvas, with the corner square between them */
+  .fig-ruler {
+    position: absolute;
+    z-index: 12;
+    background: #fff;
+    color: var(--fig-icon-3);
+    font-size: 9px;
+    user-select: none;
+  }
+  .fig-ruler-top {
+    top: 0;
+    right: 0;
+    border-bottom: 1px solid var(--fig-line);
+    cursor: ns-resize;
+  }
+  .fig-ruler-left {
+    left: 0;
+    bottom: 0;
+    border-right: 1px solid var(--fig-line);
+    cursor: ew-resize;
+  }
+  .fig-ruler-corner {
+    left: 0;
+    top: 0;
+    border-right: 1px solid var(--fig-line);
+    border-bottom: 1px solid var(--fig-line);
+  }
+  .fig-ruler-tick {
+    position: absolute;
+    top: 5px;
+    pointer-events: none;
+  }
+  .fig-ruler-tick-v {
+    top: auto;
+    left: 4px;
+    writing-mode: vertical-rl;
+  }
+  /* the extent of the selection, shaded on the ruler as Figma shades it */
+  .fig-ruler-range {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--fig-selected);
+    pointer-events: none;
+  }
+  .fig-ruler-range-v {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: auto;
+  }
+
   .fig-left {
     width: 241px;
     flex: none;

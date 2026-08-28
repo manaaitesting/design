@@ -13,6 +13,7 @@ import {
   topLevelOf,
   type Doc,
   type Interaction,
+  type OverlaySpec,
   type SceneNode,
   type TransitionSpec,
 } from './types';
@@ -163,28 +164,52 @@ export function offsetInFrame(id: string, frameId: string, doc: Doc): { x: numbe
 }
 
 /** A one-line summary of an interaction, as the panel and tooltips show it. */
+export const TRIGGER_LABEL: Record<Interaction['trigger'], string> = {
+  click: 'On click',
+  hover: 'While hovering',
+  'mouse-enter': 'Mouse enter',
+  'mouse-leave': 'Mouse leave',
+  press: 'While pressing',
+  drag: 'On drag',
+  key: 'On key press',
+  delay: 'After delay',
+};
+
+export const ACTION_LABEL: Record<Interaction['action'], string> = {
+  navigate: 'Navigate to',
+  back: 'Back',
+  url: 'Open link',
+  'open-overlay': 'Open overlay',
+  'close-overlay': 'Close overlay',
+  'swap-overlay': 'Swap overlay with',
+  'scroll-to': 'Scroll to',
+  'set-variable': 'Set variable',
+  none: 'None',
+};
+
+export const DEFAULT_OVERLAY: OverlaySpec = {
+  position: 'center',
+  background: true,
+  closeOnOutside: true,
+};
+
+/** Actions that need somewhere to go — the ones that show a destination menu. */
+export function needsDestination(action: Interaction['action']): boolean {
+  return (
+    action === 'navigate' ||
+    action === 'open-overlay' ||
+    action === 'swap-overlay' ||
+    action === 'scroll-to'
+  );
+}
+
 export function describe(interaction: Interaction, doc: Doc): string {
-  const TRIGGER: Record<Interaction['trigger'], string> = {
-    click: 'On click',
-    hover: 'While hovering',
-    press: 'While pressing',
-    delay: 'After delay',
-  };
-  const target =
-    interaction.action === 'navigate'
-      ? (interaction.destination && doc[interaction.destination]?.name) || 'nothing'
-      : interaction.action === 'back'
-        ? 'back'
-        : interaction.action === 'url'
-          ? interaction.url || 'a link'
-          : 'nothing';
-  const verb =
-    interaction.action === 'navigate'
-      ? `Navigate to ${target}`
-      : interaction.action === 'back'
-        ? 'Back'
-        : interaction.action === 'url'
-          ? `Open ${target}`
-          : 'None';
-  return `${TRIGGER[interaction.trigger]} → ${verb}`;
+  const named = interaction.destination ? doc[interaction.destination]?.name : null;
+  const verb = ACTION_LABEL[interaction.action];
+  const target = needsDestination(interaction.action)
+    ? ` ${named ?? 'nothing'}`
+    : interaction.action === 'url'
+      ? ` ${interaction.url || 'a link'}`
+      : '';
+  return `${TRIGGER_LABEL[interaction.trigger]} → ${verb}${target}`;
 }

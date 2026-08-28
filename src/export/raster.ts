@@ -90,6 +90,8 @@ export function nodeToSvg(
 ): Serialised | null {
   const source = elementFor(nodeId);
   if (!source) return null;
+  // a slice exports what is under it, not itself
+  if (source.hasAttribute('data-slice')) return sliceToSvg(source, zoom, vars);
 
   const rect = source.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width / zoom));
@@ -124,6 +126,56 @@ export function nodeToSvg(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
     `<foreignObject x="0" y="0" width="${width}" height="${height}">` +
     `<div xmlns="http://www.w3.org/1999/xhtml" style="${declarations}">` +
+    new XMLSerializer().serializeToString(clone) +
+    `</div></foreignObject></svg>`;
+
+  return { svg, width, height };
+}
+
+/**
+ * A slice exports the region it covers.
+ *
+ * Everything else here serialises one layer; a slice is the opposite — it has
+ * no content of its own and its whole purpose is the artwork underneath. So the
+ * page is what gets cloned, shifted so the slice's corner lands at the origin,
+ * and cropped to the slice's size.
+ */
+function sliceToSvg(
+  slice: HTMLElement,
+  zoom: number,
+  vars: Record<string, string>,
+): Serialised | null {
+  const stage = document.querySelector<HTMLElement>('[data-canvas-root] > div');
+  if (!stage) return null;
+
+  const stageRect = stage.getBoundingClientRect();
+  const sliceRect = slice.getBoundingClientRect();
+  const width = Math.max(1, Math.round(sliceRect.width / zoom));
+  const height = Math.max(1, Math.round(sliceRect.height / zoom));
+  // where the slice sits on the page, in world units
+  const x = (sliceRect.left - stageRect.left) / zoom;
+  const y = (sliceRect.top - stageRect.top) / zoom;
+
+  const clone = stage.cloneNode(true) as HTMLElement;
+  freezeCanvases(stage, clone);
+  inlineInherited(stage, clone);
+  // the slices themselves are chrome, and must not appear in what they export
+  clone.querySelectorAll('[data-slice]').forEach((element) => element.remove());
+
+  clone.style.position = 'absolute';
+  clone.style.transform = `translate(${-x}px, ${-y}px)`;
+  clone.style.transformOrigin = '0 0';
+  clone.style.left = '0';
+  clone.style.top = '0';
+
+  const declarations = Object.entries(vars)
+    .map(([name, value]) => `${name}:${value}`)
+    .join(';');
+
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<foreignObject x="0" y="0" width="${width}" height="${height}">` +
+    `<div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;overflow:hidden;width:${width}px;height:${height}px;${declarations}">` +
     new XMLSerializer().serializeToString(clone) +
     `</div></foreignObject></svg>`;
 

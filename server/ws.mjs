@@ -55,16 +55,17 @@ if (!AUTH_SECRET) {
 function verifySyncToken(token, room) {
   if (!token) return null;
   const parts = token.split('.');
-  if (parts.length !== 4) return null;
-  const [userId, fileId, expires, signature] = parts;
+  if (parts.length !== 5) return null;
+  const [userId, fileId, role, expires, signature] = parts;
   const expected = createHmac('sha256', AUTH_SECRET)
-    .update(`${userId}.${fileId}.${expires}`)
+    .update(`${userId}.${fileId}.${role}.${expires}`)
     .digest('base64url');
   if (signature.length !== expected.length) return null;
   if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
   if (Number(expires) < Date.now()) return null;
   if (fileId !== room) return null;
-  return userId;
+  // the role is inside the signature, so a client cannot promote itself
+  return { userId, role: role === 'owner' || role === 'editor' ? role : 'viewer' };
 }
 
 /** @type {Map<string, Room>} */
@@ -250,11 +251,12 @@ wss.on('connection', (conn, request) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   const name = decodeURIComponent(url.pathname.slice(1)) || 'default';
 
-  const userId = verifySyncToken(url.searchParams.get('token'), name);
-  if (!userId) {
+  const auth = verifySyncToken(url.searchParams.get('token'), name);
+  if (!auth) {
     console.warn(`[sync] rejected unauthenticated connection to "${name}"`);
     return conn.close(4401, 'unauthorized');
   }
+  const mayEdit = auth.role !== 'viewer';
 
   const room = getRoom(name);
   room.conns.set(conn, new Set());
@@ -268,6 +270,18 @@ wss.on('connection', (conn, request) => {
       const type = decoding.readVarUint(decoder);
 
       if (type === MESSAGE_SYNC) {
+        // A viewer's socket may ask what the document is (step 1) but never
+        // tell it what to become (step 2 and update both apply changes). The
+        // client hides its editing UI as well; this is the half that holds
+        // when the client is not the one we shipped.
+        if (!mayEdit) {
+          const peek = decoding.createDecoder(message);
+          decoding.readVarUint(peek);
+          if (decoding.readVarUint(peek) !== syncProtocol.messageYjsSyncStep1) {
+            console.warn(`[sync] dropped a write from a viewer on "${name}"`);
+            return;
+          }
+        }
         encoding.writeVarUint(encoder, MESSAGE_SYNC);
         syncProtocol.readSyncMessage(decoder, encoder, room.doc, conn);
         if (encoding.length(encoder) > 1) send(conn, encoding.toUint8Array(encoder));

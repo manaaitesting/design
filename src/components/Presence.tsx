@@ -4,15 +4,34 @@ import { useState } from 'react';
 import { initials } from '../collab/identity';
 import { readableOn } from '../lib/color';
 import { Icon } from './ui/Icons';
-import { useConnected, useDoc, usePresence, useSession } from './Session';
+import { useConnected, useDoc, usePresence, useReadOnly, useSession } from './Session';
 import { openingFrame } from '../document/prototype';
 import { useUI } from '../state/ui';
 
-function Avatar({ name, color, title }: { name: string; color: string; title: string }) {
+function Avatar({
+  name,
+  color,
+  title,
+  active,
+  onClick,
+}: {
+  name: string;
+  color: string;
+  title: string;
+  /** ringed while you are following them, as Figma rings the person you follow */
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div
+    <Tag
+      type={onClick ? 'button' : undefined}
       title={title}
+      onClick={onClick}
       style={{
+        border: 0,
+        padding: 0,
+        cursor: onClick ? 'default' : undefined,
         width: 20,
         height: 20,
         borderRadius: 999,
@@ -21,25 +40,30 @@ function Avatar({ name, color, title }: { name: string; color: string; title: st
         fontWeight: 500,
         display: 'grid',
         placeItems: 'center',
-        boxShadow: '0 0 0 2px #fff',
+        boxShadow: active ? `0 0 0 2px #fff, 0 0 0 4px ${color}` : '0 0 0 2px #fff',
         marginLeft: -4,
         fontSize: 11,
         flex: 'none',
       }}
     >
       {initials(name)}
-    </div>
+    </Tag>
   );
 }
 
 export function Presence() {
   const { identity } = useSession();
+  const readOnly = useReadOnly();
   const others = usePresence();
   const connected = useConnected();
   const doc = useDoc();
   const viewport = useUI((s) => s.viewport);
   const setViewport = useUI((s) => s.setViewport);
   const [copied, setCopied] = useState(false);
+  const following = useUI((s) => s.following);
+  const setFollowing = useUI((s) => s.setFollowing);
+  const spotlight = useUI((s) => s.spotlight);
+  const setSpotlight = useUI((s) => s.setSpotlight);
 
   const copyLink = async () => {
     try {
@@ -65,11 +89,48 @@ export function Presence() {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 0, flex: 1 }}>
         <div style={{ display: 'flex', marginLeft: 4 }}>
-          <Avatar name={identity.name} color={identity.color} title={`${identity.name} (you)`} />
+          <Avatar
+            name={identity.name}
+            color={identity.color}
+            active={spotlight}
+            title={
+              spotlight
+                ? 'Everyone is watching you — click to stop'
+                : `${identity.name} (you) — click to spotlight yourself`
+            }
+            onClick={() => setSpotlight(!spotlight)}
+          />
           {others.map((p) => (
-            <Avatar key={p.clientId} name={p.identity.name} color={p.identity.color} title={p.identity.name} />
+            <Avatar
+              key={p.clientId}
+              name={p.identity.name}
+              color={p.identity.color}
+              active={following === p.clientId}
+              title={
+                following === p.clientId
+                  ? `Following ${p.identity.name} — click to stop`
+                  : `Follow ${p.identity.name}`
+              }
+              onClick={() => setFollowing(following === p.clientId ? null : p.clientId)}
+            />
           ))}
         </div>
+
+        {readOnly && (
+          <span
+            title="You were shared this file to view. Ask the owner for edit access to change it."
+            style={{
+              marginLeft: 10,
+              padding: '2px 6px',
+              borderRadius: 4,
+              background: 'var(--fig-hover)',
+              color: 'var(--fig-icon-3)',
+              flex: 'none',
+            }}
+          >
+            View only
+          </span>
+        )}
 
         <span
           title={connected ? 'Synced' : 'Offline — edits will sync on reconnect'}
@@ -83,6 +144,16 @@ export function Presence() {
           }}
         />
       </div>
+
+      <button
+        type="button"
+        className="fig-btn"
+        title="Version history  ⌥⌘H"
+        aria-label="Version history"
+        onClick={() => useUI.getState().setHistoryOpen(true)}
+      >
+        <Icon.Reset />
+      </button>
 
       <button
         type="button"

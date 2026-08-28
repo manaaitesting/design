@@ -1473,19 +1473,31 @@ test.describe('panel controls that used to do nothing', () => {
     await removeNodes(page, [id]);
   });
 
+  /**
+   * Export settings live on the layer, so a layer starts with none and the
+   * button saves what the rows say rather than opening anything — which is both
+   * what Figma does and the only way the settings can sync.
+   */
   test('the export suffix reaches the filename', async ({ page }) => {
     const cover = await nodeNamed(page, 'Cover');
     await select(page, [cover!.id]);
 
+    await page.getByRole('button', { name: 'Add export settings' }).click();
     await page.getByRole('button', { name: 'More options' }).click();
     await page.getByPlaceholder('@2x, -dark…').fill('-dark');
     await page.keyboard.press('Enter');
+    // Escape closes the popover, and then steps the selection out to the frame
     await page.keyboard.press('Escape');
+    await select(page, [cover!.id]);
 
-    await page.locator('.fig-export').click();
     const download = page.waitForEvent('download');
-    await page.getByRole('button', { name: /Save|Download|Export/ }).last().click();
+    await page.locator('.fig-export').click();
     expect((await download).suggestedFilename()).toContain('-dark');
+
+    // and the settings are on the layer, not on the app
+    const settings = (await doc(page))[cover!.id].exports;
+    expect(settings).toHaveLength(1);
+    expect(settings![0].suffix).toBe('-dark');
   });
 
   test('text case and truncation reach the rendered text', async ({ page }) => {

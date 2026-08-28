@@ -40,8 +40,30 @@ declare global {
         createStyleFrom(id: string, slot: string, name: string): string | null;
         removeToken(id: string): void;
         listTokens(): { id: string; name: string }[];
+        listFonts(): { id: string; name: string }[];
+        addFont(font: { name: string; src: string; weight: number }): string;
+        removeFont(id: string): void;
         updateToken(id: string, patch: Record<string, unknown>): void;
         bindVariable(ids: string[], field: string, tokenId: string | null): void;
+        booleanGroup(ids: string[], op: string): string | null;
+        setBooleanOp(id: string, op: string): void;
+        toggleMask(ids: string[]): void;
+        setAnchors(id: string, anchors: { x: number; y: number }[]): void;
+        outlineShape(ids: string[]): string[];
+        outlineStroke(ids: string[]): string[];
+        flatten(ids: string[]): string | null;
+        importComponent(payload: string, parent: string, library: { id: string; version: number }, at?: { x: number; y: number }): string | null;
+        updateFromLibrary(mainId: string, payload: string, version: number): boolean;
+        setPaths(id: string, paths: { anchors: { x: number; y: number }[]; closed: boolean }[]): void;
+        scaleNodes(ids: string[], factor: number, origin?: { x: number; y: number }): void;
+        addRulerGuide(page: string, axis: 'x' | 'y', at: number): void;
+        removeRulerGuide(page: string, index: number): void;
+        removeMode(collection: string, mode: string): void;
+        addCollection(name: string): string;
+        addMode(collection: string, name?: string): string | null;
+        setTokenValue(tokenId: string, modeId: string, value: string): void;
+        setNodeMode(id: string, collection: string, mode: string | null): void;
+        listCollections(): { id: string; name: string; modes: { id: string; name: string }[]; defaultMode: string }[];
         ydoc: {
           getMap(name: string): {
             set(k: string, v: unknown): void;

@@ -79,15 +79,32 @@ export async function currentUser(): Promise<User | null> {
 
 // ── Sync-server handshake ────────────────────────────────────────────────
 
+/** What a member may do with a file. Anything unrecognised is read-only. */
+export type Role = 'owner' | 'editor' | 'viewer';
+
+export function roleOf(stored: string | undefined): Role {
+  return stored === 'owner' || stored === 'editor' ? stored : 'viewer';
+}
+
+export function canEdit(role: Role): boolean {
+  return role === 'owner' || role === 'editor';
+}
+
 /**
- * Short-lived proof that this user may edit this file.
+ * Short-lived proof that this user may open this file, and in what capacity.
  *
  * The sync server is a separate process with no access to cookies or the
  * database, so it verifies this HMAC instead. Without it, knowing a room id
- * would be enough to join any document.
+ * would be enough to join any document — and without the role inside the
+ * signature, a viewer could simply ask the socket to accept their edits.
  */
-export function issueSyncToken(userId: string, fileId: string, ttlMs = 60 * 60 * 1000): string {
+export function issueSyncToken(
+  userId: string,
+  fileId: string,
+  role: Role,
+  ttlMs = 60 * 60 * 1000,
+): string {
   const expires = Date.now() + ttlMs;
-  const payload = `${userId}.${fileId}.${expires}`;
+  const payload = `${userId}.${fileId}.${role}.${expires}`;
   return `${payload}.${sign(payload)}`;
 }

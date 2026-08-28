@@ -45,6 +45,12 @@ export function Comments() {
             <button
               type="button"
               title={`${comment.authorName}: ${comment.body}`}
+              data-mine={
+                [comment.body, ...comment.replies.map((reply) => reply.body)].some((text) =>
+                  namesMe(text, identity.name),
+                ) || undefined
+              }
+              className="fig-pin"
               onClick={() => setOpenId(open ? null : comment.id)}
               style={{
                 width: 24,
@@ -180,6 +186,42 @@ export function Comments() {
   );
 }
 
+/**
+ * A comment's text, with the people in it picked out.
+ *
+ * Mentions are plain text — `@name` — because that is what someone types and
+ * what survives a copy out of the thread. Marking them up on the way to the
+ * screen is enough to make a thread scannable, and the person named gets a flag
+ * on the pin without a notification system behind it.
+ */
+export function mentions(body: string): string[] {
+  return [...body.matchAll(/@([\p{L}][\p{L}\d'’-]*)/gu)].map((match) => match[1].toLowerCase());
+}
+
+/** True when this thread names you — the pin marks it. */
+export function namesMe(text: string, me: string): boolean {
+  const first = me.trim().split(/\s+/)[0]?.toLowerCase();
+  if (!first) return false;
+  return mentions(text).some((name) => name === first || me.toLowerCase().startsWith(name));
+}
+
+function Body({ text }: { text: string }) {
+  const parts = text.split(/(@[\p{L}][\p{L}\d'’-]*)/gu);
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.startsWith('@') ? (
+          <span key={index} className="fig-mention">
+            {part}
+          </span>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 function Entry({ name, color, body, at }: { name: string; color: string; body: string; at: number }) {
   return (
     <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
@@ -204,7 +246,9 @@ function Entry({ name, color, body, at }: { name: string; color: string; body: s
           <span style={{ fontWeight: 500 }}>{name}</span>
           <span style={{ color: 'var(--color-ink-dim)' }}>{when(at)}</span>
         </div>
-        <div style={{ lineHeight: 1.45, wordBreak: 'break-word' }}>{body}</div>
+        <div style={{ lineHeight: 1.45, wordBreak: 'break-word' }}>
+          <Body text={body} />
+        </div>
       </div>
     </div>
   );

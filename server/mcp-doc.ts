@@ -21,7 +21,9 @@ function syncToken(fileId: string): string {
   const secret = process.env.AUTH_SECRET;
   if (!secret) throw new Error('AUTH_SECRET is not set — copy .env.example to .env.local.');
   const expires = Date.now() + 60 * 60 * 1000;
-  const payload = `${AGENT_ID}.${fileId}.${expires}`;
+  // the agent edits the live document, so it joins as an editor — the role is
+  // inside the signature the sync server checks
+  const payload = `${AGENT_ID}.${fileId}.editor.${expires}`;
   return `${payload}.${createHmac('sha256', secret).update(payload).digest('base64url')}`;
 }
 

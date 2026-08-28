@@ -22,14 +22,14 @@ profiles to see multiplayer.
 
 ```
 ┌──────────┬──┬──────────────────────────────┬───────────┐
-│  Layers  │T │                              │ Inspector │
-│  240px   │o │      infinite canvas         │   281px   │
-│          │o │   real DOM, transformed      │           │
-│  Pages   │l │   translate(x,y) scale(z)    │  Layout   │
-│  Tree    │  │                              │  Flex     │
-│          │42│   ┌──────────────┐           │  Shader   │
-│          │px│   │  Artboard    │           │  Fill     │
-│          │  │   │  display:flex│           │  Export   │
+│  Layers  │T │      infinite canvas         │ Inspector │
+│  Assets  │o │   real DOM, transformed      │  Design   │
+│  Theme   │o │   translate(x,y) scale(z)    │  Prototype│
+│          │l │                              │  Inspect  │
+│  Pages   │  │   ┌──────────────┐           │           │
+│  Tree    │42│   │  Artboard    │           │  Shape    │
+│          │px│   │  display:flex│           │  Fill     │
+│          │  │   └──────────────┘           │  Export   │
 └──────────┴──┴──────────────────────────────┴───────────┘
 ```
 
@@ -58,24 +58,77 @@ to match: 348px wide, `#F5F5F5` fields at 24px with a 24px glyph gutter, 9px
 sub-labels above each field group, 11px/550 section headers that dim to 50% when
 empty. Sections and controls follow Figma's inventory — Position (alignment,
 distribute, rotation, rotate 90°, flips), Layout (flow, dimensions, resizing,
-resize-to-fit, clip), Auto layout, Appearance (opacity, corner radius,
-independent corners, blend), Fill, Stroke, Effects, Layout guide, Selection
+resize-to-fit, clip), Auto layout, Shape (sides, star ratio, arc and donut, the
+boolean operation, mask type), Appearance (opacity, corner radius, independent
+corners, blend), Variable modes, Fill, Stroke, Effects, Layout guide, Selection
 colors, Export — plus Figma's "apply styles and variables" pickers, wired to
-this document's theme tokens.
+this document's variables. Three tabs, as Figma has them: Design, Prototype and
+Inspect, the last being the handoff panel — measurements, the variables in play,
+and the code, which here is not a translation of the design but the very styles
+the canvas rendered with.
 
 **Every section paints for real.** Every section paints through `nodeStyle()`:
 outline, border (with dash styles), drop and inner shadow, the six CSS filters,
 per-corner radius, per-side padding, blend modes, underline and text stroke,
 video fills, and layout guides. Nothing in the panel is decorative.
 
-**Theme tokens are CSS custom properties.** They live in the CRDT, publish onto
-the canvas root, and any colour field accepts `var(--brand)`. Export emits a
-`:root { … }` block containing exactly the tokens that subtree references — the
-variable survives instead of being flattened to a hex.
+**There is a real geometry kernel.** `src/document/clipper.ts` answers the one
+question four features need — given two regions, what is their union,
+intersection, difference or symmetric difference. It cuts every segment at every
+crossing, asks of each surviving piece whether a step to either side lands
+inside the result, and stitches what is left back into rings. That is what makes
+Flatten produce an editable path, what turns a stroke into a shape, what lets a
+boolean group be stroked on any side, and what lets a rotated layer take part in
+a mask or a boolean at all.
+
+**Shapes are CSS too, not a second renderer.** A polygon, a star, an arc or a
+pen path is a `background` clipped to a `path()`, plus one SVG element for the
+stroke — so gradients, image paints, blend modes and effects work on a star
+exactly as they do on a rectangle, and `src/document/geometry.ts` is the only
+place a curve is ever computed.
+
+**Boolean groups are live, and they are set algebra in CSS.** Union is one path
+under the non-zero rule; exclude is the same path under even-odd; intersect is a
+clip inside a clip; subtract is a clip inside the *complement* of another. The
+children keep their own geometry and stay editable, the operation can be changed
+after the fact, and the result exports as ordinary markup rather than a baked
+outline. Strokes follow the combination: each part's edge is masked by a rule
+that keeps only what survived, so no seam shows where two shapes overlap.
+
+**Masks are `clip-path`.** A mask layer shapes the siblings painted above it —
+Figma's rule, read off the layer order — and an image used as a luminance mask
+becomes `mask-image`. Both survive export, which is the point of doing it this
+way rather than compositing onto a hidden canvas.
+
+**Text is styled per range.** A text layer holds a list of runs — a string plus
+the handful of properties that may differ within a paragraph — so a bold word
+inside a sentence is a run, not a second layer. `text` stays the plain reading of
+the layer, which is what search, export and an agent see. The editor keeps the
+model in step with `contentEditable` by reading the element's text after every
+change and applying the one insertion that explains the difference, which makes
+typing, pasting, dictation and drag-and-drop all the same case.
+
+**Variables are CSS custom properties, modes included.** They live in the CRDT
+and publish onto the canvas root; a collection gives them modes, and a frame set
+to one re-declares those properties on itself so everything inside inherits
+them. That is the cascade doing the work, which is why a dark-mode frame keeps
+working in the export with no runtime behind it. Export emits a `:root { … }`
+block containing exactly the variables that subtree references — the variable
+survives instead of being flattened to a hex.
+
+**Components can leave the file.** A component published to the library is
+stored as the same payload the clipboard carries, so importing it is a paste.
+What lands is a local main that remembers where it came from — instances point
+at *that*, which is why a later revision can be taken in one place and reach
+every instance at once. See `library_components` in `src/server/db.ts`.
 
 **Accounts are first-class.** `src/server/db.ts` uses Node's built-in SQLite, so
 the platform runs with `pnpm install` and nothing else — no native build, no
 database server. Passwords are scrypt-hashed; sessions are HMAC-signed cookies.
+A file can be shared to edit or to view, and view-only is enforced in two
+places: the editor hides its tools, and the sync server — which signs the role
+into the handshake token — drops any write that arrives on a viewer's socket. A
+modified client gets nowhere.
 
 **History is on disk.** A CRDT merges concurrent edits but does not protect you
 from an intentional one — a stray `⌘A` + `⌫` is a perfectly valid update, and
@@ -94,6 +147,10 @@ a file-swapped server. Instead the snapshot's layers are re-inserted into the
 live document along the same path `⌘V` takes — new layers nothing has ever
 deleted — which merges cleanly with whoever is connected:
 
+That shelf is in the editor as well as on the command line: **⌥⌘H** opens
+Version history, lists every snapshot with what was in it, and restores one into
+the live document.
+
 ```bash
 pnpm snapshots demofile0            # list what is recoverable
 pnpm snapshots demofile0 <stamp>    # restore it — no restart, no reload
@@ -101,11 +158,18 @@ pnpm snapshots demofile0 <stamp>    # restore it — no restart, no reload
 
 **Sync is self-hosted and authenticated.** `server/ws.mjs` speaks the standard
 y-websocket protocol in ~200 lines. It has no cookies and no database, so the
-app mints a short-lived HMAC over `userId.fileId.expires` and the server verifies
-it — without that, knowing a room id would be enough to join any document.
+app mints a short-lived HMAC over `userId.fileId.role.expires` and the server
+verifies it — without that, knowing a room id would be enough to join any
+document, and without the role inside the signature a viewer could simply ask
+the socket to accept their edits.
 Documents persist to `.data/<fileId>.bin`.
 
 ## Export
+
+Export settings live on the layer, as Figma's do, so they sync and survive a
+reload; the Export button saves what the rows say rather than opening anything.
+A **slice** exports the region it covers rather than itself — the page is what
+gets rendered, cropped to the slice.
 
 | format | what you get |
 |---|---|
@@ -126,8 +190,13 @@ pnpm test          # Playwright, headless
 pnpm test:ui       # the same suite, watchable
 ```
 
-The suite drives the real canvas — pointer sequences and key presses, not unit
-tests of internals — because the bugs that actually bit here only appear end to
+Four suites behind one command. `geometry` checks the path builders, the boolean
+kernel, masks and variable modes directly — no browser, because a boolean that
+clips the wrong region is invisible until someone draws exactly the shape that
+exposes it. `library` runs the shared library against a scratch database.
+`sync` drives the sync server, including the guard that drops a viewer's writes.
+`editor` drives the real canvas — pointer sequences and key presses, not unit tests of
+internals — because the bugs that actually bit here only appear end to
 end: a hug-sized leaf collapsing to 0×0, a held ⌘D burying a layer five frames
 deep, snapping fighting the duplicate modifier. It signs in once, then runs
 against `/f/testfile00`, a scratch file `pnpm seed` creates for it, and rebuilds
@@ -153,7 +222,7 @@ pnpm mcp        # or: npx tsx server/mcp.ts
 | `get_metadata` | the node tree — ids, types, boxes, layout mode |
 | `get_design_context` | the node as React + CSS, HTML, or JSON |
 | `get_node` | every property of one node |
-| `get_variables` | theme tokens |
+| `get_variables` | variables, by collection, with every mode's value |
 | `create_node` · `update_node` · `delete_node` | write to the live document |
 | `set_variable` | create or update a token |
 
@@ -170,15 +239,72 @@ their `x`/`y`. That is the whole model, and it maps one-to-one onto CSS.
 
 ## Tools
 
-**Pen** places points; `Enter` finishes an open path, clicking the first point
-closes it, `Backspace` removes the last point, `Escape` cancels. Paths render as
-real SVG with the Border section acting as the stroke.
+**Shapes** live in a flyout under the rectangle, as Figma's do: rectangle,
+ellipse, polygon, star, line and arrow. A polygon is a side count and a star is
+a count plus a ratio, so changing one re-draws the shape rather than asking you
+to move every vertex; an ellipse takes a start angle, a sweep and a hole, which
+is how it becomes an arc or a donut.
+
+**Pen** places points, and dragging as you place one pulls its handles out — a
+click is a corner, a drag is a curve. `Enter` finishes an open path, clicking
+the first point closes it, `Backspace` removes the last point, `Escape` cancels.
+
+**Point editing** is a mode, entered with `⏎` or a double-click and left with
+`Esc`. Drag an anchor to move it, drag a handle to bend the segments either side
+of it, `⌥`-drag a handle to break the mirror, `⌥`-click an anchor to switch it
+between a corner and a smooth point, click the path to insert one, `⌫` to remove
+the selected ones. The layer's box re-fits around the points as they move, so
+the outline never drifts out of the thing you can select.
+
+**Boolean groups** — `⌥⌘U` union, `⌥⌘S` subtract, `⌥⌘I` intersect, `⌥⌘X`
+exclude — combine the selection without baking it: the parts stay in the group,
+stay editable, and the operation can be changed from the panel afterwards.
+`⌘E` **flattens** one into a single editable path when you want the other kind,
+and `⇧⌘O` **outlines a stroke** into a filled shape. Both go through the
+geometry kernel, so a flattened subtract really does have the bite taken out of
+it and an outlined ring really is a ring with a hole.
+
+**Masks** (`⌃⌘M`) turn the selection into a mask for the layers above it, and
+drop it to the bottom of its parent where a mask belongs.
+
+**Scale** (`K`) resizes a layer *and* everything inside it — type sizes, corner
+radii, stroke weights, padding and gaps all move together, which is the
+difference between scaling a card and stretching it.
+
+**Slice** (`S`) marks a region to export. It paints nothing — the dashed outline
+is editor chrome — and exporting it saves whatever is underneath, cropped to the
+box, which is the whole point of it.
+
+**Rulers** (`⇧R`) run down the top and left edges; drag off one for a guide,
+drag a guide back onto a ruler to remove it. Guides live on the page in the CRDT
+and snap like any other edge. Hold `⌥` over a layer and the distance from the
+selection to it is drawn, the way Figma measures.
 
 **Comment** drops a pin anchored in world space. Threads carry replies, resolve,
 and delete, and sync live. They sit in the CRDT but *outside* the undo scope —
 `⌘Z` should rewind your design, never someone else's remark.
 
 **Shaders** opens the WebGL catalogue; every tile is the live shader.
+
+**Quick actions** (`⌘/` or `⌘K`) is every command by name and every layer by
+name in one list — run the command, or jump the viewport to the layer.
+
+## Working together
+
+Cursors, avatars and remote selection have always been here. On top of them:
+
+**Follow** someone by clicking their avatar — your viewport tracks theirs, and
+because their window is not yours it is the *centre* that is matched, at a zoom
+that fits what they can see. Click your own avatar to **spotlight** yourself and
+everyone else is pulled along behind you. Two people following each other is
+detected and refused rather than left to oscillate.
+
+**Cursor chat** is `/`: type, and what you write rides beside your pointer for
+everyone until you clear it. It deliberately leaves no trace — a remark that
+should outlive the moment is a comment.
+
+**Comments** understand `@name`: mentions are picked out in the thread, and a
+pin that names you is ringed.
 
 ## Selecting things
 
@@ -212,16 +338,47 @@ frame, drawing a red guide across both. Hold `⌘` to ignore snapping — `⌥` 
 already taken by drag-to-duplicate, the same split Figma uses. Layers can be dragged in the panel to reorder or
 reparent — above, below, or inside another layer.
 
+## Prototyping
+
+An interaction is a trigger, an action and a transition, carried by the layer
+that is touched — so a button keeps its behaviour wherever it is copied to. The
+triggers are click, hover, mouse enter, mouse leave, press, drag, key press and
+after-delay; the actions are navigate, back, open / close / swap overlay, scroll
+to, set a variable, open a link, and none; the transitions are instant,
+dissolve, smart animate, move in, push and slide, each with a direction, a
+duration and an easing.
+
+Overlays are drawn over the frame you were on, positioned where the interaction
+says, optionally dimming what is behind and dismissing on a click outside.
+Smart animate is a FLIP: the outgoing frame is measured, the incoming one lays
+out, and every layer whose name appears in both is animated from where it used
+to be — which is exactly the contract Figma's smart animate has. A variable set
+while playing is re-declared on the stage rather than written to the document: a
+prototype run is a rehearsal, and it must not leave the design changed.
+
+A frame can scroll while it plays, and a layer inside one can be told to scroll
+with the content, stay put, or stick — none of which the canvas honours, because
+a board on the canvas is flat however tall its content is. Present can draw a
+phone, tablet or laptop bezel around the frame.
+
+`⇧⌘⏎` plays it. Present renders the same `NodeView` tree the canvas draws, so
+there is no second renderer to drift.
+
 ## Keyboard
 
 | | | | |
 |---|---|---|---|
-| `V` Move | `H` Pan | `F` Frame | `R` Rectangle |
-| `O` Ellipse | `P` Pen | `T` Text | `C` Comment |
+| `V` Move | `K` Scale | `H` Pan | `F` Frame |
+| `R` Rectangle | `O` Ellipse | `L` Line | `⇧L` Arrow |
+| `P` Pen | `T` Text | `C` Comment | `⏎` Edit points |
+| `⌥⌘U` Union | `⌥⌘S` Subtract | `⌥⌘I` Intersect | `⌥⌘X` Exclude |
+| `⌃⌘M` Use as mask | `⌘E` Flatten | `⇧⌘O` Outline stroke | `S` Slice |
+| `⇧R` Rulers | `⌥` hover Measure | `/` Cursor chat | `⇧D` Inspect |
 | `⇧A` Wrap in flex | `⇧F` Frame selection | `]` Bring to front | `[` Send to back |
 | `⌘G` Group | `⇧⌘G` Ungroup | `Tab` Next sibling | `Enter` Enter / `Esc` Exit |
 | `⌘Z` / `⇧⌘Z` Undo/redo | `⌘D` Duplicate | `⌘A` Select all | `⌫` Delete |
 | `⌘C` Copy | `⌘X` Cut | `⌘V` Paste | `⇧⌘V` Paste in place |
+| `⌘/` Quick actions | `⇧D` Inspect | `⌥⌘H` Version history | `⇧⌘⏎` Present |
 | `⇧⌘E` Export | `⌘L` Copy link | `⇧⌘H` Show/hide | `⇧⌘L` Lock |
 | `⌘0` 100% | `⌘1` Zoom to fit | `⌘±` Zoom | `Space`+drag Pan |
 
@@ -235,15 +392,29 @@ plain scroll pans.
 | `src/document/types.ts` | the scene graph |
 | `src/document/store.ts` | Yjs-backed mutations + undo |
 | `src/document/css.ts` | node → CSS (canvas *and* export) |
+| `src/document/geometry.ts` | paths, parametric shapes, boolean set algebra |
+| `src/document/clipper.ts` | the geometry kernel: polygon booleans and offsets |
+| `src/document/text.ts` | styled runs, and the range operations over them |
+| `src/document/adjust.ts` | image adjustments, as CSS and as an SVG filter |
+| `src/document/mask.ts` | which layers a mask shapes, and how |
+| `src/document/variables.ts` | collections, modes, aliases → custom properties |
 | `src/document/selection.ts` | Figma's selection rules, in one place |
 | `src/webgl/shaders.ts` | GLSL catalogue + typed params |
 | `src/export/raster.ts` | PNG / SVG rendering via foreignObject |
 | `src/components/Comments.tsx` | comment pins and threads |
-| `src/components/VectorShape.tsx` | pen paths → SVG |
+| `src/components/Shape.tsx` | shapes and boolean groups, as clipped layers |
+| `src/components/VectorEdit.tsx` | anchors, handles, point editing |
+| `src/components/Rulers.tsx` | rulers and the guides dragged off them |
+| `src/components/Inspect.tsx` | the handoff panel |
+| `src/components/Palette.tsx` | quick actions |
+| `src/components/TextEditor.tsx` | in-place editing, styled per range |
+| `src/components/Follow.tsx` | observation mode and spotlight |
+| `src/lib/fonts.ts` | the font list, and loading the web faces |
 | `src/webgl/renderer.ts` | WebGL2 renderer, shared ticker |
 | `src/server/db.ts` | accounts and the file index (SQLite) |
 | `src/server/auth.ts` | scrypt, session cookies, sync tokens |
 | `src/server/actions.ts` | sign-up/in, file CRUD, sharing |
+| `src/server/history.ts` | reading, comparing and restoring snapshots |
 | `src/collab/session.ts` | one authenticated socket per room |
 | `src/components/Canvas.tsx` | pan, zoom, draw, select, marquee |
 | `src/components/Overlay.tsx` | selection chrome, handles, remote halos |
@@ -253,15 +424,39 @@ plain scroll pans.
 
 ## What is real, and what is not
 
-Working end to end: accounts and sessions; the file browser with sharing by
-email; multiple pages; theme tokens; the canvas and its layout model; the CRDT
-document; authenticated multiplayer (cursors, avatars, remote selection);
-undo/redo; the layers tree; every inspector section; in-place text editing; the
-pen tool; comment threads; eight WebGL shaders with live parameters; and
-React / HTML / JSON / PNG / SVG export.
+Working end to end: accounts, sessions and sharing (to edit or to view, enforced
+on the socket); the file browser with duplication and live thumbnails; multiple
+pages; the canvas and its layout model, min and max sizes included; the CRDT
+document; authenticated multiplayer with follow, spotlight, cursor chat and
+mentions; undo/redo; the layers tree; every inspector section; components,
+variants, properties, descriptions — published to a shared library other files
+subscribe to and take revisions of; styles; variables with collections, modes,
+aliases and scoping; the shape tools and the slice; the pen, with handles and
+point editing across several subpaths; live boolean groups, flatten and outline
+stroke through a real geometry kernel; masks; the scale tool; rulers, guides and
+⌥-measuring; text styled per range, with web fonts, uploaded fonts and OpenType;
+image fills with fit, crop, rotation and the seven adjustments; comment threads;
+prototyping with overlays, smart animate, scroll behaviour, variables and device
+frames; the Assets and Inspect panels, with annotations and dev status; version
+history with comparison; quick actions; eight WebGL shaders with live
+parameters; and React / HTML / JSON / PNG / SVG export.
 
-Two honest limits:
+The honest limits, all of them:
 
+- **No plugin API, no FigJam, no Slides.** Each is a separate product surface
+  rather than a missing control: a plugin API needs a sandbox and a permission
+  model before it needs an API.
+- **No text on a path.** Text is laid out by the browser, and the browser does
+  not set type along an arbitrary curve without SVG taking the text away from
+  the layout engine everything else here depends on.
+- **The boolean kernel flattens curves before combining them.** A flattened
+  boolean is a polygon at the sampling density the shapes deserved, not a set of
+  béziers refitted to the result — which is what every design tool does here,
+  and is why *Flatten* on a single ellipse takes the exact path instead.
+- **Temperature, tint, highlights and shadows are approximations.** Exposure,
+  contrast and saturation are exact CSS filters; the other four are a colour
+  matrix and two transfer functions, deliberately gentle. This is a design tool,
+  not a darkroom.
 - **Create image / Create SVG** call no model. `lib/generate.ts` produces
   deterministic local gradients and polygons — replace those two functions with
   an endpoint and the tool is done.

@@ -25,17 +25,26 @@ const ROOM = 'wipe-probe';
 let server: ChildProcess;
 let dataDir: string;
 
-function token(fileId: string): string {
-  const payload = `tester.${fileId}.${Date.now() + 3_600_000}`;
+function token(fileId: string, role: 'editor' | 'viewer' = 'editor'): string {
+  // the role is inside the signature the sync server checks, which is what
+  // stops a client asking for more than it was given
+  const payload = `tester.${fileId}.${role}.${Date.now() + 3_600_000}`;
   return `${payload}.${createHmac('sha256', SECRET).update(payload).digest('base64url')}`;
 }
 
-async function join(): Promise<{ store: DocStore; provider: WebsocketProvider }> {
+async function join(
+  role: 'editor' | 'viewer' = 'editor',
+  room = ROOM,
+): Promise<{ store: DocStore; provider: WebsocketProvider }> {
   const ydoc = new Y.Doc();
   const store = new DocStore(ydoc);
-  const provider = new WebsocketProvider(`ws://localhost:${PORT}`, ROOM, ydoc, {
-    params: { token: token(ROOM) },
+  const provider = new WebsocketProvider(`ws://localhost:${PORT}`, room, ydoc, {
+    params: { token: token(room, role) },
     WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
+    // Two providers in one process would otherwise sync to each other over a
+    // BroadcastChannel and never involve the server — which is the only thing
+    // these tests are actually about.
+    disableBc: true,
   });
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('sync server never synced')), 10_000);
@@ -74,6 +83,31 @@ test.beforeAll(async () => {
 test.afterAll(() => {
   server?.kill();
   if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+/**
+ * A viewer's socket is the half of read-only access that has to hold when the
+ * client is not the one we shipped. The editor hides its tools; this is what
+ * stops a modified client, or a script, writing anyway.
+ */
+test('the sync server drops writes from a view-only member', async () => {
+  const room = 'viewer-probe';
+  const editor = await join('editor', room);
+  const viewer = await join('viewer', room);
+
+  viewer.store.create('rect', ROOT_ID, { name: 'Sneaky', w: 10, h: 10 });
+  // long enough for a legitimate update to have made the round trip
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  expect(Object.values(editor.store.getSnapshot()).some((n) => n.name === 'Sneaky')).toBe(false);
+
+  // and the same write from an editor does land, so the test is not vacuous
+  editor.store.create('rect', ROOT_ID, { name: 'Allowed', w: 10, h: 10 });
+  await expect
+    .poll(() => Object.values(viewer.store.getSnapshot()).some((n) => n.name === 'Allowed'))
+    .toBe(true);
+
+  editor.provider.destroy();
+  viewer.provider.destroy();
 });
 
 test('a wipe pins the state that preceded it', async () => {

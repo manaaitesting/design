@@ -2,14 +2,21 @@
 
 import { create } from 'zustand';
 import type { SnapGuide } from '../document/snapping';
+import type { ExportFormat } from '../document/types';
 
 export type Tool =
   | 'move'
   | 'pan'
+  | 'scale'
   | 'frame'
   | 'rect'
   | 'ellipse'
+  | 'polygon'
+  | 'star'
+  | 'line'
+  | 'arrow'
   | 'pen'
+  | 'slice'
   | 'text'
   | 'comment'
   | 'image'
@@ -21,17 +28,6 @@ export interface Viewport {
   x: number;
   y: number;
   zoom: number;
-}
-
-/** One line of the Export section — Figma lets a layer carry several. */
-export interface ExportRow {
-  id: string;
-  scale: number;
-  format: ExportFormat;
-  /** appended to the filename, before the extension */
-  suffix?: string;
-  /** export what is inside the frame without the frame's own background */
-  contentsOnly?: boolean;
 }
 
 export interface UIState {
@@ -77,6 +73,35 @@ export interface UIState {
   editing: string | null;
   setEditing: (id: string | null) => void;
 
+  /**
+   * The vector whose points are being edited, and which of them are selected.
+   *
+   * Point editing is a mode rather than a tool: while it is on, the pointer
+   * belongs to the anchors instead of to the layer, exactly as Figma's does.
+   */
+  vectorEdit: string | null;
+  setVectorEdit: (id: string | null) => void;
+  anchorSelection: number[];
+  setAnchorSelection: (indices: number[]) => void;
+
+  /**
+   * The image whose crop is being adjusted. While set, dragging on that layer
+   * pans the picture inside it rather than moving the layer.
+   */
+  cropping: string | null;
+  setCropping: (id: string | null) => void;
+
+  /** rulers down the top and left edges, with the guides you drag off them */
+  rulers: boolean;
+  toggleRulers: () => void;
+
+  /**
+   * ⌥ held over the canvas: Figma switches to measuring, showing the distance
+   * from the selection to whatever is under the pointer.
+   */
+  measuring: boolean;
+  setMeasuring: (on: boolean) => void;
+
   leftPanel: boolean;
   toggleLeftPanel: () => void;
 
@@ -92,20 +117,24 @@ export interface UIState {
   resetRightWidth: () => void;
   /** reads the saved widths — call once on mount, never during render */
   hydratePanels: () => void;
-  tab: 'design' | 'theme';
-  setTab: (tab: 'design' | 'theme') => void;
+  tab: 'design' | 'assets' | 'theme';
+  setTab: (tab: 'design' | 'assets' | 'theme') => void;
 
   /**
    * The right panel's tab. It lives here rather than in the panel because the
    * canvas draws prototype connections whenever Prototype is showing, exactly
    * as Figma does.
    */
-  inspectorTab: 'design' | 'prototype';
-  setInspectorTab: (tab: 'design' | 'prototype') => void;
+  inspectorTab: 'design' | 'prototype' | 'inspect';
+  setInspectorTab: (tab: 'design' | 'prototype' | 'inspect') => void;
 
   /** the frame Present is playing, or null when it is closed */
   presenting: string | null;
   present: (frame: string | null) => void;
+
+  /** the bezel Present draws around the frame */
+  device: 'none' | 'phone' | 'tablet' | 'laptop';
+  setDevice: (device: 'none' | 'phone' | 'tablet' | 'laptop') => void;
 
   /** the page currently on the canvas */
   page: string;
@@ -132,24 +161,40 @@ export interface UIState {
   exportOpen: boolean;
   setExportOpen: (open: boolean) => void;
 
+  /** the version-history panel, read from the sync server's snapshots */
+  historyOpen: boolean;
+  setHistoryOpen: (open: boolean) => void;
+
+  /** ⌘/ — every command by name, and every layer by name */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
+
+  /**
+   * Observation. `following` is the awareness client id whose viewport we are
+   * mirroring; `spotlight` is the other direction — everyone follows us.
+   */
+  following: number | null;
+  setFollowing: (clientId: number | null) => void;
+  spotlight: boolean;
+  setSpotlight: (on: boolean) => void;
+
+  /** the cursor-chat box, opened with `/` */
+  chatting: boolean;
+  setChatting: (open: boolean) => void;
+
   exportFormat: ExportFormat;
   setExportFormat: (format: ExportFormat) => void;
   exportScale: number;
   setExportScale: (scale: number) => void;
 
-  /** Figma keeps a list of export settings per layer; this is the app-level one */
-  exportRows: ExportRow[];
   /** the suffix and contents-only flag the Export dialog is acting on */
   exportSuffix: string;
   setExportSuffix: (suffix: string) => void;
   exportContentsOnly: boolean;
   setExportContentsOnly: (only: boolean) => void;
-  addExportRow: () => void;
-  updateExportRow: (id: string, patch: Partial<Omit<ExportRow, 'id'>>) => void;
-  removeExportRow: (id: string) => void;
 }
 
-export type ExportFormat = 'react' | 'html' | 'json' | 'png' | 'svg';
+export type { ExportFormat };
 
 /**
  * Panel geometry. `base` is the width the panel ships at — the same number the
@@ -229,7 +274,8 @@ export const useUI = create<UIState>((set) => ({
         ? state.selection.filter((s) => s !== id)
         : [...state.selection, id],
     })),
-  clearSelection: () => set({ selection: [], editing: null, entered: null }),
+  clearSelection: () =>
+    set({ selection: [], editing: null, entered: null, vectorEdit: null, anchorSelection: [] }),
 
   hover: null,
   setHover: (hover) => set({ hover }),
@@ -258,6 +304,20 @@ export const useUI = create<UIState>((set) => ({
 
   editing: null,
   setEditing: (editing) => set({ editing }),
+
+  vectorEdit: null,
+  setVectorEdit: (vectorEdit) => set({ vectorEdit, anchorSelection: [] }),
+  anchorSelection: [],
+  setAnchorSelection: (anchorSelection) => set({ anchorSelection }),
+
+  cropping: null,
+  setCropping: (cropping) => set({ cropping }),
+
+  rulers: false,
+  toggleRulers: () => set((state) => ({ rulers: !state.rulers })),
+
+  measuring: false,
+  setMeasuring: (measuring) => set({ measuring }),
 
   leftPanel: true,
   toggleLeftPanel: () => set((state) => ({ leftPanel: !state.leftPanel })),
@@ -308,6 +368,9 @@ export const useUI = create<UIState>((set) => ({
   presenting: null,
   present: (presenting) => set({ presenting, editing: null }),
 
+  device: 'none',
+  setDevice: (device) => set({ device }),
+
   page: 'root',
   setPage: (page) => set({ page, selection: [], entered: null, editing: null }),
 
@@ -329,32 +392,32 @@ export const useUI = create<UIState>((set) => ({
   exportOpen: false,
   setExportOpen: (exportOpen) => set({ exportOpen }),
 
+  historyOpen: false,
+  setHistoryOpen: (historyOpen) => set({ historyOpen }),
+
+  paletteOpen: false,
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+
+  following: null,
+  // following someone and presenting to them are mutually exclusive
+  setFollowing: (following) =>
+    set((state) => ({ following, spotlight: following === null ? state.spotlight : false })),
+  spotlight: false,
+  setSpotlight: (spotlight) =>
+    set((state) => ({ spotlight, following: spotlight ? null : state.following })),
+
+  chatting: false,
+  setChatting: (chatting) => set({ chatting }),
+
   exportFormat: 'react',
   setExportFormat: (exportFormat) => set({ exportFormat }),
   exportScale: 2,
   setExportScale: (exportScale) => set({ exportScale }),
 
-  exportRows: [{ id: 'default', scale: 2, format: 'png' }],
   exportSuffix: '',
   setExportSuffix: (exportSuffix) => set({ exportSuffix }),
   exportContentsOnly: false,
   setExportContentsOnly: (exportContentsOnly) => set({ exportContentsOnly }),
-  addExportRow: () =>
-    set((state) => ({
-      exportRows: [
-        ...state.exportRows,
-        { id: Math.random().toString(36).slice(2, 8), scale: 1, format: 'png' },
-      ],
-    })),
-  updateExportRow: (id, patch) =>
-    set((state) => ({
-      exportRows: state.exportRows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
-    })),
-  removeExportRow: (id) =>
-    set((state) => ({
-      // never leave the list empty — Figma keeps at least one row once opened
-      exportRows: state.exportRows.length > 1 ? state.exportRows.filter((row) => row.id !== id) : state.exportRows,
-    })),
 }));
 
 /** Screen px → world coordinates. */

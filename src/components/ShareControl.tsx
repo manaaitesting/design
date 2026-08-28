@@ -37,6 +37,23 @@ export function ShareControl({ fileId }: { fileId: string }) {
           outline: 'none',
         }}
       />
+      <select
+        name="role"
+        defaultValue="editor"
+        title="What this person may do"
+        style={{
+          height: 24,
+          border: 0,
+          borderRadius: 5,
+          padding: '0 4px',
+          background: 'var(--color-control)',
+          boxShadow: 'var(--shadow-control)',
+          outline: 'none',
+        }}
+      >
+        <option value="editor">can edit</option>
+        <option value="viewer">can view</option>
+      </select>
       <button type="submit" className="btn btn-raised" disabled={pending}>
         {pending ? '…' : 'Invite'}
       </button>

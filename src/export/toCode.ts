@@ -1,6 +1,24 @@
-import { nodeStyle, styleToCss } from '../document/css';
+import {
+  backgroundOf,
+  imageSizing,
+  needsPaintLayers,
+  nodeStyle,
+  paintLayers,
+  shapePaint,
+  styleToCss,
+  type ShapeStroke,
+} from '../document/css';
+import { colourMatrix, transferFunctions } from '../document/adjust';
 import { effectLayers, effectsOf } from '../document/effects';
+import { booleanClips, paintsWithPath } from '../document/geometry';
+import { booleanOutlinePath } from '../document/boolean';
+import { maskStyles } from '../document/mask';
+import { defaultModes, modeVars, publish, resolveToken } from '../document/variables';
+import type { CSSProperties } from 'react';
 import type { Doc, SceneNode } from '../document/types';
+import { DEFAULT_COLLECTION, type Collection } from '../document/variables';
+import { fontFaceCss, googleHref, webFontsIn, type CustomFont } from '../lib/fonts';
+import { isPlain, plainText, runLines, runStyle, runsOf } from '../document/text';
 import { compose, SHADER_BY_ID } from '../webgl/shaders';
 import type { Token } from '../document/store';
 
@@ -50,16 +68,33 @@ function textMarkup(
   const font = node.font;
   const spacing = font?.paragraphSpacing ?? 0;
   const list = font?.list && font.list !== 'none' ? font.list : null;
-  const text = node.text ?? '';
-  if (!spacing && !list) return escape(text);
+  const runs = runsOf(node);
+  const plain = isPlain(runs);
 
-  const lines = text.split('\n');
+  if (plain && !spacing && !list) return escape(plainText(runs));
+
+  // a styled run becomes a span carrying only what it overrides — the rest is
+  // still inherited from the layer's own rule, as it is on the canvas
+  const body = (line: typeof runs): string =>
+    plain
+      ? escape(line.map((run) => run.text).join(''))
+      : line
+          .map((run) => {
+            const style = runStyle(run, font) as Record<string, string | number>;
+            const inner = escape(run.text);
+            if (!Object.keys(style).length) return inner;
+            return `<span ${inlineStyle(style)}>${inner}</span>`;
+          })
+          .join('');
+
+  const lines = runLines(runs);
   const gap = (index: number) => (index && spacing ? ` ${inlineStyle({ marginTop: spacing })}` : '');
-  if (!list) {
-    return lines.map((line, i) => `<div${gap(i)}>${escape(line)}</div>`).join('');
-  }
+
+  if (!list && !spacing) return lines.map(body).join(escape('\n'));
+  if (!list) return lines.map((line, i) => `<div${gap(i)}>${body(line)}</div>`).join('');
+
   const tag = list === 'number' ? 'ol' : 'ul';
-  const items = lines.map((line, i) => `<li${gap(i)}>${escape(line)}</li>`).join('');
+  const items = lines.map((line, i) => `<li${gap(i)}>${body(line)}</li>`).join('');
   return `<${tag} ${inlineStyle({ margin: 0, paddingLeft: '1.4em' })}>${items}</${tag}>`;
 }
 
@@ -96,18 +131,214 @@ function htmlStyle(declarations: Record<string, string | number>): string {
   return `style="${body}"`;
 }
 
-export function toReact(rootId: string, doc: Doc, tokens: Token[] = []): Emitted {
+
+/**
+ * The extra elements an adjusted or rotated image paint needs.
+ *
+ * The canvas draws these with `PaintLayers`; the same styles are emitted here,
+ * filter and all, so an image that was warmed up on the canvas is warmed up in
+ * the export too.
+ */
+function paintMarkup(node: SceneNode, pad: string, mode: 'jsx' | 'html'): string {
+  if (!needsPaintLayers(node)) return '';
+  return paintLayers(node)
+    .map((layer) => {
+      const filter = layer.filter ? filterMarkup(layer.filter.id, layer.filter.adjust, mode) : '';
+      return `${pad}  <div ${styleAttr(layer.style, mode)}>${filter}</div>`;
+    })
+    .join('\n');
+}
+
+/** The SVG filter behind temperature, tint, highlights and shadows. */
+function filterMarkup(
+  id: string,
+  adjust: Parameters<typeof colourMatrix>[0],
+  mode: 'jsx' | 'html',
+): string {
+  const matrix = colourMatrix(adjust).join(' ');
+  const { exponent, intercept, slope } = transferFunctions(adjust);
+  const gamma = ['R', 'G', 'B']
+    .map((channel) => `<feFunc${channel} type="gamma" exponent="${exponent}" amplitude="1" offset="0"/>`)
+    .join('');
+  const linear = ['R', 'G', 'B']
+    .map((channel) => `<feFunc${channel} type="linear" slope="${slope}" intercept="${intercept}"/>`)
+    .join('');
+  return (
+    `<svg width="0" height="0" ${styleAttr({ position: 'absolute' }, mode)}>` +
+    `<filter id="${id}" ${attrName('colorInterpolationFilters', mode)}="sRGB">` +
+    `<feColorMatrix type="matrix" values="${matrix}"/>` +
+    `<feComponentTransfer>${gamma}</feComponentTransfer>` +
+    `<feComponentTransfer>${linear}</feComponentTransfer>` +
+    `</filter></svg>`
+  );
+}
+
+/**
+ * A shape's two layers, as markup.
+ *
+ * The canvas draws these with `PathShape`; the strings below are the same
+ * elements with the same styles, which is why an exported star is the star you
+ * were looking at. The geometry itself is not restated — it comes from
+ * `shapePaint`, exactly as the component's does.
+ */
+function shapeMarkup(node: SceneNode, pad: string, mode: 'jsx' | 'html'): string {
+  const paint = shapePaint(node);
+  if (!paint) return '';
+  const out: string[] = [];
+  if (paint.fill) out.push(`${pad}  <div ${styleAttr(paint.fill, mode)}></div>`);
+  if (paint.stroke) {
+    out.push(strokeSvg(node.id, paint.d, paint.stroke, paint.fillRule, node.w, node.h, pad, mode));
+  }
+  return out.join('\n');
+}
+
+/** A boolean group's nested clips and its outer stroke, as markup. */
+function booleanMarkup(node: SceneNode, doc: Doc, pad: string, mode: 'jsx' | 'html'): string {
+  const parts = node.children.map((id) => doc[id]).filter((child) => child?.visible) as SceneNode[];
+  if (!parts.length) return '';
+  const clips = booleanClips(node, parts);
+  if (!clips.length) return '';
+
+  const background = backgroundOf(node);
+  let body = background
+    ? `<div ${styleAttr(
+        {
+          position: 'absolute',
+          inset: 0,
+          background,
+          ...(background.includes('url(') ? imageSizing(node) : null),
+        },
+        mode,
+      )}></div>`
+    : '';
+  for (let i = clips.length - 1; i >= 0; i--) {
+    const clip = clips[i];
+    const style = {
+      position: 'absolute' as const,
+      inset: 0,
+      clipPath: `path(${clip.rule === 'evenodd' ? 'evenodd, ' : ''}'${clip.d}')`,
+    };
+    body = `<div ${styleAttr(style, mode)}>${body}</div>`;
+  }
+
+  const border = node.border;
+  if (!border || border.width <= 0) return `${pad}  ${body}`;
+
+  // the same outline the canvas strokes — computed once by the kernel, so the
+  // exported edge is the edge you were looking at
+  const d = booleanOutlinePath(node, parts);
+  if (!d) return `${pad}  ${body}`;
+  const stroke = strokeSvg(
+    node.id,
+    d,
+    {
+      color: border.color,
+      width: border.width,
+      dash: border.dash ? `${border.dash} ${border.gap ?? border.dash}` : null,
+      cap: border.cap ?? 'butt',
+      join: border.join ?? 'miter',
+      align: border.position ?? 'center',
+    },
+    'evenodd',
+    node.w,
+    node.h,
+    pad,
+    mode,
+  ).trimStart();
+
+  return `${pad}  ${body}\n${pad}  ${stroke}`;
+}
+
+const SVG_LAYER: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  width: '100%',
+  height: '100%',
+  overflow: 'visible',
+  pointerEvents: 'none',
+};
+
+/** JSX and HTML spell SVG attributes differently; this is the whole difference. */
+function attrName(name: string, mode: 'jsx' | 'html'): string {
+  if (mode === 'jsx') return name;
+  return name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+}
+
+function styleAttr(style: CSSProperties, mode: 'jsx' | 'html'): string {
+  if (mode === 'html') {
+    return `style="${styleToCss(style, '').replace(/\n/g, ' ').trim()}"`;
+  }
+  const body = Object.entries(style)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}: ${typeof value === 'number' ? value : JSON.stringify(value)}`)
+    .join(', ');
+  return `style={{ ${body} }}`;
+}
+
+function strokeSvg(
+  id: string,
+  d: string,
+  stroke: ShapeStroke,
+  fillRule: 'nonzero' | 'evenodd',
+  width: number,
+  height: number,
+  pad: string,
+  mode: 'jsx' | 'html',
+): string {
+  const w = Math.max(width, 1);
+  const h = Math.max(height, 1);
+  const clipped = stroke.align !== 'center';
+  const drawWidth = clipped ? stroke.width * 2 : stroke.width;
+  const room = Math.max(stroke.width * 2, 8);
+
+  const defs =
+    stroke.align === 'inside'
+      ? `<defs><clipPath id="${id}-sc" clipPathUnits="userSpaceOnUse"><path d="${d}" ${attrName('clipRule', mode)}="${fillRule}"/></clipPath></defs>`
+      : stroke.align === 'outside'
+        ? `<defs><mask id="${id}-sm" maskUnits="userSpaceOnUse"><rect x="${-room}" y="${-room}" width="${w + room * 2}" height="${h + room * 2}" fill="#fff"/><path d="${d}" fill="#000" ${attrName('fillRule', mode)}="${fillRule}"/></mask></defs>`
+        : '';
+
+  const bind =
+    stroke.align === 'inside'
+      ? ` ${attrName('clipPath', mode)}="url(#${id}-sc)"`
+      : stroke.align === 'outside'
+        ? ` mask="url(#${id}-sm)"`
+        : '';
+
+  return (
+    `${pad}  <svg ${styleAttr(SVG_LAYER, mode)} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${defs}` +
+    `<path d="${d}" fill="none" stroke="${stroke.color}" ${attrName('strokeWidth', mode)}="${drawWidth}" ` +
+    (stroke.dash ? `${attrName('strokeDasharray', mode)}="${stroke.dash}" ` : '') +
+    `${attrName('strokeLinecap', mode)}="${stroke.cap}" ${attrName('strokeLinejoin', mode)}="${stroke.join}" ` +
+    `${attrName('vectorEffect', mode)}="non-scaling-stroke"${bind}/></svg>`
+  );
+}
+
+export function toReact(
+  rootId: string,
+  doc: Doc,
+  tokens: Token[] = [],
+  collections: Collection[] = [DEFAULT_COLLECTION],
+  customFonts: CustomFont[] = [],
+): Emitted {
   const varNames = namesOf(tokens);
+  const baseModes = defaultModes(collections);
   const rules: string[] = [];
   const usedShaders = new Set<string>();
 
-  const walk = (id: string, depth: number): string => {
+  const walk = (id: string, depth: number, extra?: CSSProperties): string => {
     const node = doc[id];
     if (!node || !node.visible) return '';
     const pad = '  '.repeat(depth + 2);
     const className = slug(node.name, node.id);
 
-    const style = nodeStyle(node, doc, varNames);
+    // a mask is resolved by the parent, so it arrives as extra style
+    const style = {
+      ...nodeStyle(node, doc, varNames),
+      ...extra,
+      ...modeVars(node, tokens, baseModes),
+    };
+    const masking = node.children.length ? maskStyles(node, doc) : null;
     // the root of an export shouldn't be absolutely positioned inside nothing
     if (depth === 0) {
       delete style.position;
@@ -140,11 +371,28 @@ export function toReact(rootId: string, doc: Doc, tokens: Token[] = []): Emitted
         `${pad}</div>`
       );
     }
-    if (node.children.length === 0) {
-      if (!overlays) return `${pad}<div className="${className}" />`;
-      return `${pad}<div className="${className}">\n${overlays}\n${pad}</div>`;
+    if (paintsWithPath(node)) {
+      const shape = shapeMarkup(node, pad, 'jsx');
+      return `${pad}<div className="${className}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
-    const children = [node.children.map((childId) => walk(childId, depth + 1)).filter(Boolean).join('\n'), overlays]
+    if (node.type === 'boolean') {
+      const shape = booleanMarkup(node, doc, pad, 'jsx');
+      return `${pad}<div className="${className}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+    }
+    const paints = paintMarkup(node, pad, 'jsx');
+    if (node.children.length === 0) {
+      const inner = [paints, overlays].filter(Boolean).join('\n');
+      if (!inner) return `${pad}<div className="${className}" />`;
+      return `${pad}<div className="${className}">\n${inner}\n${pad}</div>`;
+    }
+    const children = [
+      paints,
+      node.children
+        .map((childId) => walk(childId, depth + 1, masking?.styles[childId]))
+        .filter(Boolean)
+        .join('\n'),
+      overlays,
+    ]
       .filter(Boolean)
       .join('\n');
     return `${pad}<div className="${className}">\n${children}\n${pad}</div>`;
@@ -154,10 +402,13 @@ export function toReact(rootId: string, doc: Doc, tokens: Token[] = []): Emitted
   const name = pascal(doc[rootId]?.name ?? 'Component');
 
   const shaderRuntime = usedShaders.size ? emitShaderRuntime([...usedShaders]) : '';
-  const stylesheet = rules.join('\n\n') + '\n';
+  // a web face the design uses has to come with it, or the export renders in a
+  // fallback and looks like a different design
+  const fonts = fontImports(rootId, doc, customFonts);
+  const stylesheet = fonts + rules.join('\n\n') + '\n';
   // only the tokens this subtree actually references — an export shouldn't drag
   // the whole theme along
-  const root = emitTokenRoot(stylesheet, tokens);
+  const root = emitTokenRoot(stylesheet, tokens, baseModes);
 
   const markup = `import './${slug(doc[rootId]?.name ?? 'component', rootId)}.css';
 ${usedShaders.size ? "import { Shader } from './Shader';\n" : ''}
@@ -171,14 +422,54 @@ ${shaderRuntime}`;
   return { markup, css: root + stylesheet };
 }
 
-/** Emits `:root { --name: value }` for every token the CSS refers to. */
-function emitTokenRoot(css: string, tokens: Token[]): string {
+/**
+ * `@import` lines for the web faces a subtree uses.
+ *
+ * Exported CSS that silently falls back to the system font is the classic
+ * handoff bug: the design and the build look different and nobody can say why.
+ */
+function fontImports(rootId: string, doc: Doc, custom: CustomFont[] = []): string {
+  const families = familiesIn(rootId, doc);
+  const fonts = webFontsIn(families);
+  // an uploaded face has to travel with the export, or it renders as a fallback
+  const used = custom.filter((font) =>
+    families.some((family) => family?.includes(`"${font.name}"`)),
+  );
+  const parts = [
+    ...fonts.map((font) => `@import url('${googleHref(font)}');`),
+    used.length ? fontFaceCss(used) : '',
+  ].filter(Boolean);
+  return parts.length ? `${parts.join('\n')}\n\n` : '';
+}
+
+/** Every font family used in a subtree, in document order. */
+function familiesIn(rootId: string, doc: Doc): (string | undefined)[] {
+  const out: (string | undefined)[] = [];
+  const walk = (id: string) => {
+    const node = doc[id];
+    if (!node) return;
+    if (node.font) out.push(node.font.family);
+    node.children.forEach(walk);
+  };
+  walk(rootId);
+  return out;
+}
+
+/**
+ * Emits `:root { --name: value }` for every variable the CSS refers to.
+ *
+ * These are the default mode of each collection; a frame that overrides one
+ * carries its own declarations in its own rule, so the export switches modes
+ * the same way the canvas does.
+ */
+function emitTokenRoot(css: string, tokens: Token[], modes: Record<string, string>): string {
   const used = tokens.filter((token) => css.includes(`var(--${token.name})`));
   if (!used.length) return '';
+  const byId = new Map(tokens.map((token) => [token.id, token]));
   // published the same way the canvas publishes them: a number is unitless,
   // and whoever uses it supplies the unit
   const declarations = used
-    .map((token) => `  --${token.name}: ${tokenCssValue(token)};`)
+    .map((token) => `  --${token.name}: ${publish(token, resolveToken(token, modes, byId))};`)
     .join('\n');
   return `:root {\n${declarations}\n}\n\n`;
 }
@@ -275,13 +566,25 @@ export function Shader({ id, params = {} }) {
 }
 
 /** Standalone HTML, styles inlined — paste into any page. */
-export function toHtml(rootId: string, doc: Doc, tokens: Token[] = []): string {
+export function toHtml(
+  rootId: string,
+  doc: Doc,
+  tokens: Token[] = [],
+  collections: Collection[] = [DEFAULT_COLLECTION],
+  customFonts: CustomFont[] = [],
+): string {
   const varNames = namesOf(tokens);
-  const walk = (id: string, depth: number): string => {
+  const baseModes = defaultModes(collections);
+  const walk = (id: string, depth: number, extra?: CSSProperties): string => {
     const node = doc[id];
     if (!node || !node.visible) return '';
     const pad = '  '.repeat(depth + 2);
-    const style = nodeStyle(node, doc, varNames);
+    const style = {
+      ...nodeStyle(node, doc, varNames),
+      ...extra,
+      ...modeVars(node, tokens, baseModes),
+    };
+    const masking = node.children.length ? maskStyles(node, doc) : null;
     if (depth === 0) {
       delete style.position;
       delete style.left;
@@ -301,10 +604,27 @@ export function toHtml(rootId: string, doc: Doc, tokens: Token[] = []): string {
       // a GPU surface has no static equivalent — React export carries the GLSL
       return `${pad}<div style="${inline}"><!-- shader: ${node.shader?.id} — export as React for the GLSL --></div>`;
     }
-    if (node.children.length === 0) {
-      return `${pad}<div style="${inline}">${overlays ? `\n${overlays}\n${pad}` : ''}</div>`;
+    if (paintsWithPath(node)) {
+      const shape = shapeMarkup(node, pad, 'html');
+      return `${pad}<div style="${inline}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
-    const children = [node.children.map((childId) => walk(childId, depth + 1)).filter(Boolean).join('\n'), overlays]
+    if (node.type === 'boolean') {
+      const shape = booleanMarkup(node, doc, pad, 'html');
+      return `${pad}<div style="${inline}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+    }
+    const paints = paintMarkup(node, pad, 'html');
+    if (node.children.length === 0) {
+      const inner = [paints, overlays].filter(Boolean).join('\n');
+      return `${pad}<div style="${inline}">${inner ? `\n${inner}\n${pad}` : ''}</div>`;
+    }
+    const children = [
+      paints,
+      node.children
+        .map((childId) => walk(childId, depth + 1, masking?.styles[childId]))
+        .filter(Boolean)
+        .join('\n'),
+      overlays,
+    ]
       .filter(Boolean)
       .join('\n');
     return `${pad}<div style="${inline}">\n${children}\n${pad}</div>`;
@@ -312,13 +632,25 @@ export function toHtml(rootId: string, doc: Doc, tokens: Token[] = []): string {
 
   const body = walk(rootId, 0);
   const used = tokens.filter((token) => body.includes(`var(--${token.name})`));
+  const byId = new Map(tokens.map((token) => [token.id, token]));
   const style = used.length
-    ? `\n    <style>:root {\n${used.map((t) => `      --${t.name}: ${t.value};`).join('\n')}\n    }</style>`
+    ? `\n    <style>:root {\n${used
+        .map((t) => `      --${t.name}: ${publish(t, resolveToken(t, baseModes, byId))};`)
+        .join('\n')}\n    }</style>`
     : '';
+
+  const families = familiesIn(rootId, doc);
+  const links = webFontsIn(families)
+    .map((font) => `\n    <link rel="stylesheet" href="${googleHref(font)}">`)
+    .join('');
+  const faces = customFonts.filter((font) =>
+    families.some((family) => family?.includes(`"${font.name}"`)),
+  );
+  const faceCss = faces.length ? `\n    <style>${fontFaceCss(faces)}</style>` : '';
 
   return `<!doctype html>
 <html>
-  <head>${style}
+  <head>${links}${faceCss}${style}
   </head>
   <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#EEEEEE">
 ${body}

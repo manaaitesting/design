@@ -3,7 +3,13 @@
 import { useMemo, useState } from 'react';
 import { Icon } from './ui/Icons';
 import { Segmented, Select } from './ui/Controls';
-import { useDoc, useTokens, useTokenVars } from './Session';
+import {
+  useCollections,
+  useCustomFonts,
+  useDoc,
+  useTokens,
+  useTokenVars,
+} from './Session';
 import { useUI, type ExportFormat } from '../state/ui';
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { download, nodeToPng, nodeToSvg, safeFilename } from '../export/raster';
@@ -30,6 +36,8 @@ export function ExportDialog() {
 
   const doc = useDoc();
   const tokens = useTokens();
+  const collections = useCollections();
+  const fonts = useCustomFonts();
   const tokenVars = useTokenVars();
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -42,10 +50,10 @@ export function ExportDialog() {
   const output = useMemo(() => {
     if (!target || !isCode) return { code: '', css: '' };
     if (format === 'react') {
-      const { markup, css } = toReact(targetId, doc, tokens);
+      const { markup, css } = toReact(targetId, doc, tokens, collections, fonts);
       return { code: markup, css };
     }
-    if (format === 'html') return { code: toHtml(targetId, doc, tokens), css: '' };
+    if (format === 'html') return { code: toHtml(targetId, doc, tokens, collections, fonts), css: '' };
     return { code: toJson(targetId, doc), css: '' };
   }, [doc, tokens, targetId, format, isCode, target]);
 

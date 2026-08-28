@@ -14,6 +14,8 @@ import { useUI as useUIStore } from '../state/ui';
 import type { Identity } from '../collab/identity';
 import type { Doc, SceneNode, StyleKind } from '../document/types';
 import type { Comment, DocStore, Style, Token } from '../document/store';
+import { defaultModes, publish, tokenVars, type Collection } from '../document/variables';
+import type { CustomFont } from '../lib/fonts';
 
 const SessionContext = createContext<Session | null>(null);
 
@@ -21,19 +23,22 @@ export function SessionProvider({
   room,
   identity,
   token,
+  readOnly = false,
   children,
 }: {
   room: string;
   identity: Identity;
   token: string;
+  /** this member may look but not touch — see `roleOf` in server/auth */
+  readOnly?: boolean;
   children: ReactNode;
 }) {
   const [session, setSession] = useState<Session | null>(null);
 
   useEffect(() => {
     // the session opens a WebSocket, so it must not be created during render/SSR
-    setSession(getSession(room, identity, token));
-  }, [room, identity, token]);
+    setSession(getSession(room, identity, token, readOnly));
+  }, [room, identity, token, readOnly]);
 
   useEffect(() => {
     // Development-only handle so the running document can be inspected and
@@ -77,6 +82,11 @@ export function useStore(): DocStore {
   return useSession().store;
 }
 
+/** True when this member can only look. The store refuses writes either way. */
+export function useReadOnly(): boolean {
+  return useSession().readOnly;
+}
+
 const EMPTY: Doc = {};
 
 export function useDoc(): Doc {
@@ -102,6 +112,26 @@ export function useTokens(): Token[] {
   return store.listTokens();
 }
 
+/** Faces uploaded into this document, for the menu and for `@font-face`. */
+export function useCustomFonts(): CustomFont[] {
+  const store = useStore();
+  useSyncExternalStore(store.subscribe, store.getRevision, () => 0);
+  return store.listFonts();
+}
+
+/** The variable collections, and the mode each is showing by default. */
+export function useCollections(): Collection[] {
+  const store = useStore();
+  useSyncExternalStore(store.subscribe, store.getRevision, () => 0);
+  return store.listCollections();
+}
+
+export function useDefaultModes(): Record<string, string> {
+  const collections = useCollections();
+  // a fresh object every render would defeat every memo downstream of it
+  return useMemo(() => defaultModes(collections), [collections]);
+}
+
 export function useStyles(kind?: StyleKind): Style[] {
   const store = useStore();
   useSyncExternalStore(store.subscribe, store.getRevision, () => 0);
@@ -122,12 +152,17 @@ export function useVarNames(): Record<string, string> {
   return names;
 }
 
-/** Tokens as CSS custom properties, applied to the canvas root. */
+/**
+ * Tokens as CSS custom properties, applied to the canvas root.
+ *
+ * These are the default mode of every collection. A frame that overrides a mode
+ * re-declares the same names on itself and the cascade takes over — see
+ * `document/variables`.
+ */
 export function useTokenVars(): Record<string, string> {
   const tokens = useTokens();
-  const vars: Record<string, string> = {};
-  for (const token of tokens) vars[`--${token.name}`] = cssValueOf(token);
-  return vars;
+  const modes = useDefaultModes();
+  return useMemo(() => tokenVars(tokens, modes), [tokens, modes]);
 }
 
 /**
@@ -138,9 +173,7 @@ export function useTokenVars(): Record<string, string> {
  * variable usable as a width and nowhere else.
  */
 export function cssValueOf(token: Token): string {
-  if (token.type !== 'number') return token.value;
-  const match = /-?\d*\.?\d+/.exec(String(token.value));
-  return match ? match[0] : token.value;
+  return publish(token, token.value);
 }
 
 /** Everyone else in the room, in a stable order so avatars don't shuffle. */
@@ -168,6 +201,10 @@ export function usePresence(): Presence[] {
         identity: presence.identity,
         cursor: presence.cursor ?? null,
         selection: presence.selection ?? [],
+        view: presence.view ?? null,
+        spotlight: !!presence.spotlight,
+        chat: presence.chat ?? null,
+        following: presence.following ?? null,
       });
     }
     return out.sort((a, b) => a.clientId - b.clientId);

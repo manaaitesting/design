@@ -590,4 +590,90 @@ export const Icon = {
       {at === 'bottom' && <path d="M3 13h10M6 3.6v7M10 6.6v4" />}
     </Svg>
   ),
+
+  // ── Shapes ─────────────────────────────────────────────────────────────
+  Polygon: () => (
+    <Svg>
+      <path d="M8 2.8 13.4 12.4H2.6L8 2.8Z" strokeLinejoin="round" />
+    </Svg>
+  ),
+  Star: () => (
+    <Svg>
+      <path
+        d="M8 2.4l1.7 3.9 4.2.4-3.2 2.8 1 4.1L8 11.4 4.3 13.6l1-4.1L2.1 6.7l4.2-.4L8 2.4Z"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  ),
+  Line: () => (
+    <Svg>
+      <path d="M3 13 13 3" />
+    </Svg>
+  ),
+  Arrow: () => (
+    <Svg>
+      <path d="M3 13 13 3M8.6 3H13v4.4" strokeLinejoin="round" />
+    </Svg>
+  ),
+  /** The vector-edit mark: a path with its anchors showing. */
+  Anchor: () => (
+    <Svg>
+      <path d="M3.6 11.4c0-4 2.4-6.8 8-7" />
+      <rect x={2} y={10} width={3} height={3} fill="#fff" strokeWidth={1.2} />
+      <rect x={11} y={3} width={3} height={3} fill="#fff" strokeWidth={1.2} />
+    </Svg>
+  ),
+  /** Boolean operations, drawn the way Figma draws them: two overlapping discs. */
+  Boolean: ({ op }: { op: 'union' | 'subtract' | 'intersect' | 'exclude' }) => (
+    <Svg>
+      {op === 'union' && (
+        <path
+          d="M6.2 3.4a2.8 2.8 0 0 0-2.8 2.8v3.6a2.8 2.8 0 0 0 2.8 2.8h3.6a2.8 2.8 0 0 0 2.8-2.8V6.2a2.8 2.8 0 0 0-2.8-2.8H6.2Z"
+          fill="currentColor"
+          fillOpacity={0.25}
+        />
+      )}
+      {op !== 'union' && (
+        <>
+          <rect x={2.6} y={2.6} width={7.2} height={7.2} rx={1.4} />
+          <rect x={6.2} y={6.2} width={7.2} height={7.2} rx={1.4} />
+        </>
+      )}
+      {op === 'intersect' && (
+        <rect x={6.2} y={6.2} width={3.6} height={3.6} fill="currentColor" strokeWidth={0} />
+      )}
+      {op === 'subtract' && (
+        <path d="M2.6 4a1.4 1.4 0 0 1 1.4-1.4h4.4A1.4 1.4 0 0 1 9.8 4v2.2H6.2v3.6H4A1.4 1.4 0 0 1 2.6 8.4V4Z" fill="currentColor" fillOpacity={0.3} strokeWidth={0} />
+      )}
+      {op === 'exclude' && (
+        <>
+          <path d="M2.6 4a1.4 1.4 0 0 1 1.4-1.4h4.4A1.4 1.4 0 0 1 9.8 4v2.2H6.2v3.6H4A1.4 1.4 0 0 1 2.6 8.4V4Z" fill="currentColor" fillOpacity={0.3} strokeWidth={0} />
+          <path d="M9.8 6.2h2.2a1.4 1.4 0 0 1 1.4 1.4V12a1.4 1.4 0 0 1-1.4 1.4H7.6A1.4 1.4 0 0 1 6.2 12V9.8h3.6V6.2Z" fill="currentColor" fillOpacity={0.3} strokeWidth={0} />
+        </>
+      )}
+    </Svg>
+  ),
+  /** A mask: the shape below deciding what of the layer above shows. */
+  Mask: () => (
+    <Svg>
+      <circle cx={6.4} cy={8} r={4.4} />
+      <path d="M6.4 3.6a4.4 4.4 0 0 1 0 8.8 4.4 4.4 0 0 0 4.4-4.4 4.4 4.4 0 0 0-4.4-4.4Z" fill="currentColor" strokeWidth={0} />
+      <rect x={7.6} y={4.2} width={5.8} height={7.6} rx={1} strokeDasharray="1.6 1.3" strokeWidth={1} />
+    </Svg>
+  ),
+  /** A slice: a region marked for export, drawn as a dashed crop. */
+  Slice: () => (
+    <Svg>
+      <path d="M3 3h10v10H3z" strokeDasharray="2 1.6" />
+      <path d="M6 1.6v2M10 12.4v2M1.6 10h2M12.4 6h2" strokeWidth={1.2} />
+    </Svg>
+  ),
+
+  /** Rulers down two edges of the canvas. */
+  Ruler: () => (
+    <Svg>
+      <path d="M2.6 2.6h10.8M2.6 2.6v10.8" strokeWidth={1.3} />
+      <path d="M5.4 2.6v2M8 2.6v3M10.6 2.6v2M2.6 5.4h2M2.6 8h3M2.6 10.6h2" strokeWidth={1} />
+    </Svg>
+  ),
 };

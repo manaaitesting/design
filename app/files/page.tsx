@@ -2,7 +2,13 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { currentUser } from '../../src/server/auth';
 import { listFiles, listMembers } from '../../src/server/db';
-import { deleteFileAction, newFile, renameFileAction, signOut } from '../../src/server/actions';
+import {
+  deleteFileAction,
+  duplicateFileAction,
+  newFile,
+  renameFileAction,
+  signOut,
+} from '../../src/server/actions';
 import { Icon } from '../../src/components/ui/Icons';
 import { ShareControl } from '../../src/components/ShareControl';
 import { readableOn } from '../../src/lib/color';
@@ -108,13 +114,16 @@ export default async function FilesPage() {
                     overflow: 'hidden',
                   }}
                 >
+                  {/* the editor captures a picture of the first artboard; the
+                      gradient is what a file that has never been opened gets */}
                   <Link
                     href={`/f/${file.id}`}
                     style={{
                       display: 'block',
                       height: 120,
-                      background:
-                        'radial-gradient(at 22% 26%, #BDEE63 0px, transparent 55%), radial-gradient(at 78% 20%, #4CC3F0 0px, transparent 50%), radial-gradient(at 55% 85%, #9B7BF0 0px, transparent 55%), #F7F7F7',
+                      background: file.thumbnail
+                        ? `#F7F7F7 url(${file.thumbnail}) center / contain no-repeat`
+                        : 'radial-gradient(at 22% 26%, #BDEE63 0px, transparent 55%), radial-gradient(at 78% 20%, #4CC3F0 0px, transparent 50%), radial-gradient(at 55% 85%, #9B7BF0 0px, transparent 55%), #F7F7F7',
                       borderBottom: '1px solid var(--color-line)',
                     }}
                   />
@@ -178,17 +187,23 @@ export default async function FilesPage() {
                       </div>
                     </div>
 
-                    {owned && (
-                      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                        <ShareControl fileId={file.id} />
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                      {owned && <ShareControl fileId={file.id} />}
+                      <form action={duplicateFileAction}>
+                        <input type="hidden" name="id" value={file.id} />
+                        <button type="submit" className="btn" title="Make a copy you own">
+                          Duplicate
+                        </button>
+                      </form>
+                      {owned && (
                         <form action={deleteFileAction}>
                           <input type="hidden" name="id" value={file.id} />
                           <button type="submit" className="btn" title="Delete file">
                             Delete
                           </button>
                         </form>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
               );

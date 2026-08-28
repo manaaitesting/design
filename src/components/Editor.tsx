@@ -4,6 +4,10 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Canvas } from './Canvas';
 import { ContextMenu } from './ContextMenu';
 import { ExportDialog } from './ExportDialog';
+import { FontFaces } from './FontFaces';
+import { Thumbnail } from './Thumbnail';
+import { History } from './History';
+import { Palette } from './Palette';
 import { Inspector } from './Inspector';
 import { LeftPanel } from './LeftPanel';
 import { Present } from './Present';
@@ -13,7 +17,7 @@ import { ShadersModal } from './ShadersModal';
 import { ToolRail } from './ToolRail';
 import { useDoc, useStore, useTokenVars } from './Session';
 import { PANEL, useUI, type Tool } from '../state/ui';
-import { ROOT_ID, type Doc } from '../document/types';
+import { ROOT_ID, type BooleanOp, type Doc } from '../document/types';
 import { firstChild, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
 import { readNodes, writeNodes } from '../lib/clipboard';
@@ -22,13 +26,29 @@ import { download, safeFilename } from '../export/raster';
 
 const TOOL_KEYS: Record<string, Tool> = {
   v: 'move',
+  k: 'scale',
   h: 'pan',
   f: 'frame',
   r: 'rect',
   o: 'ellipse',
+  l: 'line',
   p: 'pen',
+  s: 'slice',
   t: 'text',
   c: 'comment',
+};
+
+/** Tools that need ⇧ — Figma puts the arrow behind the line this way. */
+const SHIFT_TOOL_KEYS: Record<string, Tool> = {
+  l: 'arrow',
+};
+
+/** Figma's boolean shortcuts, by the key each one is bound to. */
+const BOOLEAN_KEYS: Record<string, BooleanOp> = {
+  KeyU: 'union',
+  KeyS: 'subtract',
+  KeyI: 'intersect',
+  KeyX: 'exclude',
 };
 
 function isTyping(target: EventTarget | null): boolean {
@@ -127,8 +147,21 @@ export function Editor({ fileName }: { fileName: string }) {
         return;
       }
 
+      // ⌘/ or ⌘K — quick actions. Checked before anything else so it opens
+      // from wherever you are, including inside a panel field.
+      // ⌥ is not part of this one: ⌥⌘K is "create component", and swallowing
+      // it here would quietly break the menu's own shortcut
+      if (mod && !event.altKey && (event.key === '/' || event.key.toLowerCase() === 'k')) {
+        event.preventDefault();
+        ui.setPaletteOpen(!ui.paletteOpen);
+        return;
+      }
+
       if (event.key === 'Escape') {
-        if (ui.exportOpen) ui.setExportOpen(false);
+        if (ui.paletteOpen) ui.setPaletteOpen(false);
+        else if (ui.vectorEdit) ui.setVectorEdit(null);
+        else if (ui.historyOpen) ui.setHistoryOpen(false);
+        else if (ui.exportOpen) ui.setExportOpen(false);
         else if (ui.shadersOpen) ui.setShadersOpen(false);
         else if (ui.editing) ui.setEditing(null);
         else if (ui.contextMenu) ui.setContextMenu(null);
@@ -161,6 +194,12 @@ export function Editor({ fileName }: { fileName: string }) {
 
       // ── Walking the tree ───────────────────────────────────────────────
       if (event.key === 'Enter' && selection.length === 1 && !event.shiftKey) {
+        // a path has points rather than children; ⏎ edits them
+        if (doc[selection[0]]?.type === 'vector') {
+          event.preventDefault();
+          ui.setVectorEdit(selection[0]);
+          return;
+        }
         const child = firstChild(selection[0], doc);
         if (child) {
           event.preventDefault();
@@ -193,6 +232,35 @@ export function Editor({ fileName }: { fileName: string }) {
         store.createComponent(selection[0]);
         return;
       }
+      if (mod && event.altKey && BOOLEAN_KEYS[event.code] && selection.length > 1) {
+        event.preventDefault();
+        const combined = store.booleanGroup(selection, BOOLEAN_KEYS[event.code]);
+        if (combined) select([combined]);
+        return;
+      }
+      // ⌃⌘M — use the selection as a mask, as Figma binds it
+      if (event.ctrlKey && event.metaKey && event.code === 'KeyM' && selection.length) {
+        event.preventDefault();
+        store.toggleMask(selection);
+        return;
+      }
+      // ⌘E — flatten to one editable path, as Figma binds it
+      if (mod && !event.shiftKey && event.code === 'KeyE' && selection.length) {
+        event.preventDefault();
+        const flattened = store.flatten(selection);
+        if (flattened) {
+          select([flattened]);
+          ui.setVectorEdit(flattened);
+        }
+        return;
+      }
+      // ⇧⌘O — turn a stroke into a shape
+      if (mod && event.shiftKey && event.code === 'KeyO' && selection.length) {
+        event.preventDefault();
+        const made = store.outlineStroke(selection);
+        if (made.length) select(made);
+        return;
+      }
       if (mod && event.altKey && event.code === 'KeyC' && selection.length) {
         event.preventDefault();
         copyProperties(doc, selection);
@@ -201,6 +269,11 @@ export function Editor({ fileName }: { fileName: string }) {
       if (mod && event.altKey && event.code === 'KeyV' && selection.length) {
         event.preventDefault();
         pasteProperties(store, selection);
+        return;
+      }
+      if (!mod && event.shiftKey && event.code === 'KeyR') {
+        event.preventDefault();
+        ui.toggleRulers();
         return;
       }
       if (mod && event.shiftKey && event.code === 'KeyR' && selection.length) {
@@ -280,7 +353,18 @@ export function Editor({ fileName }: { fileName: string }) {
         return;
       }
 
+      // ⇧D — the handoff panel, where Figma puts Dev Mode
+      if (!mod && event.shiftKey && event.code === 'KeyD') {
+        event.preventDefault();
+        ui.setInspectorTab(ui.inspectorTab === 'inspect' ? 'design' : 'inspect');
+        return;
+      }
+
       // ── Tools ──────────────────────────────────────────────────────────
+      if (!mod && event.shiftKey && SHIFT_TOOL_KEYS[event.key.toLowerCase()]) {
+        ui.setTool(SHIFT_TOOL_KEYS[event.key.toLowerCase()]);
+        return;
+      }
       if (!mod && !event.shiftKey && TOOL_KEYS[event.key.toLowerCase()]) {
         ui.setTool(TOOL_KEYS[event.key.toLowerCase()]);
         return;
@@ -312,6 +396,12 @@ export function Editor({ fileName }: { fileName: string }) {
       if (mod && event.shiftKey && event.key.toLowerCase() === 'e') {
         event.preventDefault();
         ui.setExportOpen(true);
+        return;
+      }
+      // ⌥⌘H — the snapshots the sync server has been keeping all along
+      if (mod && event.altKey && event.code === 'KeyH') {
+        event.preventDefault();
+        ui.setHistoryOpen(true);
         return;
       }
       if (mod && event.shiftKey && event.key.toLowerCase() === 'h' && selection.length) {
@@ -392,6 +482,8 @@ export function Editor({ fileName }: { fileName: string }) {
 
   return (
     <div className="fig-shell" style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      <FontFaces />
+      <Thumbnail />
       {leftPanel && <LeftPanel fileName={fileName} />}
       {leftPanel && (
         <Resizer
@@ -423,6 +515,8 @@ export function Editor({ fileName }: { fileName: string }) {
       <ContextMenu />
       <ShadersModal />
       <ExportDialog />
+      <History />
+      <Palette />
       <Present />
     </div>
   );

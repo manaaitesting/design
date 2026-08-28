@@ -1,4 +1,5 @@
-import type { Doc, FlexSpec, FontSpec, NodeType, SceneNode } from './types';
+import { cloneAnchor } from './geometry';
+import type { BooleanOp, Doc, FlexSpec, FontSpec, NodeType, SceneNode } from './types';
 
 export const DEFAULT_FLEX: FlexSpec = {
   mode: 'flex',
@@ -108,11 +109,41 @@ const PER_TYPE: Partial<Record<NodeType, Partial<SceneNode>>> = {
   vector: {
     fill: null,
     clip: false,
-    points: [],
+    anchors: [],
     closed: false,
     smooth: 0,
     border: { width: 2, color: '#111111', style: 'solid', position: 'center' },
   },
+  polygon: { fill: '#DDDDDD', clip: false, sides: 3 },
+  star: { fill: '#DDDDDD', clip: false, sides: 5, innerRatio: 0.4 },
+  line: {
+    fill: null,
+    clip: false,
+    h: 0,
+    hMode: 'fixed',
+    border: { width: 2, color: '#111111', style: 'solid', position: 'center' },
+  },
+  arrow: {
+    fill: null,
+    clip: false,
+    h: 0,
+    hMode: 'fixed',
+    border: { width: 2, color: '#111111', style: 'solid', position: 'center' },
+  },
+  // a boolean group paints its children's combined outline, so its own box is
+  // transparent and never clips — the same deal a group frame gets
+  boolean: { fill: '#DDDDDD', clip: false, op: 'union' },
+  // A slice paints nothing at all: it is a region to export, and the whole
+  // point is that what comes out is whatever was under it.
+  slice: { fill: null, fillVisible: false, clip: false, w: 200, h: 200 },
+};
+
+/** What a boolean group is called, by operation — Figma names them this way. */
+export const BOOLEAN_LABEL: Record<BooleanOp, string> = {
+  union: 'Union',
+  subtract: 'Subtract',
+  intersect: 'Intersect',
+  exclude: 'Exclude',
 };
 
 export const TYPE_LABEL: Record<NodeType, string> = {
@@ -125,6 +156,12 @@ export const TYPE_LABEL: Record<NodeType, string> = {
   image: 'Image',
   shader: 'Shader',
   vector: 'Vector',
+  polygon: 'Polygon',
+  star: 'Star',
+  line: 'Line',
+  arrow: 'Arrow',
+  boolean: 'Union',
+  slice: 'Slice',
 };
 
 /**
@@ -165,5 +202,6 @@ export function makeNode(
     shader: patch.shader ? { id: patch.shader.id, params: { ...patch.shader.params } } : undefined,
     radii: patch.radii ? ([...patch.radii] as [number, number, number, number]) : null,
     points: patch.points ? patch.points.map((point) => [...point] as [number, number]) : perType.points,
+    anchors: patch.anchors ? patch.anchors.map(cloneAnchor) : perType.anchors,
   };
 }

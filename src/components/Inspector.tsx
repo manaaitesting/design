@@ -22,12 +22,32 @@ import { InstancePropsSection, PropBindingRow, PropertiesSection } from './Compo
 import { StyleBadge, StylePicker } from './StylePicker';
 import { VariableMenu, variableLabel } from './VariablePicker';
 import { Presence } from './Presence';
-import { useDoc, useStore, useTokens, useTokenVars, useVarNames } from './Session';
+import { Inspect } from './Inspect';
+import {
+  useCollections,
+  useCustomFonts,
+  useDoc,
+  useStore,
+  useTokens,
+  useTokenVars,
+  useVarNames,
+} from './Session';
+import { canHoldModes, inScope } from '../document/variables';
 import { useUI } from '../state/ui';
 import { resolveColor } from './ui/color';
 import { measureChildren } from '../lib/measure';
+import {
+  customFamilies,
+  ensureFont,
+  FONTS,
+  readFontFile,
+  WEIGHT_LABEL,
+  weightsFor,
+} from '../lib/fonts';
+import { ADJUST_LABEL, isNeutral, NO_ADJUST, type ImageAdjust } from '../document/adjust';
 import { DEFAULT_FONT, DEFAULT_GUIDES, TYPE_LABEL } from '../document/defaults';
 import { nodeToSvg } from '../export/raster';
+import { runExports } from '../export/run';
 import { defaultParams, SHADER_BY_ID, SHADERS } from '../webgl/shaders';
 import {
   descendants,
@@ -50,12 +70,16 @@ import {
   type Paint,
   type SceneNode,
   type SizeMode,
+  type ExportSetting,
 } from '../document/types';
 import type { PaintType } from './ui/PaintPicker';
 import {
+  DEFAULT_OVERLAY,
   destinationsOn,
   flowsOn,
+  frameOf,
   interactionsOf,
+  needsDestination,
   nextFlowName,
 } from '../document/prototype';
 
@@ -94,19 +118,7 @@ const STROKE_POSITIONS: FigOption<'inside' | 'center' | 'outside'>[] = [
   { value: 'outside', label: 'Outside' },
 ];
 
-const FONT_FAMILIES: FigOption<string>[] = [
-  { value: 'Inter, system-ui, sans-serif', label: 'Inter' },
-  { value: 'ui-serif, Georgia, serif', label: 'Georgia' },
-  { value: 'ui-monospace, SFMono-Regular, monospace', label: 'SF Mono' },
-];
 
-const FONT_WEIGHTS: FigOption<string>[] = [
-  { value: '300', label: 'Light' },
-  { value: '400', label: 'Regular' },
-  { value: '500', label: 'Medium' },
-  { value: '600', label: 'Semi Bold' },
-  { value: '700', label: 'Bold' },
-];
 
 // ── Panel ────────────────────────────────────────────────────────────────
 
@@ -145,10 +157,21 @@ export function Inspector() {
         >
           Prototype
         </button>
+        <button
+          type="button"
+          className="fig-tab"
+          data-on={tab === 'inspect'}
+          title="Inspect  ⇧D"
+          onClick={() => setTab('inspect')}
+        >
+          Inspect
+        </button>
       </div>
 
       {tab === 'prototype' ? (
         <PrototypeTab node={node} />
+      ) : tab === 'inspect' ? (
+        <Inspect node={node} />
       ) : (
         <div className="scroll" style={{ flex: 1 }}>
           {!node ? (
@@ -162,6 +185,8 @@ export function Inspector() {
               <PositionSection node={node} nodes={nodes} set={set} />
               <LayoutSection node={node} nodes={nodes} set={set} />
               <AppearanceSection node={node} nodes={nodes} set={set} />
+              <ShapeSection node={node} nodes={nodes} set={set} />
+              <ModesSection node={node} />
               {node.type === 'text' && <TypographySection node={node} set={set} />}
               {node.type === 'shader' && <ShaderSection node={node} set={set} />}
               {node.type !== 'shader' && <FillSection node={node} nodes={nodes} set={set} />}
@@ -170,7 +195,12 @@ export function Inspector() {
               <SelectionColors />
               {node.type === 'frame' && <GuidesSection node={node} set={set} />}
               {node.type === 'frame' && <VideoSection node={node} set={set} />}
-              <ExportSection node={node} onExport={() => setExportOpen(true)} />
+              <ExportSection
+                node={node}
+                nodes={nodes}
+                set={set}
+                onExport={() => setExportOpen(true)}
+              />
             </>
           )}
         </div>
@@ -328,6 +358,7 @@ function ComponentSection({ node }: { node: SceneNode }) {
               Place instance
             </FigButton>
           </div>
+          <ComponentDocs node={node} editable />
         </>
       ) : (
         <>
@@ -353,6 +384,7 @@ function ComponentSection({ node }: { node: SceneNode }) {
               </FigButton>
             )}
           </div>
+          {main && <ComponentDocs node={main} />}
           <div className="fig-row">
             <FigButton style={{ flex: 1, justifyContent: 'center' }} onClick={() => store.resetInstance(node.id)}>
               Reset overrides
@@ -384,6 +416,61 @@ function PageSection() {
         onColor={(fill) => store.update(page.id, { fill })}
       />
     </FigSection>
+  );
+}
+
+/**
+ * What a component is for.
+ *
+ * Shown on the main, where it is written, and on an instance, where it is
+ * needed — the person reaching for a component is usually not the person who
+ * made it, and a name alone rarely says which of two similar things to take.
+ */
+function ComponentDocs({ node, editable = false }: { node: SceneNode; editable?: boolean }) {
+  const store = useStore();
+  const description = node.description ?? '';
+  const docs = node.docs ?? '';
+  if (!editable && !description && !docs) return null;
+
+  return (
+    <>
+      {editable ? (
+        <>
+          <div className="fig-row" style={{ alignItems: 'flex-start' }}>
+            <textarea
+              className="fig-annotation"
+              defaultValue={description}
+              placeholder="What is this component for?"
+              onKeyDown={(event) => event.stopPropagation()}
+              onBlur={(event) => store.update(node.id, { description: event.target.value.trim() })}
+            />
+          </div>
+          <div className="fig-row">
+            <FigText
+              value={docs}
+              placeholder="Documentation link"
+              onChange={(value) => store.update(node.id, { docs: value.trim() })}
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          {description && <div className="fig-note">{description}</div>}
+          {docs && (
+            <div className="fig-row">
+              <a
+                href={docs}
+                target="_blank"
+                rel="noreferrer noopener"
+                style={{ color: 'var(--fig-blue)' }}
+              >
+                Documentation
+              </a>
+            </div>
+          )}
+        </>
+      )}
+    </>
   );
 }
 
@@ -424,6 +511,8 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
               />
             ))}
           </FigSection>
+
+          <ScrollSection node={node} />
 
           {isFrame && (
             <FigSection
@@ -473,9 +562,66 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
   );
 }
 
+/**
+ * How a layer behaves while the prototype is playing.
+ *
+ * A frame says whether it scrolls; a layer inside one says whether it goes with
+ * the content or stays put. Neither has any effect on the canvas — a board on
+ * the canvas is flat however tall its content is, exactly as in Figma.
+ */
+function ScrollSection({ node }: { node: SceneNode }) {
+  const store = useStore();
+  const doc = useDoc();
+  const parent = node.parent ? doc[node.parent] : null;
+  const container = node.type === 'frame' || node.type === 'section';
+  const inFrame = !!parent && parent.type === 'frame';
+  if (!container && !inFrame) return null;
+
+  return (
+    <FigSection title="Scroll behaviour">
+      {container && (
+        <>
+          <FigLabel>Overflow</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigSelect
+              value={node.scroll ?? 'none'}
+              options={[
+                { value: 'none', label: 'No scrolling' },
+                { value: 'vertical', label: 'Vertical' },
+                { value: 'horizontal', label: 'Horizontal' },
+                { value: 'both', label: 'Both' },
+              ]}
+              title="How this frame scrolls when it is played"
+              onChange={(scroll) => store.update(node.id, { scroll })}
+            />
+          </div>
+        </>
+      )}
+      {inFrame && (
+        <>
+          <FigLabel>Position when scrolling</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigGroup
+              value={node.scrollBehavior ?? 'scrolls'}
+              onChange={(scrollBehavior) => store.update(node.id, { scrollBehavior })}
+              options={[
+                { value: 'scrolls', label: 'Scrolls', title: 'Moves with the content' },
+                { value: 'fixed', label: 'Fixed', title: 'Stays where it is' },
+                { value: 'sticky', label: 'Sticky', title: 'Sticks when it reaches the edge' },
+              ]}
+            />
+          </div>
+        </>
+      )}
+    </FigSection>
+  );
+}
+
 const TRIGGERS: FigOption<Trigger>[] = [
   { value: 'click', label: 'On click' },
   { value: 'hover', label: 'While hovering' },
+  { value: 'mouse-enter', label: 'Mouse enter' },
+  { value: 'mouse-leave', label: 'Mouse leave' },
   { value: 'press', label: 'While pressing' },
   { value: 'delay', label: 'After delay' },
 ];
@@ -483,16 +629,30 @@ const TRIGGERS: FigOption<Trigger>[] = [
 const ACTIONS: FigOption<InteractionAction>[] = [
   { value: 'navigate', label: 'Navigate to' },
   { value: 'back', label: 'Back' },
-  { value: 'url', label: 'Open link' },
+  { value: 'open-overlay', label: 'Open overlay', divider: true },
+  { value: 'close-overlay', label: 'Close overlay' },
+  { value: 'scroll-to', label: 'Scroll to' },
+  { value: 'url', label: 'Open link', divider: true },
   { value: 'none', label: 'None' },
 ];
 
 const TRANSITIONS: FigOption<TransitionType>[] = [
   { value: 'instant', label: 'Instant' },
   { value: 'dissolve', label: 'Dissolve' },
+  { value: 'smart-animate', label: 'Smart animate' },
   { value: 'move', label: 'Move in' },
   { value: 'push', label: 'Push' },
   { value: 'slide', label: 'Slide in' },
+];
+
+const OVERLAY_POSITIONS: FigOption<NonNullable<Interaction['overlay']>['position']>[] = [
+  { value: 'center', label: 'Center' },
+  { value: 'top', label: 'Top center' },
+  { value: 'bottom', label: 'Bottom center' },
+  { value: 'top-left', label: 'Top left' },
+  { value: 'top-right', label: 'Top right' },
+  { value: 'bottom-left', label: 'Bottom left' },
+  { value: 'bottom-right', label: 'Bottom right' },
 ];
 
 const DIRECTIONS: FigOption<TransitionDirection>[] = [
@@ -519,9 +679,24 @@ function InteractionRow({
   frames: SceneNode[];
 }) {
   const store = useStore();
+  const doc = useDoc();
+  const variables = useTokens();
+  // Scroll-to points at a layer rather than a frame, so it offers the layers of
+  // the artboard this interaction lives on.
+  const scrollTargets = (() => {
+    const frame = frameOf(node.id, doc);
+    if (!frame) return [];
+    return descendants(frame, doc)
+      .map((id) => doc[id])
+      .filter((entry): entry is SceneNode => !!entry && entry.id !== node.id);
+  })();
   const set = (patch: Partial<Interaction>) =>
     store.updateInteraction(node.id, interaction.id, patch);
-  const moves = interaction.transition.type !== 'instant' && interaction.transition.type !== 'dissolve';
+  const moves =
+    interaction.transition.type !== 'instant' &&
+    interaction.transition.type !== 'dissolve' &&
+    interaction.transition.type !== 'smart-animate';
+  const overlay = interaction.overlay ?? DEFAULT_OVERLAY;
 
   return (
     <div className="fig-interaction">
@@ -538,6 +713,19 @@ function InteractionRow({
           <Icon.Minus />
         </FigButton>
       </div>
+
+      {interaction.trigger === 'key' && (
+        <>
+          <FigLabel>Key</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigText
+              value={interaction.key ?? ''}
+              placeholder="Press a key…"
+              onChange={(key) => set({ key })}
+            />
+          </div>
+        </>
+      )}
 
       {interaction.trigger === 'delay' && (
         <>
@@ -565,17 +753,53 @@ function InteractionRow({
         />
       </div>
 
-      {interaction.action === 'navigate' && (
+      {needsDestination(interaction.action) && (
         <>
-          <FigLabel>Destination</FigLabel>
+          <FigLabel>{interaction.action === 'scroll-to' ? 'Layer' : 'Destination'}</FigLabel>
           <div className="fig-row" style={{ marginTop: 0 }}>
             <FigSelect
               value={interaction.destination ?? ''}
               options={[
-                { value: '', label: 'Pick a frame' },
-                ...frames.map((frame) => ({ value: frame.id, label: frame.name })),
+                { value: '', label: interaction.action === 'scroll-to' ? 'Pick a layer' : 'Pick a frame' },
+                ...(interaction.action === 'scroll-to' ? scrollTargets : frames).map((entry) => ({
+                  value: entry.id,
+                  label: entry.name,
+                })),
               ]}
               onChange={(destination) => set({ destination: destination || null })}
+            />
+          </div>
+        </>
+      )}
+
+      {interaction.action === 'open-overlay' && (
+        <>
+          <FigLabel>Position</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigSelect
+              value={overlay.position}
+              options={OVERLAY_POSITIONS}
+              onChange={(position) => set({ overlay: { ...overlay, position } })}
+            />
+          </div>
+          <div className="fig-row">
+            <FigGroup
+              value={overlay.background ? 'dim' : 'none'}
+              onChange={(value) => set({ overlay: { ...overlay, background: value === 'dim' } })}
+              options={[
+                { value: 'none', label: 'Clear', title: 'No background behind the overlay' },
+                { value: 'dim', label: 'Dim', title: 'Dim what is behind the overlay' },
+              ]}
+            />
+            <FigGroup
+              value={overlay.closeOnOutside ? 'outside' : 'stay'}
+              onChange={(value) =>
+                set({ overlay: { ...overlay, closeOnOutside: value === 'outside' } })
+              }
+              options={[
+                { value: 'outside', label: 'Click out', title: 'A click outside closes it' },
+                { value: 'stay', label: 'Stay', title: 'Only an action closes it' },
+              ]}
             />
           </div>
         </>
@@ -589,6 +813,33 @@ function InteractionRow({
             onChange={(url) => set({ url })}
           />
         </div>
+      )}
+
+      {interaction.action === 'set-variable' && (
+        <>
+          <FigLabel>Variable</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigSelect
+              value={interaction.variable ?? ''}
+              options={[
+                { value: '', label: 'Pick a variable' },
+                ...variables.map((token) => ({ value: token.id, label: token.name })),
+              ]}
+              onChange={(variable) => set({ variable: variable || undefined })}
+            />
+          </div>
+          <div className="fig-row">
+            <FigText
+              value={interaction.value ?? ''}
+              placeholder="the value to set"
+              onChange={(value) => set({ value })}
+            />
+          </div>
+          <div className="fig-note">
+            Set while the prototype is playing; the document keeps the value you
+            designed with.
+          </div>
+        </>
       )}
 
       {interaction.action !== 'none' && (
@@ -1043,6 +1294,7 @@ function LayoutSection({
           <Icon.AspectLock />
         </FigButton>
       </div>
+      <BoundsRow node={node} nodes={nodes} set={set} />
       </FigGroupSet>
 
       {resizable && (
@@ -1085,6 +1337,88 @@ function LayoutSection({
         </label>
       )}
     </div>
+  );
+}
+
+/**
+ * Minimum and maximum size.
+ *
+ * They stay behind a toggle because most layers never need them, and a panel
+ * that shows four more fields to everyone is a panel nobody reads. Once a bound
+ * is set the row stays open, so a layer never carries a constraint you cannot
+ * see. An empty field means "no bound", which is why these are nullable rather
+ * than 0 and Infinity.
+ */
+function BoundsRow({
+  node,
+  nodes,
+  set,
+}: {
+  node: SceneNode;
+  nodes: SceneNode[];
+  set: Setter;
+}) {
+  const has =
+    node.minW != null || node.maxW != null || node.minH != null || node.maxH != null;
+  const [open, setOpen] = useState(has);
+
+  if (!open) {
+    return (
+      <div className="fig-row">
+        <button
+          type="button"
+          className="fig-btn"
+          style={{ padding: 0, gap: 6, color: 'var(--fig-icon-3)' }}
+          onClick={() => setOpen(true)}
+        >
+          <Icon.Plus />
+          Add min and max size
+        </button>
+      </div>
+    );
+  }
+
+  const field = (
+    key: 'minW' | 'maxW' | 'minH' | 'maxH',
+    glyph: string,
+    title: string,
+    fallback: number,
+  ) => (
+    <FigField
+      value={shared(nodes, (n) => n[key] ?? fallback)}
+      glyph={glyph}
+      min={1}
+      title={title}
+      placeholder="–"
+      onChange={(value) => set({ [key]: value })}
+    />
+  );
+
+  return (
+    <>
+      <div className="fig-row">
+        {field('minW', 'W', 'Minimum width', 1)}
+        {field('maxW', 'W', 'Maximum width', Math.round(node.w))}
+        <FigButton
+          title="Remove min and max size"
+          onClick={() => {
+            set({ minW: null, maxW: null, minH: null, maxH: null });
+            setOpen(false);
+          }}
+        >
+          <FigIcon name="Remove" />
+        </FigButton>
+      </div>
+      <div className="fig-row">
+        {field('minH', 'H', 'Minimum height', 1)}
+        {field('maxH', 'H', 'Maximum height', Math.round(node.h))}
+        <span style={{ width: 24, flex: 'none' }} />
+      </div>
+      <div className="fig-note" style={{ paddingLeft: 10 }}>
+        Min and max apply while the layer is being laid out — they bound hugging
+        and filling, not just a drag.
+      </div>
+    </>
   );
 }
 
@@ -1888,10 +2222,227 @@ function ExportOptions({
 
 // ── Typography ───────────────────────────────────────────────────────────
 
+
+/**
+ * Variable modes.
+ *
+ * Figma puts this on the frame because that is where a mode is useful: a card
+ * set to Dark shows the dark values of every variable in that collection, and
+ * everything inside it follows. Here it is the CSS cascade doing the work —
+ * the frame re-declares those custom properties on itself — so the same switch
+ * survives export with no runtime behind it.
+ */
+function ModesSection({ node }: { node: SceneNode }) {
+  const store = useStore();
+  const collections = useCollections();
+  const withModes = collections.filter((collection) => collection.modes.length > 1);
+  if (!canHoldModes(node) || !withModes.length) return null;
+
+  return (
+    <FigSection title="Variable modes">
+      {withModes.map((collection) => (
+        <div className="fig-row" key={collection.id}>
+          <FigLabel>{collection.name}</FigLabel>
+          <FigSelect
+            value={node.modes?.[collection.id] ?? 'auto'}
+            options={[
+              { value: 'auto', label: 'Inherit' },
+              ...collection.modes.map((mode) => ({ value: mode.id, label: mode.name })),
+            ]}
+            title={`${collection.name} mode`}
+            onChange={(modeId) =>
+              store.setNodeMode(node.id, collection.id, modeId === 'auto' ? null : modeId)
+            }
+          />
+        </div>
+      ))}
+    </FigSection>
+  );
+}
+
+/**
+ * The parametric part of a shape.
+ *
+ * A polygon is a count, a star is a count and a ratio, an arc is two angles and
+ * a hole — the numbers Figma keeps beside the shape rather than in the geometry,
+ * so changing one re-draws the shape instead of asking you to move every point.
+ * A boolean group's operation lives here too, because that is the same kind of
+ * property: one control that re-evaluates the whole outline.
+ */
+function ShapeSection({
+  node,
+  nodes,
+  set,
+}: {
+  node: SceneNode;
+  nodes: SceneNode[];
+  set: Setter;
+}) {
+  const store = useStore();
+  const setVectorEdit = useUI((s) => s.setVectorEdit);
+  const isArc =
+    node.type === 'ellipse' &&
+    ((node.arcStart ?? 0) !== 0 || (node.arcEnd ?? 1) !== 1 || (node.innerRadius ?? 0) !== 0);
+
+  const relevant =
+    node.type === 'polygon' ||
+    node.type === 'star' ||
+    node.type === 'ellipse' ||
+    node.type === 'boolean' ||
+    node.type === 'vector' ||
+    node.isMask;
+  if (!relevant) return null;
+
+  const start = node.arcStart ?? 0;
+  const end = node.arcEnd ?? 1;
+
+  return (
+    <FigSection title={node.type === 'boolean' ? 'Boolean' : 'Shape'}>
+      {node.type === 'boolean' && (
+        <div className="fig-row">
+          <FigGroup
+            value={node.op ?? 'union'}
+            onChange={(op) => nodes.forEach((n) => store.setBooleanOp(n.id, op))}
+            options={[
+              { value: 'union', label: <Icon.Boolean op="union" />, title: 'Union' },
+              { value: 'subtract', label: <Icon.Boolean op="subtract" />, title: 'Subtract' },
+              { value: 'intersect', label: <Icon.Boolean op="intersect" />, title: 'Intersect' },
+              { value: 'exclude', label: <Icon.Boolean op="exclude" />, title: 'Exclude' },
+            ]}
+          />
+        </div>
+      )}
+
+      {(node.type === 'polygon' || node.type === 'star') && (
+        <div className="fig-row">
+          <FigField
+            value={shared(nodes, (n) => n.sides ?? (n.type === 'star' ? 5 : 3))}
+            glyph={node.type === 'star' ? <Icon.Star /> : <Icon.Polygon />}
+            min={3}
+            max={60}
+            title={node.type === 'star' ? 'Point count' : 'Side count'}
+            onChange={(sides) => set({ sides })}
+          />
+          {node.type === 'star' ? (
+            <FigField
+              value={Math.round((shared(nodes, (n) => n.innerRatio ?? 0.4) as number) * 100)}
+              glyph="R"
+              min={1}
+              max={100}
+              suffix="%"
+              title="Star ratio"
+              onChange={(ratio) => set({ innerRatio: ratio / 100 })}
+            />
+          ) : (
+            <span style={{ flex: '1 1 0' }} />
+          )}
+          <span style={{ width: 24, flex: 'none' }} />
+        </div>
+      )}
+
+      {node.type === 'ellipse' && (
+        <>
+          <div className="fig-row">
+            <FigField
+              value={Math.round(start * 360)}
+              glyph={<Icon.Angle />}
+              min={0}
+              max={360}
+              suffix="°"
+              title="Arc start"
+              onChange={(deg) => set({ arcStart: deg / 360, arcEnd: end })}
+            />
+            <FigField
+              value={Math.round((end - start) * 360)}
+              glyph="S"
+              min={0}
+              max={360}
+              suffix="°"
+              title="Arc sweep"
+              onChange={(deg) => set({ arcStart: start, arcEnd: start + deg / 360 })}
+            />
+            <span style={{ width: 24, flex: 'none' }} />
+          </div>
+          <div className="fig-row">
+            <FigField
+              value={Math.round((shared(nodes, (n) => n.innerRadius ?? 0) as number) * 100)}
+              glyph="◎"
+              min={0}
+              max={99}
+              suffix="%"
+              title="Ratio — the hole in the middle"
+              onChange={(ratio) => set({ innerRadius: ratio / 100 })}
+            />
+            <span style={{ flex: '1 1 0' }} />
+            <span style={{ width: 24, flex: 'none' }} />
+          </div>
+          {isArc && (
+            <div className="fig-note">
+              An arc paints through its own path, so it takes a stroke rather
+              than a border.
+            </div>
+          )}
+        </>
+      )}
+
+      {node.type === 'vector' && (
+        <div className="fig-row">
+          <FigButton title="Edit points" onClick={() => setVectorEdit(node.id)}>
+            <Icon.Anchor />
+          </FigButton>
+          <span style={{ flex: 1, paddingLeft: 4, opacity: 0.7 }}>
+            {(node.anchors?.length ?? node.points?.length ?? 0)} points
+          </span>
+          <FigGroup
+            value={node.closed ? 'closed' : 'open'}
+            onChange={(value) => set({ closed: value === 'closed' })}
+            options={[
+              { value: 'open', label: 'Open', title: 'Open path' },
+              { value: 'closed', label: 'Closed', title: 'Closed path' },
+            ]}
+          />
+        </div>
+      )}
+
+      {node.isMask && (
+        <div className="fig-row">
+          <FigSelect
+            value={node.maskType ?? 'alpha'}
+            options={[
+              { value: 'alpha', label: 'Shape mask' },
+              { value: 'luminance', label: 'Luminance mask' },
+            ]}
+            title="Mask type"
+            onChange={(maskType) => set({ maskType })}
+          />
+          <FigButton title="Remove mask" onClick={() => store.toggleMask([node.id])}>
+            <Icon.Mask />
+          </FigButton>
+        </div>
+      )}
+    </FigSection>
+  );
+}
+
 function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
+  const store = useStore();
+  const custom = useCustomFonts();
   const font = node.font ?? DEFAULT_FONT;
   const patch = (delta: Partial<typeof font>) => set({ font: { ...font, ...delta } });
   const [more, setMore] = useState(false);
+  const [fontError, setFontError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // the built-in list plus whatever has been uploaded into this document
+  const families = [...FONTS, ...customFamilies(custom)];
+  const weightsIn = (stack: string) =>
+    families.find((entry) => entry.stack === stack)?.weights ?? weightsFor(stack);
+  const nearest = (stack: string, weight: number) => {
+    const list = weightsIn(stack);
+    return list.reduce((best, entry) =>
+      Math.abs(entry - weight) < Math.abs(best - weight) ? entry : best,
+    );
+  };
 
   return (
     <FigSection
@@ -1907,12 +2458,49 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
     >
       <StyleBadge node={node} slot="text" />
       <div className="fig-row">
-        <FigSelect value={font.family} options={FONT_FAMILIES} title="Font" onChange={(family) => patch({ family })} />
+        <FigSelect
+          value={font.family}
+          options={families.map((entry) => ({ value: entry.stack, label: entry.name }))}
+          title="Font"
+          onChange={(family) => {
+            ensureFont(family);
+            // a family that has no 500 must not be left claiming one
+            patch({ family, weight: nearest(family, font.weight) });
+          }}
+        />
+        <FigButton title="Upload a font file" onClick={() => fileRef.current?.click()}>
+          <Icon.Plus />
+        </FigButton>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".woff2,.woff,.otf,.ttf"
+          hidden
+          onChange={async (event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file) return;
+            try {
+              const { name, src } = await readFontFile(file);
+              store.addFont({ name, src, weight: font.weight || 400 });
+              store.commit();
+              patch({ family: `"${name}", system-ui, sans-serif` });
+            } catch (error) {
+              setFontError(error instanceof Error ? error.message : 'Could not read that font.');
+              window.setTimeout(() => setFontError(null), 5000);
+            }
+          }}
+        />
       </div>
+      {fontError && <div className="fig-note">{fontError}</div>}
       <div className="fig-row">
         <FigSelect
           value={String(font.weight)}
-          options={FONT_WEIGHTS}
+          // only the weights this family actually ships
+          options={weightsIn(font.family).map((weight) => ({
+            value: String(weight),
+            label: WEIGHT_LABEL[weight] ?? String(weight),
+          }))}
           title="Weight"
           onChange={(weight) => patch({ weight: Number(weight) })}
         />
@@ -1986,6 +2574,32 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
         <>
           <div className="fig-row">
             <FigText value={node.text ?? ''} onChange={(text) => set({ text })} placeholder="Content" />
+          </div>
+          <div className="fig-row">
+            <FigSelect
+              value={font.numeric ?? 'normal'}
+              options={[
+                { value: 'normal', label: 'Default figures' },
+                { value: 'tabular', label: 'Tabular figures' },
+                { value: 'oldstyle', label: 'Old-style figures' },
+              ]}
+              title="How numbers are set — tabular figures line up in a column"
+              onChange={(numeric) => patch({ numeric })}
+            />
+          </div>
+          <div className="fig-row">
+            <FigText
+              value={(font.features ?? []).join(', ')}
+              placeholder="OpenType tags: ss01, dlig…"
+              onChange={(value) =>
+                patch({
+                  features: value
+                    .split(/[,\s]+/)
+                    .map((tag) => tag.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
           </div>
           <div className="fig-row">
             <FigField
@@ -2149,12 +2763,15 @@ function FillSection({
   nodes: SceneNode[];
   set: Setter;
 }) {
-  const tokens = useTokens();
   const doc = useDoc();
   const store = useStore();
   const page = useUI((state) => state.page);
+  const allTokens = useTokens();
+  // only variables scoped to fills are *offered*; resolving a value still needs
+  // the whole list, or a variable applied before it was scoped stops rendering
+  const tokens = allTokens.filter((token) => inScope(token, 'fill'));
   const swatches = pageColors(doc, page);
-  const backdrop = backdropOf(node, doc, tokens);
+  const backdrop = backdropOf(node, doc, allTokens);
   const mixed =
     nodes.length > 1 && !nodes.every((entry) => primaryFill(entry) === primaryFill(nodes[0]));
   // an older document has a single `fill`; present it as a one-entry stack
@@ -2232,7 +2849,7 @@ function FillSection({
               backdrop={backdrop}
               tokens={tokens}
               onCreateToken={(hex) => {
-                const name = `color-${tokens.length + 1}`;
+                const name = `color-${allTokens.length + 1}`;
                 store.addToken({ name, type: 'color', value: hex });
                 patch(paint.id, { value: `var(--${name})` });
               }}
@@ -2296,19 +2913,155 @@ function FillSection({
             )}
 
             {kind === 'image' && (
-              <div className="fig-row">
-                <FigText
-                  value={paint.value.replace(/^url\(|\)$/g, '')}
-                  placeholder="https://…"
-                  onChange={(src) => patch(paint.id, { value: `url(${src})` })}
+              <>
+                <div className="fig-row">
+                  <FigText
+                    value={paint.value.replace(/^url\(|\)$/g, '')}
+                    placeholder="https://…"
+                    onChange={(src) => patch(paint.id, { value: `url(${src})` })}
+                  />
+                </div>
+                <ImageFitRow
+                  node={node}
+                  paint={paint}
+                  onPatch={(delta) => patch(paint.id, delta)}
                 />
-              </div>
+              </>
             )}
           </div>
         );
       })
       )}
     </FigSection>
+  );
+}
+
+/**
+ * How an image sits in its layer, and how it has been adjusted.
+ *
+ * Fill and Fit need nothing else — `cover` and `contain` say it all. Crop and
+ * Tile are the two that need numbers, so the scale and offset fields only
+ * appear once one of those is chosen, exactly as Figma reveals them. The seven
+ * adjustment sliders live behind a button for the same reason: most images are
+ * used as they came.
+ */
+function ImageFitRow({
+  node,
+  paint,
+  onPatch,
+}: {
+  node: SceneNode;
+  paint: Paint;
+  onPatch: (delta: Partial<Paint>) => void;
+}) {
+  const fit = paint.fit ?? node.imageFit ?? 'fill';
+  const scale = paint.scale ?? node.imageScale ?? 1;
+  const [ox, oy] = paint.offset ?? node.imageOffset ?? [50, 50];
+  const setCrop = useUI((s) => s.setCropping);
+  const [adjusting, setAdjusting] = useState(false);
+  const adjustAnchor = useRef<HTMLSpanElement>(null);
+  const adjust = paint.adjust ?? NO_ADJUST;
+
+  return (
+    <>
+      <div className="fig-row">
+        <FigGroup
+          value={fit}
+          onChange={(next) => {
+            onPatch({ fit: next });
+            if (next === 'crop') setCrop(node.id);
+            else setCrop(null);
+          }}
+          options={[
+            { value: 'fill', label: 'Fill', title: 'Cover the layer' },
+            { value: 'fit', label: 'Fit', title: 'Fit inside the layer' },
+            { value: 'crop', label: 'Crop', title: 'Scale and pan behind the layer' },
+            { value: 'tile', label: 'Tile', title: 'Repeat at this size' },
+          ]}
+        />
+        <FigButton
+          title="Rotate the image a quarter turn"
+          onClick={() => onPatch({ rotation: (((paint.rotation ?? 0) + 90) % 360) as 0 | 90 | 180 | 270 })}
+        >
+          <Icon.Reset />
+        </FigButton>
+        <span ref={adjustAnchor} style={{ display: 'inline-flex' }}>
+          <FigButton
+            title="Adjust the image"
+            on={adjusting || !isNeutral(paint.adjust)}
+            onClick={() => setAdjusting((open) => !open)}
+          >
+            <Icon.Sliders />
+          </FigButton>
+          {adjusting && (
+            <FigPopover anchor={adjustAnchor.current} width={244} onClose={() => setAdjusting(false)}>
+              <div style={{ padding: '4px 8px 10px' }}>
+                {(Object.keys(NO_ADJUST) as (keyof ImageAdjust)[]).map((key) => (
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 26 }}>
+                    <span style={{ width: 84, color: 'var(--fig-icon-3)' }}>{ADJUST_LABEL[key]}</span>
+                    <input
+                      type="range"
+                      min={-100}
+                      max={100}
+                      value={Math.round(adjust[key] * 100)}
+                      onChange={(event) =>
+                        onPatch({ adjust: { ...adjust, [key]: Number(event.target.value) / 100 } })
+                      }
+                      style={{ flex: 1, accentColor: 'var(--fig-blue)' }}
+                    />
+                    <span style={{ width: 26, textAlign: 'right' }}>
+                      {Math.round(adjust[key] * 100)}
+                    </span>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ marginTop: 6 }}
+                  onClick={() => onPatch({ adjust: undefined })}
+                >
+                  Reset adjustments
+                </button>
+              </div>
+            </FigPopover>
+          )}
+        </span>
+      </div>
+      {(fit === 'crop' || fit === 'tile') && (
+        <div className="fig-row">
+          <FigField
+            value={Math.round(scale * 100)}
+            glyph={<Icon.Scale />}
+            min={1}
+            max={2000}
+            suffix="%"
+            title="Image scale"
+            onChange={(next) => onPatch({ scale: next / 100 })}
+          />
+          <FigField
+            value={Math.round(ox)}
+            glyph="X"
+            min={-200}
+            max={300}
+            suffix="%"
+            title="Horizontal position"
+            onChange={(next) => onPatch({ offset: [next, oy] })}
+          />
+          <FigField
+            value={Math.round(oy)}
+            glyph="Y"
+            min={-200}
+            max={300}
+            suffix="%"
+            title="Vertical position"
+            onChange={(next) => onPatch({ offset: [ox, next] })}
+          />
+        </div>
+      )}
+      {fit === 'crop' && (
+        <div className="fig-note">Drag the image on the canvas to move it inside the layer.</div>
+      )}
+    </>
   );
 }
 
@@ -2789,25 +3542,44 @@ const SELECTION_COLOR_LIMIT = 10;
  * decided by the type: a frame exports its whole subtree, a shape exports
  * itself. A multi-selection says how many instead.
  */
-function ExportSection({ node, onExport }: { node: SceneNode; onExport: () => void }) {
-  const rows = useUI((s) => s.exportRows);
-  const addRow = useUI((s) => s.addExportRow);
-  const updateRow = useUI((s) => s.updateExportRow);
-  const removeRow = useUI((s) => s.removeExportRow);
-  const setFormat = useUI((s) => s.setExportFormat);
-  const setScale = useUI((s) => s.setExportScale);
-  const setSuffix = useUI((s) => s.setExportSuffix);
-  const setContentsOnly = useUI((s) => s.setExportContentsOnly);
+function ExportSection({
+  node,
+  nodes,
+  set,
+  onExport,
+}: {
+  node: SceneNode;
+  nodes: SceneNode[];
+  set: Setter;
+  onExport: () => void;
+}) {
+  const doc = useDoc();
+  const tokens = useTokens();
+  const collections = useCollections();
+  const tokenVars = useTokenVars();
+  const zoom = useUI((s) => s.viewport.zoom);
   const selection = useUI((s) => s.selection);
   const [preview, setPreview] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
 
+  // the settings live on the layer, so a design carries how it ships
+  const rows = node.exports ?? [];
+  const write = (next: ExportSetting[]) => set({ exports: next });
   const target = selection.length > 1 ? `${selection.length} layers` : TYPE_LABEL[node.type];
 
   return (
     <FigSection
       title="Export"
       actions={
-        <FigButton title="Add export settings" onClick={addRow}>
+        <FigButton
+          title="Add export settings"
+          onClick={() =>
+            write([
+              ...rows,
+              { id: Math.random().toString(36).slice(2, 8), scale: rows.length ? 1 : 2, format: 'png' },
+            ])
+          }
+        >
           <FigIcon name="Add fill" />
         </FigButton>
       }
@@ -2818,7 +3590,9 @@ function ExportSection({ node, onExport }: { node: SceneNode; onExport: () => vo
             value={String(row.scale)}
             options={[0.5, 1, 2, 3, 4].map((n) => ({ value: String(n), label: `${n}x` }))}
             title="Scale"
-            onChange={(value) => updateRow(row.id, { scale: Number(value) })}
+            onChange={(value) =>
+              write(rows.map((r) => (r.id === row.id ? { ...r, scale: Number(value) } : r)))
+            }
           />
           <FigSelect
             value={row.format}
@@ -2830,10 +3604,15 @@ function ExportSection({ node, onExport }: { node: SceneNode; onExport: () => vo
               { value: 'json', label: 'JSON' },
             ]}
             title="Format"
-            onChange={(format) => updateRow(row.id, { format })}
+            onChange={(format) =>
+              write(rows.map((r) => (r.id === row.id ? { ...r, format } : r)))
+            }
           />
-          <ExportOptions row={row} onChange={(patch) => updateRow(row.id, patch)} />
-          <FigButton title="Remove" onClick={() => removeRow(row.id)}>
+          <ExportOptions
+            row={row}
+            onChange={(patch) => write(rows.map((r) => (r.id === row.id ? { ...r, ...patch } : r)))}
+          />
+          <FigButton title="Remove" onClick={() => write(rows.filter((r) => r.id !== row.id))}>
             <FigIcon name="Remove" />
           </FigButton>
         </div>
@@ -2843,21 +3622,32 @@ function ExportSection({ node, onExport }: { node: SceneNode; onExport: () => vo
         <button
           type="button"
           className="fig-export"
-          onClick={() => {
-            // the first row is what the button acts on, as in Figma
-            const first = rows[0];
-            if (first) {
-              setScale(first.scale);
-              setFormat(first.format);
-              setSuffix(first.suffix ?? '');
-              setContentsOnly(!!first.contentsOnly);
+          onClick={async () => {
+            // Figma's Export button opens nothing: it saves what the rows say.
+            // A layer with no settings of its own falls back to the dialog.
+            if (!rows.length) {
+              onExport();
+              return;
             }
-            onExport();
+            setStatus('Saving…');
+            const result = await runExports(selection.length ? selection : [node.id], {
+              doc,
+              tokens,
+              collections,
+              tokenVars,
+              zoom,
+            });
+            setStatus(
+              result.error ??
+                `Saved ${result.saved} file${result.saved === 1 ? '' : 's'} to your downloads.`,
+            );
+            window.setTimeout(() => setStatus(null), 4000);
           }}
         >
           Export {target}
         </button>
       </div>
+      {status && <div className="fig-note">{status}</div>}
 
       <button
         type="button"

@@ -103,10 +103,12 @@ server.registerTool(
     const doc = store.getSnapshot();
     if (!doc[nodeId]) return text(`No node "${nodeId}" in ${fileId}.`);
     const tokens = store.listTokens();
+    const collections = store.listCollections();
+    const fonts = store.listFonts();
 
     if (format === 'json') return text(toJson(nodeId, doc));
-    if (format === 'html') return text(toHtml(nodeId, doc, tokens));
-    const { markup, css } = toReact(nodeId, doc, tokens);
+    if (format === 'html') return text(toHtml(nodeId, doc, tokens, collections, fonts));
+    const { markup, css } = toReact(nodeId, doc, tokens, collections, fonts);
     return text(`${markup}\n/* ── stylesheet ── */\n\n${css}`);
   },
 );
@@ -136,14 +138,39 @@ server.registerTool(
   async ({ fileId }) => {
     const { store } = await openFile(fileId);
     const tokens = store.listTokens();
-    if (!tokens.length) return text('No tokens defined in this file.');
-    return text(tokens.map((t) => `--${t.name}: ${t.value}   (${t.type})`).join('\n'));
+    if (!tokens.length) return text('No variables defined in this file.');
+    const collections = store.listCollections();
+    const lines = collections.map((collection) => {
+      const mine = tokens.filter((t) => (t.collection ?? 'default') === collection.id);
+      if (!mine.length) return '';
+      const modes = collection.modes.map((mode) => mode.name).join(' · ');
+      const rows = mine.map((t) => {
+        const values = collection.modes
+          .map((mode) => t.values?.[mode.id] ?? t.value)
+          .join('  |  ');
+        return `  --${t.name}: ${values}   (${t.type})`;
+      });
+      return `${collection.name}  [${modes}]\n${rows.join('\n')}`;
+    });
+    return text(lines.filter(Boolean).join('\n\n'));
   },
 );
 
 // ── Writing ──────────────────────────────────────────────────────────────
 
-const NODE_TYPES = ['frame', 'text', 'rect', 'ellipse', 'image', 'vector', 'shader'] as const;
+const NODE_TYPES = [
+  'frame',
+  'text',
+  'rect',
+  'ellipse',
+  'image',
+  'vector',
+  'shader',
+  'polygon',
+  'star',
+  'line',
+  'arrow',
+] as const;
 
 const PROPS = z
   .object({
@@ -159,6 +186,23 @@ const PROPS = z
     opacity: z.number().min(0).max(1).optional(),
     rotation: z.number().optional(),
     text: z.string().optional().describe('Text nodes only'),
+    sides: z.number().int().min(3).max(60).optional().describe('Polygon sides / star points'),
+    innerRatio: z.number().min(0.01).max(1).optional().describe('Star inner radius, as a fraction'),
+    arcStart: z.number().min(0).max(1).optional().describe('Ellipse arc start, in turns'),
+    arcEnd: z.number().min(0).max(1).optional().describe('Ellipse arc end, in turns'),
+    innerRadius: z.number().min(0).max(0.99).optional().describe('Ellipse hole, as a fraction'),
+    closed: z.boolean().optional().describe('Vector paths only'),
+    anchors: z
+      .array(
+        z.object({
+          x: z.number(),
+          y: z.number(),
+          in: z.tuple([z.number(), z.number()]).nullable().optional(),
+          out: z.tuple([z.number(), z.number()]).nullable().optional(),
+        }),
+      )
+      .optional()
+      .describe('Vector points, in the node\'s own space. `in`/`out` are cubic handles.'),
     font: z
       .object({
         family: z.string().optional(),

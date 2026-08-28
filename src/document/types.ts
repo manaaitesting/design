@@ -7,6 +7,32 @@
  * so what you see on the artboard and what `export/toReact` emits cannot drift.
  */
 
+import type { Anchor } from './geometry';
+
+export type { Anchor };
+
+import type { ImageAdjust } from './adjust';
+import type { TextRun } from './text';
+
+export type { TextRun, ImageAdjust };
+
+/** A note pinned to a layer for whoever builds it. */
+export interface Annotation {
+  id: string;
+  /** an optional heading, so a layer can carry more than one kind of note */
+  label?: string;
+  note: string;
+}
+
+/** Where a layer has got to. Figma's "ready for dev", plus its two neighbours. */
+export type DevStatus = 'none' | 'ready' | 'done';
+
+/** One closed or open run of anchors inside a vector. */
+export interface VectorPath {
+  anchors: Anchor[];
+  closed: boolean;
+}
+
 export type NodeType =
   | 'page'
   | 'section'
@@ -16,7 +42,33 @@ export type NodeType =
   | 'ellipse'
   | 'image'
   | 'shader'
-  | 'vector';
+  | 'vector'
+  | 'slice'
+  | 'polygon'
+  | 'star'
+  | 'line'
+  | 'arrow'
+  | 'boolean';
+
+/**
+ * How a boolean group combines its children.
+ *
+ * The group is live, as Figma's is: the children keep their own geometry and
+ * stay editable, and the combination is re-evaluated on every paint. `union`
+ * and `exclude` are winding rules over one path; `intersect` and `subtract`
+ * clip and mask — all four are things SVG does natively, which is why the
+ * result exports as real markup rather than a baked outline.
+ */
+export type BooleanOp = 'union' | 'subtract' | 'intersect' | 'exclude';
+
+/**
+ * How a mask layer decides what shows through.
+ *
+ * `alpha` is the geometric mask — the sibling's outline clips the group, which
+ * is CSS `clip-path` and survives export. `luminance` uses the layer's painted
+ * brightness instead, which needs a real mask image.
+ */
+export type MaskType = 'alpha' | 'luminance';
 
 /** `fixed` → px · `fit` → fit-content · `fill` → stretch to the parent's cross axis */
 export type SizeMode = 'fixed' | 'fit' | 'fill';
@@ -70,6 +122,19 @@ export interface Paint {
   value: string;
   opacity: number;
   visible: boolean;
+  /**
+   * Image paints only.
+   *
+   * `fit`, `scale` and `offset` say how the picture sits in the box; `rotation`
+   * turns it in right angles; `adjust` is Figma's seven sliders. A paint that
+   * says none of this is a plain background and costs nothing extra to draw —
+   * only the ones that need their own element get one.
+   */
+  fit?: 'fill' | 'fit' | 'crop' | 'tile';
+  scale?: number;
+  offset?: [number, number];
+  rotation?: 0 | 90 | 180 | 270;
+  adjust?: ImageAdjust;
 }
 
 export type LineStyle = 'solid' | 'dashed' | 'dotted';
@@ -120,9 +185,32 @@ export interface FilterSpec {
  * things Figma's interaction popover asks for. They live on the layer that is
  * touched, so a button carries its own behaviour wherever it is copied to.
  */
-export type Trigger = 'click' | 'hover' | 'press' | 'delay';
-export type InteractionAction = 'navigate' | 'back' | 'url' | 'none';
-export type TransitionType = 'instant' | 'dissolve' | 'move' | 'push' | 'slide';
+export type Trigger =
+  | 'click'
+  | 'hover'
+  | 'mouse-enter'
+  | 'mouse-leave'
+  | 'press'
+  | 'drag'
+  | 'key'
+  | 'delay';
+export type InteractionAction =
+  | 'navigate'
+  | 'back'
+  | 'url'
+  | 'open-overlay'
+  | 'close-overlay'
+  | 'swap-overlay'
+  | 'scroll-to'
+  | 'set-variable'
+  | 'none';
+export type TransitionType =
+  | 'instant'
+  | 'dissolve'
+  | 'move'
+  | 'push'
+  | 'slide'
+  | 'smart-animate';
 export type TransitionDirection = 'left' | 'right' | 'top' | 'bottom';
 export type Easing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
 
@@ -135,6 +223,29 @@ export interface TransitionSpec {
   easing: Easing;
 }
 
+/**
+ * Where an overlay sits, and how it behaves while it is up.
+ *
+ * Figma's overlay settings, which is most of what makes an overlay different
+ * from a navigation: it is drawn over the frame you were on, and it can be
+ * dismissed without going anywhere.
+ */
+export interface OverlaySpec {
+  position:
+    | 'center'
+    | 'top'
+    | 'bottom'
+    | 'top-left'
+    | 'top-right'
+    | 'bottom-left'
+    | 'bottom-right'
+    | 'manual';
+  /** dims what is behind it */
+  background: boolean;
+  /** a click outside closes it */
+  closeOnOutside: boolean;
+}
+
 export interface Interaction {
   id: string;
   trigger: Trigger;
@@ -145,6 +256,13 @@ export interface Interaction {
   destination: string | null;
   /** the address `url` opens */
   url?: string;
+  /** open-overlay only: where the overlay sits and how it dismisses */
+  overlay?: OverlaySpec;
+  /** the key the `key` trigger listens for, as `KeyboardEvent.key` */
+  key?: string;
+  /** set-variable: which variable, and what to set it to while playing */
+  variable?: string;
+  value?: string;
   transition: TransitionSpec;
 }
 
@@ -204,6 +322,26 @@ export type Constraint = 'start' | 'end' | 'center' | 'scale' | 'stretch';
 export interface ConstraintSpec {
   h: Constraint;
   v: Constraint;
+}
+
+/** What an export produces. Code formats ignore the scale. */
+export type ExportFormat = 'react' | 'html' | 'json' | 'png' | 'svg';
+
+/**
+ * One line of a layer's Export section.
+ *
+ * Figma keeps these on the layer, not on the app: the settings are part of how
+ * a design is meant to ship, so they belong in the document where they sync and
+ * survive a reload.
+ */
+export interface ExportSetting {
+  id: string;
+  scale: number;
+  format: ExportFormat;
+  /** appended to the filename, before the extension */
+  suffix?: string;
+  /** export what is inside the frame without the frame's own background */
+  contentsOnly?: boolean;
 }
 
 /** Per-corner radii, clockwise from the top-left. */
@@ -317,6 +455,36 @@ export interface PropBinding {
  */
 export type StyleKind = 'paint' | 'text' | 'effect';
 
+/**
+ * A design variable.
+ *
+ * `value` is the value in the collection's default mode, which is also all a
+ * document that never uses modes ever needs. `values` adds the other modes,
+ * `alias` points the variable at another one instead of holding a value, and
+ * `collection` says which set of modes it answers to.
+ */
+export interface Token {
+  id: string;
+  name: string;
+  type: 'color' | 'number' | 'text';
+  value: string;
+  /** the collection this variable belongs to; absent means the default one */
+  collection?: string;
+  /** per-mode values, keyed by mode id */
+  values?: Record<string, string>;
+  /** follows another variable rather than holding a value of its own */
+  alias?: string;
+  /**
+   * Where this variable may be applied — empty means anywhere its type fits.
+   * See `VarScope` in `document/variables`.
+   */
+  scopes?: string[];
+  /** kept out of the pickers, and out of anything published */
+  hidden?: boolean;
+  /** what it is for, shown in the picker */
+  description?: string;
+}
+
 /** Which part of a layer a style is worn on. */
 export type StyleSlot = 'fill' | 'stroke' | 'text' | 'effect';
 
@@ -345,6 +513,15 @@ export interface FontSpec {
   paragraphSpacing?: number;
   /** Figma's list style */
   list?: 'none' | 'bullet' | 'number';
+  /**
+   * OpenType.
+   *
+   * `numeric` covers the two figures settings anyone actually reaches for —
+   * tabular figures for tables, old-style for running text — and `features` is
+   * the escape hatch for a face's own tags (`ss01`, `dlig`, and so on).
+   */
+  numeric?: 'normal' | 'tabular' | 'oldstyle';
+  features?: string[];
 }
 
 export interface SceneNode {
@@ -364,6 +541,19 @@ export interface SceneNode {
   h: number;
   wMode: SizeMode;
   hMode: SizeMode;
+  /**
+   * Bounds a layer will not resize past.
+   *
+   * Figma puts these on every layer rather than only on auto-layout children,
+   * because the case they exist for — a card that may grow with its text but
+   * never past 480px — is about the layer, not about its parent. They map onto
+   * `min-width` and friends, so the browser enforces them during layout instead
+   * of the editor clamping after the fact.
+   */
+  minW?: number | null;
+  maxW?: number | null;
+  minH?: number | null;
+  maxH?: number | null;
   rotation: number;
 
   /** Non-null turns this node into a flex container; children then flow. */
@@ -414,14 +604,55 @@ export interface SceneNode {
 
   /** text nodes */
   text?: string;
+  /**
+   * Styled runs within the text.
+   *
+   * `text` stays the plain reading of the layer — what a search matches, what an
+   * agent reads — and the runs are how it is dressed. A layer that has never
+   * been styled per word has no runs at all, which is why nothing needed
+   * migrating when they arrived. See `document/text`.
+   */
+  runs?: TextRun[];
   font?: FontSpec;
   vAlign?: 'top' | 'middle' | 'bottom';
   underline?: UnderlineSpec | null;
   textStroke?: TextStrokeSpec | null;
   /** image nodes */
   src?: string;
+
+  /**
+   * How an image paint sits in its box — Figma's Fill / Fit / Crop / Tile.
+   *
+   * `scale` and `offset` only mean anything to Crop and Tile: crop pans a
+   * magnified image behind the box, tile repeats it at that size. They apply to
+   * every image paint on the layer, which is one each in every real document.
+   */
+  imageFit?: 'fill' | 'fit' | 'crop' | 'tile';
+  imageScale?: number;
+  imageOffset?: [number, number];
   /** shader nodes; null clears it, the way `video` does */
   shader?: ShaderSpec | null;
+
+  /** the export settings this layer carries */
+  exports?: ExportSetting[];
+
+  /**
+   * Handoff notes.
+   *
+   * Figma calls these annotations: a line of guidance pinned to a layer, and a
+   * status saying whether the layer is settled enough to build. They are part of
+   * the document because they are part of what is being handed over.
+   */
+  annotations?: Annotation[];
+  devStatus?: DevStatus;
+
+  /**
+   * How this frame scrolls while the prototype is playing, and how a child
+   * behaves when the frame it is in scrolls. Both are Figma's, and both are
+   * about playback only — the canvas never scrolls a frame.
+   */
+  scroll?: 'none' | 'vertical' | 'horizontal' | 'both';
+  scrollBehavior?: 'scrolls' | 'fixed' | 'sticky';
 
   /** what this layer does when a viewer touches it in the prototype */
   interactions?: Interaction[];
@@ -433,8 +664,27 @@ export interface SceneNode {
 
   /** this node is a main component — instances mirror it */
   isComponent?: boolean;
+  /**
+   * A main component that came from the shared library.
+   *
+   * `libraryId` is the published component it is a copy of and `libraryVersion`
+   * is which revision was taken, so a file can tell when the original has moved
+   * on. Instances go on pointing at this local main, which is what lets an
+   * update be applied in place and reach every instance at once.
+   */
+  libraryId?: string;
+  libraryVersion?: number;
   /** this subtree is an instance of that main component */
   instanceOf?: string;
+
+  /**
+   * What this component is for, and where the rest of the story is.
+   *
+   * Figma shows both on the instance as well as the main, which is the point:
+   * the person reaching for a component is usually not the person who made it.
+   */
+  description?: string;
+  docs?: string;
 
   /** the properties this main component publishes to its instances */
   props?: ComponentProp[];
@@ -462,11 +712,61 @@ export interface SceneNode {
    * skips these, which is what makes an instance useful rather than a copy.
    */
   overridden?: string[];
-  /** vector nodes — points in the node's own coordinate space */
+  /**
+   * Vector nodes.
+   *
+   * `anchors` is the live representation — a point with optional cubic handles.
+   * `points` is what documents written before handles existed hold; it is read
+   * as a run of corners and rewritten as anchors on the first edit, so an old
+   * path never has to be migrated ahead of time.
+   */
+  anchors?: Anchor[];
   points?: [number, number][];
   closed?: boolean;
+  /**
+   * Several subpaths in one layer.
+   *
+   * A flattened boolean has holes, and a hole is a second ring — which one
+   * anchor list cannot express. When this is present it *is* the geometry, and
+   * `anchors` is left alone as the single-subpath shorthand everything else
+   * still writes.
+   */
+  paths?: VectorPath[];
   /** rounds the corners between segments */
   smooth?: number;
+
+  /** polygon and star: how many sides / points */
+  sides?: number;
+  /** star: the inner radius as a fraction of the outer one */
+  innerRatio?: number;
+  /** ellipse arc, in turns clockwise from twelve o'clock */
+  arcStart?: number;
+  arcEnd?: number;
+  /** ellipse donut: the hole's radius as a fraction of the outer one */
+  innerRadius?: number;
+
+  /** boolean groups: how the children combine */
+  op?: BooleanOp;
+
+  /** pages only: the guides dragged off the rulers, in world coordinates */
+  rulerGuides?: { axis: 'x' | 'y'; at: number }[];
+
+  /**
+   * Variable modes this frame applies to its subtree, by collection id.
+   *
+   * It publishes those collections' variables onto its own element, so the
+   * cascade does the rest — which is why a dark-mode frame keeps working in the
+   * export with no runtime at all.
+   */
+  modes?: Record<string, string>;
+
+  /**
+   * This layer masks the siblings above it in the layer list, exactly as
+   * Figma's mask does — the layers it applies to are the ones that paint on top
+   * of it, and the run ends at the next mask or the end of the frame.
+   */
+  isMask?: boolean;
+  maskType?: MaskType;
 }
 
 export type Doc = Record<string, SceneNode>;

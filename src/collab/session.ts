@@ -13,6 +13,18 @@ export interface Presence {
   /** Pointer position in world (canvas) coordinates. */
   cursor: { x: number; y: number } | null;
   selection: string[];
+  /**
+   * What this person is looking at, so someone following them can look at the
+   * same thing. Published on a throttle — a viewport changes on every frame of
+   * a pan, and awareness is not a place to send sixty messages a second.
+   */
+  view?: { x: number; y: number; zoom: number; w: number; h: number } | null;
+  /** they are presenting: everyone else is pulled along behind them */
+  spotlight?: boolean;
+  /** a line of cursor chat, shown beside their pointer until they clear it */
+  chat?: string | null;
+  /** who they are following, so two people cannot chase each other in a loop */
+  following?: number | null;
 }
 
 export interface Session {
@@ -20,6 +32,8 @@ export interface Session {
   store: DocStore;
   provider: WebsocketProvider;
   identity: Identity;
+  /** this member may look but not touch */
+  readOnly: boolean;
   destroy(): void;
 }
 
@@ -40,12 +54,21 @@ const cache = new Map<string, Session>();
  * `token` is the HMAC the sync server checks before letting this socket join —
  * see `issueSyncToken` in src/server/auth.ts.
  */
-export function getSession(room: string, identity: Identity, token: string): Session {
+export function getSession(
+  room: string,
+  identity: Identity,
+  token: string,
+  readOnly = false,
+): Session {
   const existing = cache.get(room);
   if (existing) return existing;
 
   const ydoc = new Y.Doc();
   const store = new DocStore(ydoc);
+  // The sync server drops writes from a viewer's socket regardless; this stops
+  // them locally too, so a read-only session never shows an edit that is about
+  // to be thrown away.
+  store.readOnly = readOnly;
   const provider = new WebsocketProvider(syncUrl(), room, ydoc, {
     connect: true,
     params: { token },
@@ -54,11 +77,15 @@ export function getSession(room: string, identity: Identity, token: string): Ses
   provider.awareness.setLocalStateField('identity', identity);
   provider.awareness.setLocalStateField('cursor', null);
   provider.awareness.setLocalStateField('selection', []);
+  provider.awareness.setLocalStateField('view', null);
+  provider.awareness.setLocalStateField('spotlight', false);
+  provider.awareness.setLocalStateField('chat', null);
+  provider.awareness.setLocalStateField('following', null);
 
   // Seed only once the server has told us what it already has, otherwise every
   // client would race to create its own starter artboards.
   provider.once('sync', (isSynced: boolean) => {
-    if (!isSynced) return;
+    if (!isSynced || readOnly) return;
     store.ensureRoot();
     seedDocument(store);
   });
@@ -68,6 +95,7 @@ export function getSession(room: string, identity: Identity, token: string): Ses
     store,
     provider,
     identity,
+    readOnly,
     destroy() {
       provider.destroy();
       ydoc.destroy();

@@ -3,7 +3,22 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './ui/Icons';
-import { useDoc, usePages, useStore, useTokens } from './Session';
+import { useCollections, useDoc, usePages, useReadOnly, useSession, useStore, useTokens } from './Session';
+import {
+  fetchLibraryComponentAction,
+  listLibraryAction,
+  publishComponentAction,
+  type LibraryEntry,
+} from '../server/actions';
+import {
+  COLOR_SCOPES,
+  DEFAULT_COLLECTION,
+  DEFAULT_COLLECTION_ID,
+  NUMBER_SCOPES,
+  SCOPE_LABEL,
+  type VarScope,
+} from '../document/variables';
+import type { Token } from '../document/types';
 import { useUI } from '../state/ui';
 import { ancestors, descendants, ROOT_ID, type NodeType } from '../document/types';
 import {
@@ -34,6 +49,12 @@ const TYPE_ICON: Record<NodeType, React.ReactNode> = {
   image: <Icon.ImageAi />,
   shader: <Icon.Shader />,
   vector: <Icon.Pen />,
+  polygon: <Icon.Polygon />,
+  star: <Icon.Star />,
+  line: <Icon.Line />,
+  arrow: <Icon.Arrow />,
+  boolean: <Icon.Boolean op="union" />,
+  slice: <Icon.Slice />,
 };
 
 /**
@@ -201,12 +222,15 @@ export function LeftPanel({ fileName }: { fileName: string }) {
         <button type="button" className="fig-tab" data-on={tab === 'design'} onClick={() => setTab('design')}>
           Design
         </button>
+        <button type="button" className="fig-tab" data-on={tab === 'assets'} onClick={() => setTab('assets')}>
+          Assets
+        </button>
         <button type="button" className="fig-tab" data-on={tab === 'theme'} onClick={() => setTab('theme')}>
           Theme
         </button>
       </div>
 
-      {tab === 'design' ? (
+      {tab === 'design' && (
         <>
           <PagesSection />
           <div className="fig-left-section" style={{ borderTop: '1px solid var(--fig-line)' }}>
@@ -214,9 +238,9 @@ export function LeftPanel({ fileName }: { fileName: string }) {
           </div>
           <LayersTree />
         </>
-      ) : (
-        <ThemeTab />
       )}
+      {tab === 'assets' && <AssetsTab />}
+      {tab === 'theme' && <ThemeTab />}
 
     </div>
   );
@@ -308,6 +332,65 @@ function PagesSection() {
             )}
           </div>
         ))}
+    </div>
+  );
+}
+
+/**
+ * Where a variable may be used, and what it is for.
+ *
+ * Scoping is what keeps a colour picker usable once a theme has forty colours
+ * in it: a variable meant for borders stops being offered as a fill. Ticking
+ * nothing means "wherever the type fits", which is what every variable starts
+ * as — you opt into scoping when the list gets long enough to need it.
+ */
+function ScopeEditor({ token }: { token: Token }) {
+  const store = useStore();
+  const available = token.type === 'color' ? COLOR_SCOPES : NUMBER_SCOPES;
+  const scopes = token.scopes ?? [];
+
+  const toggle = (scope: VarScope) => {
+    const next = scopes.includes(scope)
+      ? scopes.filter((entry) => entry !== scope)
+      : [...scopes, scope];
+    store.updateToken(token.id, { scopes: next });
+  };
+
+  return (
+    <div className="fig-scope">
+      <div className="fig-scope-head">Where “{token.name}” can be used</div>
+      <div className="fig-scope-grid">
+        {available.map((scope) => (
+          <label key={scope} className="fig-scope-item">
+            <input
+              type="checkbox"
+              checked={scopes.length === 0 || scopes.includes(scope)}
+              onChange={() => toggle(scope)}
+              style={{ width: 12, height: 12, accentColor: 'var(--fig-blue)' }}
+            />
+            {SCOPE_LABEL[scope]}
+          </label>
+        ))}
+      </div>
+      <input
+        defaultValue={token.description ?? ''}
+        placeholder="What is it for?"
+        onBlur={(event) => store.updateToken(token.id, { description: event.target.value.trim() })}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === 'Enter') event.currentTarget.blur();
+        }}
+        className="fig-scope-note"
+      />
+      <label className="fig-scope-item" style={{ marginTop: 4 }}>
+        <input
+          type="checkbox"
+          checked={!!token.hidden}
+          onChange={(event) => store.updateToken(token.id, { hidden: event.target.checked })}
+          style={{ width: 12, height: 12, accentColor: 'var(--fig-blue)' }}
+        />
+        Hide from the pickers
+      </label>
     </div>
   );
 }
@@ -517,20 +600,332 @@ const STARTER_TOKENS = [
   { name: 'radius', type: 'number' as const, value: '12' },
 ];
 
+
 /**
- * Tokens are stored in the CRDT and published as CSS custom properties on the
- * canvas root, so a fill of `var(--brand)` resolves live and survives export as
- * a real variable rather than a baked-in hex.
+ * The Assets tab.
+ *
+ * Figma's is where a file's components live once they stop being layers you
+ * scroll past and become parts you reach for. Clicking one drops an instance in
+ * the middle of the view; dragging one places it where you let go — and a set's
+ * variants are listed under it, because picking the right variant is most of
+ * what choosing a component means.
+ */
+function AssetsTab() {
+  const doc = useDoc();
+  const store = useStore();
+  const readOnly = useReadOnly();
+  const pageId = useUI((s) => s.page);
+  const select = useUI((s) => s.select);
+  const room = useSession().provider.roomname;
+  const [query, setQuery] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const mains = Object.values(doc).filter((node) => node.isComponent);
+  const sets = Object.values(doc).filter((node) => node.isComponentSet);
+  const loose = mains.filter((node) => !(node.parent && doc[node.parent]?.isComponentSet));
+
+  const match = (name: string) => !query || name.toLowerCase().includes(query.toLowerCase());
+  const entries = [
+    ...sets.filter((node) => match(node.name)).map((node) => ({ node, variants: node.children.map((id) => doc[id]).filter(Boolean) })),
+    ...loose.filter((node) => match(node.name)).map((node) => ({ node, variants: [] })),
+  ];
+
+  /** Places an instance, either where it was dropped or in the middle of the view. */
+  const place = (mainId: string, at?: { x: number; y: number }) => {
+    if (readOnly) return;
+    const centre = at ?? viewCentre();
+    const id = store.createInstance(mainId, pageId, centre);
+    if (id) select([id]);
+  };
+
+  /** Publishes a component to the shared library, or re-publishes it. */
+  const publish = async (mainId: string) => {
+    const node = store.getSnapshot()[mainId];
+    if (!node) return;
+    const result = await publishComponentAction(room, mainId, node.name, store.serialize([mainId]));
+    if (result.error) {
+      setNotice(result.error);
+      return;
+    }
+    store.update(mainId, { libraryId: result.id, libraryVersion: result.version });
+    store.commit();
+    setNotice(
+      result.version === 1
+        ? `Published “${node.name}” to the library.`
+        : `Published “${node.name}” — revision ${result.version}.`,
+    );
+  };
+
+  if (!mains.length) {
+    // no components of its own is not the same as nothing to offer: a file can
+    // still reach for anything published from the files it can see
+    return (
+      <div className="scroll" style={{ flex: 1 }}>
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-ink-muted)', lineHeight: 1.5 }}>
+          <div style={{ fontWeight: 500, color: 'var(--color-ink)', marginBottom: 6 }}>
+            No components in this file
+          </div>
+          Select a layer and press ⌥⌘K to make one.
+        </div>
+        <div style={{ padding: '0 8px 12px' }}>
+          <LibrarySection query="" readOnly={readOnly} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', height: 32, padding: '0 12px', gap: 4 }}>
+        <input
+          value={query}
+          placeholder="Search components"
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => event.stopPropagation()}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: 22,
+            border: 0,
+            borderRadius: 5,
+            padding: '0 6px',
+            background: 'var(--color-control)',
+            boxShadow: 'var(--shadow-control)',
+            outline: 'none',
+          }}
+        />
+      </div>
+
+      <div className="scroll" style={{ flex: 1, padding: '0 8px 12px' }}>
+        <div className="fig-left-section" style={{ paddingLeft: 4 }}>
+          <span style={{ flex: 1 }}>In this file</span>
+        </div>
+        {entries.map(({ node, variants }) => (
+          <div key={node.id}>
+            <AssetRow
+              node={node}
+              depth={0}
+              disabled={readOnly || node.isComponentSet === true}
+              onPlace={place}
+              onPublish={readOnly || node.isComponentSet ? undefined : () => publish(node.id)}
+              published={!!node.libraryId}
+            />
+            {variants.map((variant) => (
+              <AssetRow
+                key={variant.id}
+                node={variant}
+                depth={1}
+                disabled={readOnly}
+                onPlace={place}
+              />
+            ))}
+          </div>
+        ))}
+        {!entries.length && (
+          <p style={{ padding: '8px 4px', color: 'var(--color-ink-dim)' }}>Nothing matches “{query}”.</p>
+        )}
+
+        <LibrarySection query={query} readOnly={readOnly} />
+        {notice && <p className="fig-hint">{notice}</p>}
+      </div>
+    </>
+  );
+}
+
+function AssetRow({
+  node,
+  depth,
+  disabled,
+  onPlace,
+  onPublish,
+  published,
+}: {
+  node: { id: string; name: string; isComponentSet?: boolean };
+  depth: number;
+  disabled: boolean;
+  onPlace: (id: string, at?: { x: number; y: number }) => void;
+  onPublish?: () => void;
+  published?: boolean;
+}) {
+  return (
+    <div
+      className="fig-layer"
+      style={{ paddingLeft: 8 + depth * 14, cursor: disabled ? 'default' : 'grab' }}
+      title={disabled && node.isComponentSet ? 'Pick a variant below' : 'Click or drag onto the canvas'}
+      draggable={!disabled}
+      onDragStart={(event) => {
+        event.dataTransfer.setData('application/x-paperlike-component', node.id);
+        event.dataTransfer.effectAllowed = 'copy';
+      }}
+      onClick={() => !disabled && onPlace(node.id)}
+    >
+      <span style={{ display: 'flex', color: 'var(--fig-purple, #7B61FF)' }}>
+        <Icon.Component solid={!node.isComponentSet} />
+      </span>
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
+      {onPublish && (
+        <button
+          type="button"
+          className="fig-btn fig-layer-icons"
+          style={{ flex: 'none' }}
+          title={published ? 'Publish a new revision to the library' : 'Publish to the library'}
+          onClick={(event) => {
+            event.stopPropagation();
+            onPublish();
+          }}
+        >
+          {published ? '↑' : '⇧'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Components published from any file you can see.
+ *
+ * Importing one copies it in as a local main that remembers where it came
+ * from — instances point at that copy, so a later revision can be taken in one
+ * place and reach every instance at once.
+ */
+function LibrarySection({ query, readOnly }: { query: string; readOnly: boolean }) {
+  const store = useStore();
+  const doc = useDoc();
+  const pageId = useUI((s) => s.page);
+  const select = useUI((s) => s.select);
+  const room = useSession().provider.roomname;
+  const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // The library is a server list, not a document one: fetch it when the panel
+  // opens, not on every keystroke that changes the document.
+  useEffect(() => {
+    let live = true;
+    void listLibraryAction().then((list) => {
+      if (live) setEntries(list);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // the local copy of each library component: a main, not a stray paste
+  const mine = new Map(
+    Object.values(doc)
+      .filter((node) => node.libraryId && node.isComponent)
+      .map((node) => [node.libraryId!, node]),
+  );
+
+  const shown = (entries ?? []).filter(
+    (entry) =>
+      // a component published *from this file* is already in the list above
+      entry.fileId !== room &&
+      (!query || entry.name.toLowerCase().includes(query.toLowerCase())),
+  );
+  if (!shown.length) return null;
+
+  const take = async (entry: LibraryEntry) => {
+    setBusy(entry.id);
+    const result = await fetchLibraryComponentAction(entry.id);
+    setBusy(null);
+    if (!result.payload) return;
+
+    const existing = mine.get(entry.id);
+    if (existing) {
+      store.updateFromLibrary(existing.id, result.payload, result.version ?? entry.version);
+      store.commit();
+      select([existing.id]);
+      return;
+    }
+    const id = store.importComponent(result.payload, pageId, {
+      id: entry.id,
+      version: result.version ?? entry.version,
+    }, viewCentre());
+    store.commit();
+    if (id) select([id]);
+  };
+
+  return (
+    <>
+      <div className="fig-left-section" style={{ paddingLeft: 4, marginTop: 10 }}>
+        <span style={{ flex: 1 }}>Library</span>
+      </div>
+      {shown.map((entry) => {
+        const local = mine.get(entry.id);
+        const stale = local && (local.libraryVersion ?? 0) < entry.version;
+        return (
+          <div key={entry.id} className="fig-layer" style={{ paddingLeft: 8 }}>
+            <span style={{ display: 'flex', color: 'var(--fig-purple, #7B61FF)' }}>
+              <Icon.Component solid />
+            </span>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {entry.name}
+              <span style={{ color: 'var(--color-ink-dim)' }}> · {entry.fileName}</span>
+            </span>
+            <button
+              type="button"
+              className="btn"
+              disabled={readOnly || busy === entry.id || (!!local && !stale)}
+              title={
+                stale
+                  ? `Take revision ${entry.version}`
+                  : local
+                    ? 'Up to date'
+                    : 'Bring this component into the file'
+              }
+              onClick={() => void take(entry)}
+            >
+              {busy === entry.id ? '…' : stale ? 'Update' : local ? 'Added' : 'Add'}
+            </button>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** The middle of the canvas in world coordinates — where a click-placed asset goes. */
+function viewCentre(): { x: number; y: number } {
+  const vp = useUI.getState().viewport;
+  const canvas = document.querySelector<HTMLElement>('[data-canvas-root]');
+  const rect = canvas?.getBoundingClientRect();
+  const width = rect?.width ?? window.innerWidth;
+  const height = rect?.height ?? window.innerHeight;
+  return {
+    x: Math.round((width / 2 - vp.x) / vp.zoom) - 60,
+    y: Math.round((height / 2 - vp.y) / vp.zoom) - 40,
+  };
+}
+
+/**
+ * Variables.
+ *
+ * They live in the CRDT and publish as CSS custom properties on the canvas
+ * root, so a fill of `var(--brand)` resolves live and survives export as a real
+ * variable rather than a baked-in hex.
+ *
+ * A collection gives its variables modes — light and dark, one brand and
+ * another — and every mode gets a column here, because the whole point of a
+ * mode is comparing it with the one beside it.
  */
 function ThemeTab() {
   const store = useStore();
   const tokens = useTokens();
+  const collections = useCollections();
+  const [collectionId, setCollectionId] = useState(DEFAULT_COLLECTION_ID);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
+  const [renamingMode, setRenamingMode] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
 
+  const collection =
+    collections.find((entry) => entry.id === collectionId) ?? collections[0] ?? DEFAULT_COLLECTION;
+  const modes = collection.modes;
+
+  const mine = tokens.filter((token) => (token.collection ?? DEFAULT_COLLECTION_ID) === collection.id);
   const visible = query
-    ? tokens.filter((t) => t.name.toLowerCase().includes(query.toLowerCase()))
-    : tokens;
+    ? mine.filter((t) => t.name.toLowerCase().includes(query.toLowerCase()))
+    : mine;
 
   if (tokens.length === 0) {
     return (
@@ -549,17 +944,24 @@ function ThemeTab() {
         <span style={{ color: 'var(--color-ink-dim)', transform: 'scale(1.6)' }}>
           <Icon.Logo />
         </span>
-        <div style={{ fontWeight: 500, marginTop: 8 }}>Theme tokens</div>
+        <div style={{ fontWeight: 500, marginTop: 8 }}>Variables</div>
         <div style={{ color: 'var(--color-ink-muted)', lineHeight: 1.45 }}>
-          Create tokens to get started, or explore the starter theme.
+          Create a variable to get started, or explore the starter theme.
         </div>
         <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
           <button
             type="button"
             className="btn btn-raised"
-            onClick={() => store.addToken({ name: `token-${tokens.length + 1}`, type: 'color', value: '#BDEE63' })}
+            onClick={() =>
+              store.addToken({
+                name: `token-${tokens.length + 1}`,
+                type: 'color',
+                value: '#BDEE63',
+                collection: collection.id,
+              })
+            }
           >
-            Create token
+            Create variable
           </button>
           <button
             type="button"
@@ -573,14 +975,104 @@ function ThemeTab() {
     );
   }
 
+  const valueIn = (token: (typeof tokens)[number], modeId: string): string =>
+    token.values?.[modeId] ?? (modeId === collection.defaultMode ? token.value : token.value);
+
   return (
     <>
+      {/* collections */}
+      <div className="fig-left-section" style={{ borderTop: '1px solid var(--fig-line)' }}>
+        <select
+          className="fig-plain-select"
+          value={collection.id}
+          onChange={(event) => setCollectionId(event.target.value)}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          {collections.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="fig-btn"
+          title="New collection"
+          onClick={() => setCollectionId(store.addCollection(`Collection ${collections.length + 1}`))}
+        >
+          <Icon.Plus />
+        </button>
+      </div>
+
+      {/* modes */}
+      <div className="fig-modes">
+        {modes.map((mode) => (
+          <span
+            key={mode.id}
+            className="fig-mode"
+            data-on={collection.defaultMode === mode.id || undefined}
+            title={
+              collection.defaultMode === mode.id
+                ? 'The mode the canvas shows — double-click to rename'
+                : 'Click to show this mode on the canvas'
+            }
+            onClick={() => store.updateCollection(collection.id, { defaultMode: mode.id })}
+            onDoubleClick={() => setRenamingMode(mode.id)}
+          >
+            {renamingMode === mode.id ? (
+              <input
+                autoFocus
+                defaultValue={mode.name}
+                onBlur={(event) => {
+                  const name = event.target.value.trim();
+                  if (name) {
+                    store.updateCollection(collection.id, {
+                      modes: modes.map((m) => (m.id === mode.id ? { ...m, name } : m)),
+                    });
+                  }
+                  setRenamingMode(null);
+                }}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === 'Enter') event.currentTarget.blur();
+                  if (event.key === 'Escape') setRenamingMode(null);
+                }}
+                style={{ width: 60, border: 0, background: 'transparent', outline: 'none' }}
+              />
+            ) : (
+              mode.name
+            )}
+            {modes.length > 1 && (
+              <button
+                type="button"
+                className="fig-mode-x"
+                title="Delete mode"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  store.removeMode(collection.id, mode.id);
+                }}
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        <button
+          type="button"
+          className="fig-btn"
+          title="Add mode"
+          onClick={() => store.addMode(collection.id)}
+        >
+          <Icon.Plus />
+        </button>
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', height: 32, padding: '0 12px', gap: 4 }}>
         {searching ? (
           <input
             autoFocus
             value={query}
-            placeholder="Search tokens"
+            placeholder="Search variables"
             onChange={(e) => setQuery(e.target.value)}
             onBlur={() => !query && setSearching(false)}
             onKeyDown={(e) => {
@@ -604,7 +1096,7 @@ function ThemeTab() {
           />
         ) : (
           <span style={{ flex: 1, color: 'var(--color-ink-muted)' }}>
-            {tokens.length} {tokens.length === 1 ? 'token' : 'tokens'}
+            {mine.length} {mine.length === 1 ? 'variable' : 'variables'}
           </span>
         )}
         <button
@@ -620,8 +1112,15 @@ function ThemeTab() {
           type="button"
           className="btn"
           style={{ width: 20, padding: 0 }}
-          title="New token"
-          onClick={() => store.addToken({ name: `token-${tokens.length + 1}`, type: 'color', value: '#BDEE63' })}
+          title="New variable"
+          onClick={() =>
+            store.addToken({
+              name: `token-${tokens.length + 1}`,
+              type: 'color',
+              value: '#BDEE63',
+              collection: collection.id,
+            })
+          }
         >
           <Icon.Plus />
         </button>
@@ -633,8 +1132,12 @@ function ThemeTab() {
             {token.type === 'color' ? (
               <input
                 type="color"
-                value={token.value.startsWith('#') ? token.value : '#000000'}
-                onChange={(e) => store.updateToken(token.id, { value: e.target.value.toUpperCase() })}
+                value={valueIn(token, collection.defaultMode).startsWith('#')
+                  ? valueIn(token, collection.defaultMode)
+                  : '#000000'}
+                onChange={(e) =>
+                  store.setTokenValue(token.id, collection.defaultMode, e.target.value.toUpperCase())
+                }
                 style={{
                   width: 16,
                   height: 16,
@@ -662,36 +1165,55 @@ function ThemeTab() {
               }}
               style={{ flex: 1, minWidth: 0, border: 0, background: 'transparent', outline: 'none' }}
             />
-            <input
-              defaultValue={token.value}
-              onBlur={(e) => store.updateToken(token.id, { value: e.target.value.trim() })}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === 'Enter') e.currentTarget.blur();
-              }}
-              style={{
-                width: 66,
-                flex: 'none',
-                border: 0,
-                background: 'transparent',
-                outline: 'none',
-                color: 'var(--color-ink-muted)',
-                textAlign: 'right',
-              }}
-            />
+            {modes.map((mode) => (
+              <input
+                key={`${token.id}-${mode.id}`}
+                // keyed by value as well: a mode switch has to re-seed the field
+                defaultValue={valueIn(token, mode.id)}
+                title={`${token.name} · ${mode.name}`}
+                onBlur={(e) => store.setTokenValue(token.id, mode.id, e.target.value.trim())}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                style={{
+                  width: modes.length > 1 ? 58 : 66,
+                  flex: 'none',
+                  border: 0,
+                  background: 'transparent',
+                  outline: 'none',
+                  color: 'var(--color-ink-muted)',
+                  textAlign: 'right',
+                }}
+              />
+            ))}
             <button
               type="button"
               className="btn layer-eye"
               style={{ width: 18, padding: 0, flex: 'none' }}
-              title="Delete token"
+              data-on={editing === token.id || undefined}
+              title="Scope and description"
+              onClick={() => setEditing(editing === token.id ? null : token.id)}
+            >
+              <Icon.Sliders />
+            </button>
+            <button
+              type="button"
+              className="btn layer-eye"
+              style={{ width: 18, padding: 0, flex: 'none' }}
+              title="Delete variable"
               onClick={() => store.removeToken(token.id)}
             >
               <Icon.Minus />
             </button>
           </div>
         ))}
+        {visible.map((token) =>
+          editing === token.id ? <ScopeEditor key={`${token.id}-scope`} token={token} /> : null,
+        )}
         <p style={{ marginTop: 10, color: 'var(--color-ink-dim)', lineHeight: 1.45 }}>
-          Use one anywhere a colour is accepted by typing <code>var(--name)</code>.
+          Use one anywhere a colour is accepted by typing <code>var(--name)</code>. A frame can
+          switch modes from the Design panel.
         </p>
       </div>
     </>

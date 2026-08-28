@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useDoc, useStore, useTokenVars, useTokens, useVarNames } from './Session';
+import {
+  useCollections,
+  useCustomFonts,
+  useDoc,
+  useStore,
+  useTokenVars,
+  useTokens,
+  useVarNames,
+} from './Session';
 import { hasNodes, readNodes, writeNodes } from '../lib/clipboard';
 import {
   copyAsPng,
@@ -18,6 +26,7 @@ import {
 import { download, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { useUI } from '../state/ui';
+import type { BooleanOp } from '../document/types';
 
 interface Item {
   label: string;
@@ -145,6 +154,8 @@ function Menu({ menu }: { menu: OpenMenu }) {
   const doc = useDoc();
   const varNames = useVarNames();
   const tokens = useTokens();
+  const collections = useCollections();
+  const fonts = useCustomFonts();
   const tokenVars = useTokenVars();
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
@@ -205,11 +216,11 @@ function Menu({ menu }: { menu: OpenMenu }) {
       label: 'React',
       disabled: !one,
       run: () => {
-        const { markup, css } = toReact(target, doc, tokens);
+        const { markup, css } = toReact(target, doc, tokens, collections, fonts);
         return writeText(`${markup}\n\n/* ${safeFilename(first?.name ?? 'layer')}.css */\n${css}`);
       },
     },
-    { label: 'HTML', disabled: !one, run: () => writeText(toHtml(target, doc, tokens)) },
+    { label: 'HTML', disabled: !one, run: () => writeText(toHtml(target, doc, tokens, collections, fonts)) },
     { label: 'JSON', disabled: !one, run: () => writeText(toJson(target, doc)) },
   ];
 
@@ -243,6 +254,11 @@ function Menu({ menu }: { menu: OpenMenu }) {
       run: () => void pasteProperties(store, selection),
     },
   ];
+
+  const combine = (op: BooleanOp) => {
+    const id = store.booleanGroup(selection, op);
+    if (id) select([id]);
+  };
 
   const items: Item[] = [];
 
@@ -307,6 +323,50 @@ function Menu({ menu }: { menu: OpenMenu }) {
       },
     },
 
+    {
+      label: 'Boolean groups',
+      divider: true,
+      disabled: selection.length < 2,
+      items: [
+        { label: 'Union selection', shortcut: '⌥⌘U', run: () => combine('union') },
+        { label: 'Subtract selection', shortcut: '⌥⌘S', run: () => combine('subtract') },
+        { label: 'Intersect selection', shortcut: '⌥⌘I', run: () => combine('intersect') },
+        { label: 'Exclude selection', shortcut: '⌥⌘X', run: () => combine('exclude') },
+      ],
+    },
+    {
+      label: first?.isMask ? 'Remove mask' : 'Use as mask',
+      shortcut: '⌃⌘M',
+      disabled: !has,
+      run: () => store.toggleMask(selection),
+    },
+    {
+      label: 'Flatten',
+      shortcut: '⌘E',
+      disabled: !has,
+      run: () => {
+        const flattened = store.flatten(selection);
+        if (flattened) {
+          select([flattened]);
+          useUI.getState().setVectorEdit(flattened);
+        }
+      },
+    },
+    {
+      label: 'Outline stroke',
+      shortcut: '⇧⌘O',
+      disabled: !has || !first?.border,
+      run: () => {
+        const made = store.outlineStroke(selection);
+        if (made.length) select(made);
+      },
+    },
+    {
+      label: 'Edit points',
+      shortcut: '⏎',
+      disabled: !one || first?.type !== 'vector',
+      run: () => useUI.getState().setVectorEdit(target),
+    },
     {
       label: 'Create section',
       shortcut: '⇧S',

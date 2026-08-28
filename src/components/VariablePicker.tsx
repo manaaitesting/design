@@ -6,6 +6,7 @@ import { FigButton, FigMenuItem, FigPopover } from './ui/Figma';
 import { useStore, useTokens } from './Session';
 import { useUI } from '../state/ui';
 import type { NumericField, SceneNode } from '../document/types';
+import { FIELD_SCOPE, inScope } from '../document/variables';
 
 /**
  * Figma's applied number variables.
@@ -26,7 +27,12 @@ export function VariableMenu({
   onClose: () => void;
 }) {
   const store = useStore();
-  const tokens = useTokens().filter((token) => token.type === 'number');
+  // only number variables, and only those scoped to this kind of field — a
+  // corner-radius token has no business being offered as an X position
+  const scope = FIELD_SCOPE[field];
+  const tokens = useTokens().filter(
+    (token) => token.type === 'number' && (!scope || inScope(token, scope)),
+  );
   const selection = useUI((s) => s.selection);
   const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
   const bound = node.vars?.[field];
@@ -50,7 +56,8 @@ export function VariableMenu({
           )}
           {tokens.length === 0 ? (
             <div style={{ color: 'var(--fig-dim)', padding: 6 }}>
-              No number variables yet — create them in the Theme tab.
+              No number variables scoped to this field. Create one in the Theme tab, or widen an
+              existing variable&rsquo;s scope.
             </div>
           ) : (
             <ul role="listbox" aria-label="Number variables" style={{ margin: 0, padding: 0, listStyle: 'none' }}>

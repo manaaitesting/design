@@ -27,12 +27,16 @@ export default defineConfig({
     timeout: 120_000,
   },
   projects: [
-    // no browser, no dev server: this one drives the sync server directly
+    // no browser, no dev server: pure functions, checked directly
+    { name: 'geometry', testMatch: /geometry\.spec\.ts/ },
+    // no browser either: the shared library, against a scratch database
+    { name: 'library', testMatch: /library\.spec\.ts/ },
+    // no browser either: this one drives the sync server
     { name: 'sync', testMatch: /snapshots\.spec\.ts/ },
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
     {
       name: 'editor',
-      testMatch: /editor\.spec\.ts/,
+      testMatch: /(editor|features)\.spec\.ts/,
       dependencies: ['setup'],
       use: {
         ...devices['Desktop Chrome'],

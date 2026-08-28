@@ -43,7 +43,27 @@ export function Cursors({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               }}
             >
               {p.identity.name}
+              {p.spotlight && <span style={{ opacity: 0.8 }}> · presenting</span>}
             </span>
+            {/* whatever they are saying, riding along beside the pointer */}
+            {p.chat && (
+              <span
+                style={{
+                  position: 'absolute',
+                  left: 8,
+                  top: 24,
+                  maxWidth: 260,
+                  fontSize: 11,
+                  lineHeight: '15px',
+                  padding: '2px 7px',
+                  borderRadius: 10,
+                  background: p.identity.color,
+                  color: readableOn(p.identity.color),
+                }}
+              >
+                {p.chat}
+              </span>
+            )}
           </div>
         );
       })}

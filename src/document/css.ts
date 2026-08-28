@@ -1,5 +1,14 @@
 import type { CSSProperties } from 'react';
 import { effectStyle, effectsOf } from './effects';
+import { fillRuleOf, isClosedShape, outlinePath, paintsWithPath, shapePath } from './geometry';
+import {
+  cssFilter,
+  filterId,
+  isNeutral,
+  needsSvgFilter,
+  rotationStyle,
+  type ImageAdjust,
+} from './adjust';
 import {
   isInFlow,
   type Align,
@@ -144,6 +153,13 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
   else if (inFlow) style.alignSelf = 'stretch';
   else style.height = '100%';
 
+  // Min and max bounds are handed to the browser rather than clamped here, so
+  // a hugging or filling layer honours them while it is being laid out.
+  if (node.minW != null) style.minWidth = node.minW;
+  if (node.maxW != null) style.maxWidth = node.maxW;
+  if (node.minH != null) style.minHeight = node.minH;
+  if (node.maxH != null) style.maxHeight = node.maxH;
+
   const transforms: string[] = [];
   if (node.rotation) transforms.push(`rotate(${node.rotation}deg)`);
   if (node.flipH) transforms.push('scaleX(-1)');
@@ -198,10 +214,17 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
   }
 
   // ── Paint ────────────────────────────────────────────────────────────
-  // vectors paint through their <path>, so the box itself stays transparent
-  if (node.type === 'vector') {
+  // A path shape paints through its own clipped layer (see `shapePaint`), and a
+  // boolean group through its nested clips, so the box itself stays transparent
+  // — a background here would draw the rectangle the shape is trying not to be.
+  const pathPainted = paintsWithPath(node) || node.type === 'boolean';
+  if (pathPainted) {
     style.background = undefined;
     style.overflow = 'visible';
+  } else if (needsPaintLayers(node)) {
+    // an adjusted or rotated image paints on its own element; a background here
+    // would sit behind it, unadjusted, and show through anything transparent
+    style.background = undefined;
   } else if (node.fills?.length) {
     const composed = composePaints(node.fills);
     if (composed) style.background = composed;
@@ -238,7 +261,7 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
   // Border, inner shadow and drop shadow all share `box-shadow`; the order here
   // is what stacks them correctly — insets first, drop last.
   const shadows: string[] = [];
-  if (node.border && node.type !== 'vector') {
+  if (node.border && !pathPainted) {
     const { width, color, style: lineStyle, position, sides } = node.border;
     if (sides) {
       // Individual strokes have to be real borders: a box-shadow ring cannot
@@ -270,7 +293,13 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
   // of document render the same.
   const effects = effectsOf(node);
   const { inset, drop, filter: blurs, backdrop } = effectStyle(effects, node.clip);
-  shadows.push(...inset, ...drop);
+  // A shape's shadow has to follow its outline, and `box-shadow` only knows
+  // boxes. `drop-shadow()` reads the alpha of what was actually painted, so a
+  // star casts a star. It is applied to the node, whose clipped fill layer and
+  // stroke are its rendered content — CSS filters an element *before* its own
+  // clip, which is why the clip lives on the layer inside rather than here.
+  const dropFilters = pathPainted ? drop.map(asDropShadow) : [];
+  if (!pathPainted) shadows.push(...inset, ...drop);
   if (shadows.length) style.boxShadow = shadows.join(', ');
 
   if (node.outline) {
@@ -281,7 +310,7 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
 
   // Layer blur comes from the effects list; the rest of `filters` is this
   // canvas's colour adjustments, which Figma has no equivalent for.
-  const parts: string[] = [...blurs];
+  const parts: string[] = [...blurs, ...dropFilters];
   if (node.filters) {
     const f = node.filters;
     if (f.brightness !== 1) parts.push(`brightness(${f.brightness})`);
@@ -340,6 +369,13 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
       style.textUnderlineOffset = `${u.offset}px`;
     }
 
+    if (f.numeric && f.numeric !== 'normal') {
+      style.fontVariantNumeric = f.numeric === 'tabular' ? 'tabular-nums' : 'oldstyle-nums';
+    }
+    if (f.features?.length) {
+      style.fontFeatureSettings = f.features.map((tag) => `"${tag}"`).join(', ');
+    }
+
     if (node.textStroke) {
       style.WebkitTextStrokeWidth = `${node.textStroke.width}px`;
       style.WebkitTextStrokeColor = node.textStroke.color;
@@ -352,11 +388,10 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
     style.overflow = 'hidden';
   }
 
-  if (node.type === 'image') {
+  if (node.type === 'image' || (!pathPainted && /url\(/.test(String(style.background ?? '')))) {
     // set after `background` above — the shorthand would otherwise reset these
-    if (node.src) style.backgroundImage = `url(${node.src})`;
-    style.backgroundSize = 'cover';
-    style.backgroundPosition = 'center';
+    if (node.type === 'image' && node.src) style.backgroundImage = `url(${node.src})`;
+    Object.assign(style, imageSizing(node));
   }
 
   return style;
@@ -379,4 +414,195 @@ export function styleToCss(style: CSSProperties, indent = '  '): string {
       return `${indent}${kebab(k)}: ${value};`;
     })
     .join('\n');
+}
+
+/**
+ * `box-shadow` syntax → `drop-shadow()` syntax.
+ *
+ * The filter takes no spread, so a spread shadow loses that much precision.
+ * Growing the blur to compensate keeps the weight of the shadow about right,
+ * which reads better than dropping the value on the floor.
+ */
+function asDropShadow(shadow: string): string {
+  const parts = shadow.trim().split(/\s+(?![^(]*\))/);
+  if (parts.length < 4) return `drop-shadow(${shadow})`;
+  const [x, y, blur, spread, ...rest] = parts;
+  const colour = rest.join(' ') || 'rgba(0,0,0,0.25)';
+  const grown = parseFloat(blur) + Math.max(0, parseFloat(spread) || 0) * 2;
+  return `drop-shadow(${x} ${y} ${Number.isFinite(grown) ? grown : parseFloat(blur) || 0}px ${colour})`;
+}
+
+/**
+ * A paint that has to be drawn on an element of its own.
+ *
+ * A stack of ordinary paints composes into one `background`, which is the cheap
+ * path and what almost every layer takes. An image that has been adjusted or
+ * turned cannot: a filter applies to a whole element, and a background cannot
+ * be rotated. Those paints get a layer each, in the same order they would have
+ * composed in.
+ */
+export interface PaintLayer {
+  id: string;
+  style: CSSProperties;
+  /** the SVG filter this layer needs, when CSS alone cannot express it */
+  filter: { id: string; adjust: ImageAdjust } | null;
+}
+
+function paintNeedsLayer(paint: Paint): boolean {
+  return /^url\(/.test(paint.value) && (!!paint.rotation || !isNeutral(paint.adjust));
+}
+
+export function needsPaintLayers(node: SceneNode): boolean {
+  return (node.fills ?? []).some(paintNeedsLayer);
+}
+
+export function paintLayers(node: SceneNode): PaintLayer[] {
+  const paints = (node.fills ?? []).filter((paint) => paint.visible !== false && paint.value);
+  // the first paint is the front-most, and a later element paints on top
+  return [...paints].reverse().map((paint) => {
+    const image = /^url\(/.test(paint.value);
+    const adjust = paint.adjust;
+    const css = adjust ? cssFilter(adjust) : '';
+    const svg = needsSvgFilter(adjust) ? filterId(node.id, paint.id) : null;
+    const filters = [svg ? `url(#${svg})` : '', css].filter(Boolean).join(' ');
+
+    return {
+      id: paint.id,
+      filter: svg && adjust ? { id: svg, adjust } : null,
+      style: {
+        position: 'absolute',
+        inset: 0,
+        pointerEvents: 'none',
+        borderRadius: 'inherit',
+        overflow: 'hidden',
+        background: withAlpha(paint.value, paint.opacity ?? 1),
+        ...(image ? imageSizing(node, paint) : null),
+        ...(paint.rotation ? rotationStyle(paint.rotation, node.w, node.h) : null),
+        ...(filters ? { filter: filters } : null),
+      },
+    };
+  });
+}
+
+/** How a path shape's stroke is drawn. */
+export interface ShapeStroke {
+  color: string;
+  width: number;
+  dash: string | null;
+  cap: 'butt' | 'round' | 'square';
+  join: 'miter' | 'round' | 'bevel';
+  /** `inside` and `outside` are drawn at double width and clipped to one half */
+  align: 'inside' | 'center' | 'outside';
+}
+
+/**
+ * The two layers a path shape paints with.
+ *
+ * The fill is ordinary CSS — a background clipped to the outline — so gradients,
+ * images, paint stacks and blend modes all keep working on a star exactly as
+ * they do on a rectangle. Only the stroke needs SVG, because CSS has no way to
+ * draw a line along an arbitrary path.
+ */
+export interface ShapePaint {
+  d: string;
+  fillRule: 'nonzero' | 'evenodd';
+  fill: CSSProperties | null;
+  stroke: ShapeStroke | null;
+}
+
+function dashOf(border: NonNullable<SceneNode['border']>): string | null {
+  if (border.dash) return `${border.dash} ${border.gap ?? border.dash}`;
+  if (border.style === 'dashed') return `${border.width * 4} ${border.width * 3}`;
+  if (border.style === 'dotted') return `0 ${border.width * 2.2}`;
+  return null;
+}
+
+/**
+ * The `background` a node's paints compose to, ignoring where it is drawn.
+ *
+ * Shapes, boolean groups and the exporter all need the same value; only the
+ * element it lands on differs.
+ */
+/**
+ * How an image paint sits in its box.
+ *
+ * Every mode is a `background-size` and a `background-position`, which is why
+ * cropping here costs nothing at export: the browser was always going to do
+ * this arithmetic, and the exported CSS asks it for exactly the same thing.
+ */
+export function imageSizing(node: SceneNode, paint?: Paint): CSSProperties {
+  // a paint may carry its own placement; the layer's is the fallback, which is
+  // what a document written before paints had their own settings relies on
+  const fit = paint?.fit ?? node.imageFit ?? 'fill';
+  const scale = Math.max(paint?.scale ?? node.imageScale ?? 1, 0.01);
+  const [ox, oy] = paint?.offset ?? node.imageOffset ?? [50, 50];
+
+  switch (fit) {
+    case 'fit':
+      return { backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' };
+    case 'tile':
+      return {
+        backgroundSize: `${Math.round(scale * 100)}%`,
+        backgroundPosition: `${ox}% ${oy}%`,
+        backgroundRepeat: 'repeat',
+      };
+    case 'crop':
+      return {
+        backgroundSize: `${Math.round(scale * 100)}%`,
+        backgroundPosition: `${ox}% ${oy}%`,
+        backgroundRepeat: 'no-repeat',
+      };
+    case 'fill':
+    default:
+      return { backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' };
+  }
+}
+
+export function backgroundOf(node: SceneNode): string {
+  if (node.fills?.length) return composePaints(node.fills);
+  if (node.fill && node.fillVisible !== false) return withAlpha(node.fill, node.fillOpacity ?? 1);
+  return '';
+}
+
+export function shapePaint(node: SceneNode): ShapePaint | null {
+  if (!paintsWithPath(node)) return null;
+  const d = shapePath(node) ?? outlinePath(node);
+  const closed = isClosedShape(node);
+  // A donut and a full ring are two wound rings; even-odd is what punches the
+  // hole out of the middle.
+  const fillRule = fillRuleOf(node);
+
+  let fill: CSSProperties | null = null;
+  if (closed) {
+    const background = backgroundOf(node);
+    if (background) {
+      fill = {
+        position: 'absolute',
+        inset: 0,
+        background,
+        // an image paint has to be told how to sit in the box, exactly as an
+        // image node's does
+        ...(background.includes('url(') ? imageSizing(node) : null),
+        // `path()` takes the element's own coordinate space, which is exactly
+        // the space the geometry was authored in
+        clipPath: `path(${fillRule === 'evenodd' ? 'evenodd, ' : ''}'${d}')`,
+        pointerEvents: 'none',
+      };
+    }
+  }
+
+  const border = node.border;
+  const stroke: ShapeStroke | null =
+    border && border.width > 0
+      ? {
+          color: border.color,
+          width: border.width,
+          dash: dashOf(border),
+          cap: border.cap ?? 'butt',
+          join: border.join ?? 'miter',
+          align: border.position ?? 'center',
+        }
+      : null;
+
+  return { d, fillRule, fill, stroke };
 }
