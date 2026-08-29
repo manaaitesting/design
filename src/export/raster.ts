@@ -323,22 +323,56 @@ export async function nodeToPdf(
   const serialised = nodeToSvg(nodeId, zoom, vars, contentsOnly);
   if (!serialised) throw new Error('That layer is not on screen — scroll it into view and try again.');
   const canvas = await rasterise(serialised, scale);
-  const jpeg = await encode(canvas, 'image/jpeg', 'Encoding the PDF image failed.');
-  const bytes = new Uint8Array(await jpeg.arrayBuffer());
-  return pdfWithImage(bytes, canvas.width, canvas.height, serialised.width, serialised.height);
+
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D is unavailable in this browser.');
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  // PDF keeps colour and transparency apart: the image carries RGB and a
+  // greyscale soft mask carries the alpha channel beside it
+  const rgb = new Uint8Array(canvas.width * canvas.height * 3);
+  const alpha = new Uint8Array(canvas.width * canvas.height);
+  for (let i = 0, to = 0; i < data.length; i += 4, to += 3) {
+    rgb[to] = data[i];
+    rgb[to + 1] = data[i + 1];
+    rgb[to + 2] = data[i + 2];
+    alpha[i / 4] = data[i + 3];
+  }
+
+  return pdfWithRaster(
+    await deflate(rgb),
+    await deflate(alpha),
+    canvas.width,
+    canvas.height,
+    serialised.width,
+    serialised.height,
+  );
+}
+
+/** zlib, which is exactly what PDF's `/FlateDecode` expects. */
+async function deflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 /**
- * The smallest valid PDF that holds one JPEG: catalogue, page tree, page,
- * image, content stream, and the cross-reference table that says where each of
- * them starts.
+ * The smallest valid PDF that holds one image: catalogue, page tree, page,
+ * image, its soft mask, content stream, and the cross-reference table that says
+ * where each of them starts.
  *
  * Written by hand rather than with a library because the whole of it is these
- * forty lines, and every byte offset in the table has to be counted as the file
+ * fifty lines, and every byte offset in the table has to be counted as the file
  * is built — which is the only part a library would actually be doing.
+ *
+ * The pixels are Flate rather than JPEG. A design is mostly flat colour and
+ * hard edges, which is the worst case for a discrete cosine transform: JPEG
+ * puts rings around every letter and every border. Flate is lossless, smaller
+ * on this kind of picture, and — the part that actually mattered — carries a
+ * soft mask, so a layer with transparency in it comes out transparent instead
+ * of black.
  */
-function pdfWithImage(
-  jpeg: Uint8Array,
+function pdfWithRaster(
+  rgb: Uint8Array<ArrayBuffer>,
+  alpha: Uint8Array<ArrayBuffer>,
   pixelW: number,
   pixelH: number,
   pointW: number,
@@ -348,13 +382,19 @@ function pdfWithImage(
   const offsets: number[] = [];
   let at = 0;
   // every string written here is ASCII, so its length is its byte count
-  const push = (chunk: string | Uint8Array) => {
+  const push = (chunk: string | Uint8Array<ArrayBuffer>) => {
     parts.push(chunk as BlobPart);
     at += typeof chunk === 'string' ? chunk.length : chunk.byteLength;
   };
   const object = (n: number, body: string) => {
     offsets[n] = at;
     push(`${n} 0 obj\n${body}\nendobj\n`);
+  };
+  const stream = (n: number, dictionary: string, bytes: Uint8Array<ArrayBuffer>) => {
+    offsets[n] = at;
+    push(`${n} 0 obj\n<< ${dictionary} /Length ${bytes.byteLength} >>\nstream\n`);
+    push(bytes);
+    push('\nendstream\nendobj\n');
   };
 
   push('%PDF-1.4\n');
@@ -365,26 +405,31 @@ function pdfWithImage(
     `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pointW} ${pointH}] ` +
       '/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>',
   );
-
-  // the image is written out by hand: its stream is the JPEG's own bytes
-  offsets[4] = at;
-  push(
-    '4 0 obj\n<< /Type /XObject /Subtype /Image ' +
+  stream(
+    4,
+    '/Type /XObject /Subtype /Image ' +
       `/Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 ` +
-      `/Filter /DCTDecode /Length ${jpeg.byteLength} >>\nstream\n`,
+      '/Filter /FlateDecode /SMask 6 0 R',
+    rgb,
   );
-  push(jpeg);
-  push('\nendstream\nendobj\n');
 
   // the unit square the image is drawn into, stretched to fill the page
   const content = `q ${pointW} 0 0 ${pointH} 0 0 cm /Im0 Do Q\n`;
   object(5, `<< /Length ${content.length} >>\nstream\n${content}endstream`);
 
+  stream(
+    6,
+    '/Type /XObject /Subtype /Image ' +
+      `/Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceGray /BitsPerComponent 8 ` +
+      '/Filter /FlateDecode',
+    alpha,
+  );
+
   const startxref = at;
-  let table = 'xref\n0 6\n0000000000 65535 f \n';
-  for (let n = 1; n <= 5; n++) table += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  let table = 'xref\n0 7\n0000000000 65535 f \n';
+  for (let n = 1; n <= 6; n++) table += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
   push(table);
-  push(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`);
+  push(`trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`);
 
   return new Blob(parts, { type: 'application/pdf' });
 }

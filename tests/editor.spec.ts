@@ -238,23 +238,62 @@ test('dragging an unselected frame background marquees inside it, selected moves
   await removeNodes(page, [built.frame]);
 });
 
-test('⇧⌘K opens a picker and places the image it is given', async ({ page }) => {
+/**
+ * ⇧⌘K, and what Figma does with what it picks: the image goes on the cursor and
+ * the next click puts it down, so it lands where you meant rather than wherever
+ * the view happened to be centred.
+ *
+ * A note on the doubled gestures below, because they are the harness and not
+ * the app: once Playwright has intercepted a file chooser, Chromium eats the
+ * next synthetic input event on the page, whatever kind it is. So each test
+ * spends one getting the page listening again. Nobody clicking a real dialog
+ * sees this.
+ */
+const SPECK =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+async function pickImage(page: import('@playwright/test').Page, name: string) {
   const chooser = page.waitForEvent('filechooser');
   await page.keyboard.press('Shift+Meta+k');
   await (await chooser).setFiles({
-    name: 'Speck.png',
+    name: `${name}.png`,
     mimeType: 'image/png',
-    // a 1x1 PNG, which is enough to be a real image
-    buffer: Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-      'base64',
-    ),
+    buffer: Buffer.from(SPECK, 'base64'),
   });
+  const canvas = page.locator('[data-canvas-root]');
+  // the image is on the cursor: picked, and not yet anywhere
+  await expect(canvas).toHaveAttribute('data-placing', 'true');
+  expect(await nodeNamed(page, name)).toBeUndefined();
+  return canvas;
+}
 
-  await expect.poll(async () => (await nodeNamed(page, 'Speck'))?.type).toBe('image');
+test('⇧⌘K puts the image on the cursor, and a click puts it down', async ({ page }) => {
+  const canvas = await pickImage(page, 'Speck');
+  const board = await page.locator('[data-node-id]').first().boundingBox();
+
+  await page.mouse.click(board!.x + 10, board!.y + 10); // eaten by the chooser
+  await page.mouse.click(board!.x + 40, board!.y + 40);
+
+  await expect(canvas).not.toHaveAttribute('data-placing', 'true');
   const placed = await nodeNamed(page, 'Speck');
+  expect(placed!.type).toBe('image');
   expect(placed!.fill).toMatch(/^url\(data:image\/png/);
+  // where the click was — world (40, 40), the board sitting at the origin
+  expect([placed!.x, placed!.y]).toEqual([40, 40]);
   await removeNodes(page, [placed!.id]);
+});
+
+test('Escape puts a picked image down again without placing it', async ({ page }) => {
+  await pickImage(page, 'Dropped');
+  await page.keyboard.press('Escape'); // eaten by the chooser
+  await page.keyboard.press('Escape');
+
+  // the next click does the ordinary thing — it selects — rather than placing
+  const board = await page.locator('[data-node-id]').first().boundingBox();
+  await page.mouse.click(board!.x + 40, board!.y + 40);
+
+  expect(await nodeNamed(page, 'Dropped')).toBeUndefined();
+  expect(await selection(page)).toHaveLength(1);
 });
 
 test('the arrow keys move a flowed child along the order, not across the canvas', async ({ page }) => {
@@ -2330,7 +2369,12 @@ test.describe('panel controls that used to do nothing', () => {
     const text = readFileSync((await saved.path())!).toString('latin1');
     expect(text.startsWith('%PDF-1.4')).toBe(true);
     expect(text).toContain('/MediaBox [0 0 600 400]');
-    expect(text).toContain('/Filter /DCTDecode');
+    // lossless, and with a soft mask beside it so transparency survives —
+    // a design is flat colour and hard edges, the worst case for a JPEG
+    expect(text).toContain('/Filter /FlateDecode');
+    expect(text).toContain('/SMask 6 0 R');
+    expect(text).toContain('/ColorSpace /DeviceGray');
+    expect(text).not.toContain('DCTDecode');
     expect(text.trimEnd().endsWith('%%EOF')).toBe(true);
 
     // The trailer says where the cross-reference table starts, and every offset
@@ -2339,6 +2383,14 @@ test.describe('panel controls that used to do nothing', () => {
     const marker = text.lastIndexOf('startxref');
     const startxref = Number(text.slice(marker + 'startxref'.length).trim().split('\n')[0]);
     expect(text.slice(startxref, startxref + 4)).toBe('xref');
+    // and every one of the seven objects is where the table says it is
+    // row 0 of the table is the free entry, so the objects start at 1
+    const rows = text.slice(startxref).split('\n').slice(3, 9);
+    expect(rows).toHaveLength(6);
+    rows.forEach((row, index) => {
+      const offset = Number(row.slice(0, 10));
+      expect(text.slice(offset, offset + 7)).toBe(`${index + 1} 0 obj`);
+    });
   });
 
   test('text case and truncation reach the rendered text', async ({ page }) => {
@@ -3685,4 +3737,7 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 });
+
+
+
 

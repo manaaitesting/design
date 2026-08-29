@@ -26,7 +26,7 @@ import type { DocStore } from '../document/store';
 import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
 import { descendants, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
 import { snap, snapCandidates } from '../document/snapping';
-import { fitOnCanvas, imageFilesFrom, readImageFile } from '../lib/images';
+import { fitOnCanvas, imageFilesFrom, readImageFile, type LoadedImage } from '../lib/images';
 import { ARROW, CROSSHAIR } from '../lib/cursors';
 import {
   hitStack,
@@ -128,31 +128,69 @@ export function Canvas() {
   const tokenVars = useTokenVars();
   const [dropping, setDropping] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * Images picked but not yet put down.
+   *
+   * Figma hands a placed image to the cursor and waits for a click, so the
+   * picture lands where you meant rather than wherever the view happened to be
+   * centred. Holding the files here is the whole of that.
+   */
+  const [placing, setPlacing] = useState<LoadedImage[] | null>(null);
+
+  const complain = useCallback((error: unknown) => {
+    setNotice(error instanceof Error ? error.message : 'Could not add that image.');
+    window.setTimeout(() => setNotice(null), 5000);
+  }, []);
+
+  /**
+   * Decodes the files now, whatever happens to them later.
+   *
+   * A picked file is read from an `<input>` that is never in the document, and
+   * once that element is collected the browser is free to let go of the bytes
+   * behind it. Anything that holds a file across a gesture has to hold the
+   * decoded image instead.
+   */
+  const loadImages = useCallback(
+    async (files: File[]): Promise<LoadedImage[]> => {
+      const loaded: LoadedImage[] = [];
+      for (const file of files) {
+        try {
+          loaded.push(await readImageFile(file));
+        } catch (error) {
+          complain(error);
+        }
+      }
+      return loaded;
+    },
+    [complain],
+  );
+
+  /** Puts already-decoded images on the canvas as real image nodes. */
+  const dropImages = useCallback(
+    (images: LoadedImage[], at: { x: number; y: number }) => {
+      let offset = 0;
+      for (const image of images) {
+        const box = fitOnCanvas(image.width, image.height);
+        const id = store.create('image', useUI.getState().page, {
+          name: image.name,
+          x: Math.round(at.x + offset),
+          y: Math.round(at.y + offset),
+          ...box,
+          fill: `url(${image.src})`,
+        });
+        select([id]);
+        offset += 24;
+      }
+    },
+    [store, select],
+  );
 
   /** Places dropped or pasted images as real image nodes at a world point. */
   const placeImages = useCallback(
     async (files: File[], at: { x: number; y: number }) => {
-      let offset = 0;
-      for (const file of files) {
-        try {
-          const image = await readImageFile(file);
-          const box = fitOnCanvas(image.width, image.height);
-          const id = store.create('image', useUI.getState().page, {
-            name: image.name,
-            x: Math.round(at.x + offset),
-            y: Math.round(at.y + offset),
-            ...box,
-            fill: `url(${image.src})`,
-          });
-          select([id]);
-          offset += 24;
-        } catch (error) {
-          setNotice(error instanceof Error ? error.message : 'Could not add that image.');
-          window.setTimeout(() => setNotice(null), 5000);
-        }
-      }
+      dropImages(await loadImages(files), at);
     },
-    [store, select],
+    [loadImages, dropImages],
   );
 
   // paste an image straight onto the canvas
@@ -191,18 +229,28 @@ export function Canvas() {
       input.onchange = () => {
         const files = Array.from(input.files ?? []);
         if (!files.length) return;
-        // Figma hands the image to the cursor and you click to drop it; this
-        // lands it in the middle of what you are looking at, as a paste does.
-        const rect = rootRef.current?.getBoundingClientRect();
-        const vp = useUI.getState().viewport;
-        const centre = rect ? toWorld(vp, rect.width / 2, rect.height / 2) : { x: 0, y: 0 };
-        void placeImages(files, centre);
+        // decoded now, placed later: the image goes on the cursor, and the next
+        // click on the canvas puts it down
+        void loadImages(files).then((images) => {
+          if (images.length) setPlacing(images);
+        });
       };
       input.click();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [placeImages]);
+  }, [loadImages]);
+
+  // Escape puts the picked image down again without placing it, the way it
+  // cancels every other armed gesture here.
+  useEffect(() => {
+    if (!placing) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPlacing(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [placing]);
 
   // ── Zoom & pan ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -374,6 +422,14 @@ export function Canvas() {
     const vp = useUI.getState().viewport;
     const startScreen = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const start = toWorld(vp, startScreen.x, startScreen.y);
+
+    // An image waiting on the cursor is put down here, before any tool gets a
+    // look at the pointer — that press is the placement, not a selection.
+    if (placing) {
+      dropImages(placing, { x: Math.round(start.x), y: Math.round(start.y) });
+      setPlacing(null);
+      return;
+    }
 
     // Panning wins over everything
     if (tool === 'pan' || useUI.getState().spacePan || event.button === 1) {
@@ -905,7 +961,9 @@ export function Canvas() {
 
   // a closed hand while the drag is actually moving the canvas, an open one
   // while it is only offered — the pair every canvas tool uses
-  const cursor = panning
+  const cursor = placing
+    ? CROSSHAIR
+    : panning
     ? 'grabbing'
     : tool === 'pan' || spacePan
       ? 'grab'
@@ -919,6 +977,8 @@ export function Canvas() {
     <div
       ref={rootRef}
       data-canvas-root=""
+      // an image is on the cursor, waiting for the click that puts it down
+      data-placing={placing ? 'true' : undefined}
       // focusable so a click here takes focus off whatever chrome button had
       // it — otherwise Space stays with that button and never pans
       tabIndex={-1}
