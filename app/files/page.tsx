@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { currentUser } from '../../src/server/auth';
-import { listFiles, listFolders, listMembers } from '../../src/server/db';
+import { filesPage } from '../../src/server/queries';
 import {
   deleteFileAction,
   deleteFolderAction,
@@ -39,16 +39,13 @@ export default async function FilesPage({
   if (!user) redirect('/signin');
 
   const { q = '', folder = '', sort = 'recent' } = await searchParams;
-  const folders = listFolders(user.id);
   const sortBy = sort === 'name' || sort === 'created' ? sort : 'recent';
-  const files = listFiles(user.id, { q, folder, sort: sortBy });
-  const total = listFiles(user.id).length;
+  const { folders, files, total, folderOptions, current } = filesPage(user.id, {
+    q,
+    folder,
+    sort: sortBy,
+  });
   const filtered = Boolean(q || folder);
-  const current = folders.find((entry) => entry.id === folder);
-  // Rows come back from node:sqlite with a null prototype, and a client
-  // component may only be handed plain objects — so the picker gets a copy
-  // rather than the query result.
-  const folderOptions = folders.map((entry) => ({ id: entry.id, name: entry.name }));
 
   /** A link to this same view with one thing changed. */
   const href = (patch: Query) => {
@@ -261,7 +258,7 @@ export default async function FilesPage({
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
             {files.map((file) => {
-              const members = listMembers(file.id);
+              const { members } = file;
               const owned = file.owner_id === user.id;
               return (
                 <div
