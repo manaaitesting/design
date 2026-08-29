@@ -3,6 +3,7 @@
 import { backgroundOf, imageSizing, shapePaint, type ShapeStroke } from '../document/css';
 import { booleanClips } from '../document/geometry';
 import { booleanOutlinePath } from '../document/boolean';
+import { ShaderSurface } from './ShaderSurface';
 import type { Doc, SceneNode } from '../document/types';
 
 /**
@@ -106,8 +107,26 @@ export function PathShape({ node }: { node: SceneNode }) {
   if (!paint) return null;
   return (
     <>
-      {paint.fill && <div aria-hidden style={paint.fill} />}
-      {paint.stroke && (
+      {paint.fill && (
+        // the shader draws inside the clipped layer, so it is the shape that is
+        // filled rather than the box the shape happens to sit in
+        <div aria-hidden style={paint.fill}>
+          {paint.shader && <ShaderSurface shaderId={paint.shader.id} params={paint.shader.params} />}
+        </div>
+      )}
+      {paint.stroke && paint.band && (
+        // a variable-width stroke is a filled band, not a stroked line — the
+        // only way SVG can taper
+        <svg
+          style={SVG_STYLE}
+          viewBox={`0 0 ${Math.max(node.w, 1)} ${Math.max(node.h, 1)}`}
+          preserveAspectRatio="none"
+          aria-hidden
+        >
+          <path d={paint.band} fill={paint.stroke.color} fillRule="evenodd" />
+        </svg>
+      )}
+      {paint.stroke && !paint.band && (
         <StrokePath
           id={node.id}
           d={paint.d}
@@ -137,19 +156,23 @@ export function BooleanShape({ node, doc }: { node: SceneNode; doc: Doc }) {
   if (!clips.length) return null;
 
   const background = backgroundOf(node);
+  const shader = node.shader;
   // the innermost element carries the paint; every clip above it narrows what
   // is left of it, which is exactly what an intersection is
-  let content: React.ReactNode = background ? (
-    <div
-      aria-hidden
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background,
-        ...(background.includes('url(') ? imageSizing(node) : null),
-      }}
-    />
-  ) : null;
+  let content: React.ReactNode =
+    background || shader ? (
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          ...(background ? { background } : null),
+          ...(background.includes('url(') ? imageSizing(node) : null),
+        }}
+      >
+        {shader && <ShaderSurface shaderId={shader.id} params={shader.params} />}
+      </div>
+    ) : null;
   for (let i = clips.length - 1; i >= 0; i--) {
     const clip = clips[i];
     content = (

@@ -147,6 +147,12 @@ function sliceToSvg(
 ): Serialised | null {
   const stage = document.querySelector<HTMLElement>('[data-canvas-root] > div');
   if (!stage) return null;
+  // "Show in exports": the page colour is painted on the canvas root, so a crop
+  // taken out of the stage alone comes out transparent behind the artwork.
+  // Reading it back off the root is what puts the page under the slice.
+  const root = stage.parentElement;
+  const background =
+    root && root.dataset.exportBackground !== 'off' ? getComputedStyle(root).backgroundColor : '';
 
   const stageRect = stage.getBoundingClientRect();
   const sliceRect = slice.getBoundingClientRect();
@@ -175,7 +181,7 @@ function sliceToSvg(
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
     `<foreignObject x="0" y="0" width="${width}" height="${height}">` +
-    `<div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;overflow:hidden;width:${width}px;height:${height}px;${declarations}">` +
+    `<div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;overflow:hidden;width:${width}px;height:${height}px;${background ? `background:${background};` : ''}${declarations}">` +
     new XMLSerializer().serializeToString(clone) +
     `</div></foreignObject></svg>`;
 

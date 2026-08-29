@@ -59,6 +59,7 @@ const VIEWER_TOOLS = new Set<Tool>(['move', 'pan', 'comment']);
 export function ToolRail() {
   const readOnly = useReadOnly();
   const tool = useUI((s) => s.tool);
+  const spacePan = useUI((s) => s.spacePan);
   const setTool = useUI((s) => s.setTool);
   const setShadersOpen = useUI((s) => s.setShadersOpen);
   const [shape, setShape] = useState<Tool>('rect');
@@ -81,6 +82,9 @@ export function ToolRail() {
   }, [flyout]);
 
   const activeShape = SHAPES.find((entry) => entry.tool === shape) ?? SHAPES[0];
+  // Holding Space borrows the hand tool, so the rail shows the hand *instead of*
+  // the tool it borrowed from — lighting both would say two tools are armed.
+  const shown = spacePan ? 'pan' : tool;
   const groups = readOnly
     ? GROUPS.map((group) => group.filter((entry) => VIEWER_TOOLS.has(entry.tool))).filter(
         (group) => group.length,
@@ -92,7 +96,7 @@ export function ToolRail() {
       key={entry.tool}
       type="button"
       className="fig-tool"
-      data-on={tool === entry.tool ? 'true' : undefined}
+      data-on={shown === entry.tool ? 'true' : undefined}
       title={entry.shortcut ? `${entry.label}  ${entry.shortcut}` : entry.label}
       aria-label={entry.label}
       onClick={(event) => {

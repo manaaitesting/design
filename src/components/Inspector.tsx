@@ -20,6 +20,7 @@ import {
 import { EffectsSection } from './EffectsSection';
 import { InstancePropsSection, PropBindingRow, PropertiesSection } from './ComponentProps';
 import { StyleBadge, StylePicker } from './StylePicker';
+import type { Style } from '../document/store';
 import { VariableMenu, variableLabel } from './VariablePicker';
 import { Presence } from './Presence';
 import { Inspect } from './Inspect';
@@ -28,12 +29,25 @@ import {
   useCustomFonts,
   useDoc,
   useStore,
+  useStyles,
   useTokens,
   useTokenVars,
   useVarNames,
 } from './Session';
 import { canHoldModes, inScope } from '../document/variables';
 import { useUI } from '../state/ui';
+import {
+  alignAnchors,
+  applyMirror,
+  cloneAnchor,
+  clonePaths,
+  editablePaths,
+  mirrorOf,
+  runningIndex,
+  selectionBounds,
+  type Anchor,
+  type HandleMirror,
+} from '../document/geometry';
 import { resolveColor } from './ui/color';
 import { measureChildren } from '../lib/measure';
 import {
@@ -67,7 +81,9 @@ import {
   type NumericField,
   type Constraint,
   type LineStyle,
+  type FontSpec,
   type Paint,
+  type StyleKind,
   type SceneNode,
   type SizeMode,
   type ExportSetting,
@@ -131,6 +147,7 @@ export function Inspector() {
   const width = useUI((s) => s.rightWidth);
   const tab = useUI((s) => s.inspectorTab);
   const setTab = useUI((s) => s.setInspectorTab);
+  const vectorEdit = useUI((s) => s.vectorEdit);
 
   const nodes = selection.map((id) => doc[id]).filter(Boolean) as SceneNode[];
   const node = nodes[0];
@@ -176,6 +193,16 @@ export function Inspector() {
         <div className="scroll" style={{ flex: 1 }}>
           {!node ? (
             <PageSection />
+          ) : vectorEdit === node.id ? (
+            // Point editing replaces the layer's own panel with the point's,
+            // exactly as Figma's does — the position of a rectangle is not what
+            // you are adjusting while you are inside it.
+            <>
+              <LayerHeader node={node} />
+              <VectorSection node={node} />
+              <FillSection node={node} nodes={nodes} set={set} />
+              <StrokeSection node={node} nodes={nodes} set={set} />
+            </>
           ) : (
             <>
               <LayerHeader node={node} />
@@ -188,7 +215,9 @@ export function Inspector() {
               <ShapeSection node={node} nodes={nodes} set={set} />
               <ModesSection node={node} />
               {node.type === 'text' && <TypographySection node={node} set={set} />}
-              {node.type === 'shader' && <ShaderSection node={node} set={set} />}
+              {/* the parameters belong to whichever layer carries the shader, not
+                  only to a layer that is nothing but one */}
+              {node.shader && <ShaderSection node={node} set={set} />}
               {node.type !== 'shader' && <FillSection node={node} nodes={nodes} set={set} />}
               <StrokeSection node={node} nodes={nodes} set={set} />
               <EffectsSection node={node} set={set} />
@@ -401,20 +430,162 @@ function ComponentSection({ node }: { node: SceneNode }) {
 
 // ── Nothing selected ─────────────────────────────────────────────────────
 
+/**
+ * The panel with nothing selected — which is to say, the page's own panel.
+ *
+ * Figma shows three things here: the page background, the styles the document
+ * carries, and the page's export settings. The background is a full paint row
+ * rather than a swatch because it has the same three controls every other paint
+ * has — a colour, an opacity and an eye.
+ */
 function PageSection() {
   const doc = useDoc();
   const store = useStore();
   const pageId = useUI((s) => s.page);
+  const setExportOpen = useUI((s) => s.setExportOpen);
   const page = doc[pageId] ?? doc[ROOT_ID];
   if (!page) return null;
 
+  const set = (patch: Partial<SceneNode>) => store.update(page.id, patch);
+
   return (
-    <FigSection title="Page">
-      <FigPaintRow
-        color={page.fill ?? '#EEEEEE'}
-        alpha={1}
-        onColor={(fill) => store.update(page.id, { fill })}
+    <>
+      <FigSection title="Page">
+        <FigPaintRow
+          color={page.fill ?? '#EEEEEE'}
+          alpha={page.fillOpacity ?? 1}
+          visible={page.fillVisible !== false}
+          onColor={(fill) => set({ fill })}
+          onAlpha={(fillOpacity) => set({ fillOpacity })}
+          onVisible={() => set({ fillVisible: page.fillVisible === false })}
+        />
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, cursor: 'default' }}
+        >
+          <input
+            type="checkbox"
+            checked={page.exportBackground !== false}
+            onChange={(e) => set({ exportBackground: e.target.checked })}
+            style={{ width: 12, height: 12, accentColor: 'var(--fig-blue)' }}
+          />
+          <span>Show in exports</span>
+        </label>
+      </FigSection>
+
+      <PageStylesSection />
+
+      <ExportSection
+        node={page}
+        nodes={[page]}
+        set={set}
+        onExport={() => setExportOpen(true)}
       />
+    </>
+  );
+}
+
+/**
+ * The document's styles, grouped the way they were named.
+ *
+ * Figma reads a slash in a style's name as a folder — "Card/Title" and
+ * "Card/Body" collapse into one *Card* group — which is the only thing keeping
+ * this list readable once a document has thirty of them.
+ */
+function PageStylesSection() {
+  const styles = useStyles();
+  const store = useStore();
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+
+  const KINDS: { kind: StyleKind; label: string }[] = [
+    { kind: 'text', label: 'Text styles' },
+    { kind: 'paint', label: 'Color styles' },
+    { kind: 'effect', label: 'Effect styles' },
+  ];
+
+  /** "28/34" — the size and line height a text style sets, as Figma lists it. */
+  const metrics = (style: Style): string | null => {
+    if (style.kind !== 'text') return null;
+    const font = style.value as Partial<FontSpec> | null;
+    if (!font?.size) return null;
+    const height = font.lineHeight;
+    const leading = typeof height === 'number' && height <= 4 ? font.size * height : height;
+    return leading ? `${Math.round(font.size)}/${Math.round(Number(leading))}` : `${Math.round(font.size)}`;
+  };
+
+  const row = (style: Style) => (
+    <div key={style.id} className="fig-layer" style={{ paddingLeft: 10 }}>
+      <span style={{ display: 'flex', color: 'var(--color-ink-muted)' }}>
+        {style.kind === 'text' ? <Icon.FontSize /> : <Icon.Tokens />}
+      </span>
+      <span className="fig-ellipsis" style={{ flex: 1 }}>
+        {style.name.includes('/') ? style.name.slice(style.name.indexOf('/') + 1) : style.name}
+      </span>
+      {metrics(style) && (
+        <span style={{ flex: 'none', color: 'var(--fig-dim)' }}>· {metrics(style)}</span>
+      )}
+      <button
+        type="button"
+        className="fig-btn fig-layer-icons"
+        style={{ flex: 'none' }}
+        title={`Delete ${style.name}`}
+        onClick={() => store.removeStyle(style.id)}
+      >
+        <Icon.Minus />
+      </button>
+    </div>
+  );
+
+  /** A slash makes a folder — "Card/Title" and "Card/Body" collapse into Card. */
+  const listing = (entries: Style[]) => {
+    const loose: Style[] = [];
+    const groups = new Map<string, Style[]>();
+    for (const style of entries) {
+      const cut = style.name.indexOf('/');
+      if (cut <= 0) {
+        loose.push(style);
+        continue;
+      }
+      const folder = style.name.slice(0, cut);
+      if (!groups.has(folder)) groups.set(folder, []);
+      groups.get(folder)!.push(style);
+    }
+
+    return (
+      <>
+        {loose.map(row)}
+        {[...groups].map(([folder, inside]) => (
+          <div key={folder}>
+            <button
+              type="button"
+              className="fig-disclosure"
+              style={{ height: 24, paddingLeft: 10, fontWeight: 400 }}
+              aria-expanded={!!open[folder]}
+              onClick={() => setOpen((was) => ({ ...was, [folder]: !was[folder] }))}
+            >
+              <span className="fig-disclosure-caret" aria-hidden>
+                <Icon.Chevron open={!!open[folder]} />
+              </span>
+              <span>{folder}</span>
+            </button>
+            {open[folder] && inside.map(row)}
+          </div>
+        ))}
+      </>
+    );
+  };
+
+  return (
+    <FigSection title="Styles" empty={!styles.length}>
+      {KINDS.map(({ kind, label }) => {
+        const entries = styles.filter((style) => style.kind === kind);
+        if (!entries.length) return null;
+        return (
+          <div key={kind}>
+            <div className="fig-label" style={{ paddingLeft: 16 }}>{label}</div>
+            {listing(entries)}
+          </div>
+        );
+      })}
     </FigSection>
   );
 }
@@ -888,6 +1059,193 @@ function InteractionRow({
 }
 
 // ── Position ─────────────────────────────────────────────────────────────
+
+/**
+ * The Vector panel.
+ *
+ * Figma swaps the whole right-hand panel while you are inside a path: the
+ * things you can adjust are the selected *points*, not the layer, so the fields
+ * are their coordinates, how their handles are tied together, and how round the
+ * corner at each one is. Fill and Stroke stay, because those still belong to
+ * the shape you are drawing.
+ */
+function VectorSection({ node }: { node: SceneNode }) {
+  const store = useStore();
+  const selected = useUI((s) => s.anchorSelection);
+  const paths = editablePaths(node);
+
+  const picked = paths.flatMap((path, sub) =>
+    path.anchors
+      .map((anchor, index) => ({ anchor, sub, index, running: runningIndex(paths, sub, index) }))
+      .filter((entry) => selected.includes(entry.running)),
+  );
+
+  /** Every write converts a parametric shape first, then re-fits the box. */
+  const write = (next: ReturnType<typeof clonePaths>) => {
+    if (node.type !== 'vector') store.outlineShape([node.id]);
+    store.setPaths(node.id, next);
+    store.commit();
+  };
+
+  /** Rewrites just the selected anchors. */
+  const edit = (fn: (anchor: Anchor) => Anchor) =>
+    write(
+      paths.map((path, sub) => ({
+        closed: path.closed,
+        anchors: path.anchors.map((anchor, index) =>
+          selected.includes(runningIndex(paths, sub, index)) ? fn(anchor) : cloneAnchor(anchor),
+        ),
+      })),
+    );
+
+  const box = selectionBounds(paths, selected);
+  const same = <T,>(read: (anchor: Anchor) => T): T | 'mixed' => {
+    if (!picked.length) return 'mixed';
+    const first = read(picked[0].anchor);
+    return picked.every((entry) => read(entry.anchor) === first) ? first : 'mixed';
+  };
+
+  // the panel shows canvas coordinates, the way Figma does — the anchors
+  // themselves are stored relative to the layer's own box
+  const x = box ? Math.round((node.x + box.minX) * 100) / 100 : ('mixed' as const);
+  const y = box ? Math.round((node.y + box.minY) * 100) / 100 : ('mixed' as const);
+  const radius = same((anchor) => anchor.r ?? 0);
+  const mirror = same((anchor) => mirrorOf(anchor));
+  const stroke = same((anchor) => anchor.width ?? node.border?.width ?? 1);
+  const none = !picked.length;
+
+  const EDGES = [
+    { edge: 'left', figma: 'Align left', title: 'Align left' },
+    { edge: 'hcenter', figma: 'Align horizontal centers', title: 'Align horizontal centers' },
+    { edge: 'right', figma: 'Align right', title: 'Align right' },
+    { edge: 'top', figma: 'Align top', title: 'Align top' },
+    { edge: 'vcenter', figma: 'Align vertical centers', title: 'Align vertical centers' },
+    { edge: 'bottom', figma: 'Align bottom', title: 'Align bottom' },
+  ] as const;
+
+  const MIRRORS: { mode: HandleMirror; title: string; path: string }[] = [
+    { mode: 'none', title: 'No mirroring', path: 'M2 8h5M9 8h5M7 5.5v5' },
+    { mode: 'angle', title: 'Mirror angle', path: 'M1.5 11.5C5 11.5 6 4.5 9.5 4.5M2 8h12' },
+    { mode: 'full', title: 'Mirror angle and length', path: 'M2 8h12M2 5.5v5M14 5.5v5' },
+  ];
+
+  return (
+    <div className="fig-section">
+      <div className="fig-head">
+        <span>Vector</span>
+      </div>
+
+      <FigGroupSet legend="Align points">
+        <div className="fig-row">
+          <div className="fig-seg">
+            {EDGES.slice(0, 3).map((entry) => (
+              <button
+                key={entry.edge}
+                type="button"
+                title={entry.title}
+                aria-label={entry.title}
+                disabled={picked.length < 2}
+                onClick={() => write(alignAnchors(paths, selected, entry.edge))}
+              >
+                <FigIcon name={entry.figma} />
+              </button>
+            ))}
+          </div>
+          <div className="fig-seg">
+            {EDGES.slice(3).map((entry) => (
+              <button
+                key={entry.edge}
+                type="button"
+                title={entry.title}
+                aria-label={entry.title}
+                disabled={picked.length < 2}
+                onClick={() => write(alignAnchors(paths, selected, entry.edge))}
+              >
+                <FigIcon name={entry.figma} />
+              </button>
+            ))}
+          </div>
+        </div>
+      </FigGroupSet>
+
+      <div className="fig-row">
+        <FigField
+          value={x}
+          glyph="X"
+          title="X"
+          disabled={none}
+          onChange={(next) => {
+            if (!box) return;
+            const dx = next - (node.x + box.minX);
+            edit((anchor) => ({ ...cloneAnchor(anchor), x: anchor.x + dx }));
+          }}
+        />
+        <FigField
+          value={y}
+          glyph="Y"
+          title="Y"
+          disabled={none}
+          onChange={(next) => {
+            if (!box) return;
+            const dy = next - (node.y + box.minY);
+            edit((anchor) => ({ ...cloneAnchor(anchor), y: anchor.y + dy }));
+          }}
+        />
+      </div>
+
+      <div className="fig-row">
+        <div className="fig-seg" style={{ flex: 1 }}>
+          {MIRRORS.map((entry) => (
+            <button
+              key={entry.mode}
+              type="button"
+              title={entry.title}
+              aria-label={entry.title}
+              disabled={none}
+              data-on={mirror === entry.mode ? 'true' : undefined}
+              onClick={() => edit((anchor) => applyMirror(anchor, entry.mode))}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+                <path d={entry.path} stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="fig-row">
+        <FigField
+          value={radius}
+          min={0}
+          glyph={<Icon.Corners />}
+          title="Corner radius at this point"
+          disabled={none}
+          onChange={(next) => edit((anchor) => ({ ...cloneAnchor(anchor), r: next || undefined }))}
+        />
+        {/* Variable width, as a number rather than a drag — the same value the
+            ⇧W tool sets, for when you know what you want it to be. */}
+        <FigField
+          value={stroke}
+          min={0}
+          step={0.5}
+          glyph={<Icon.StrokeWeight />}
+          suffix=""
+          title="Stroke width at this point  ⇧W"
+          disabled={none}
+          onChange={(next) => edit((anchor) => ({ ...cloneAnchor(anchor), width: next }))}
+        />
+      </div>
+
+      <div className="fig-row">
+        <span className="fig-hint" style={{ flex: 1 }}>
+          {picked.length
+            ? `${picked.length} point${picked.length > 1 ? 's' : ''} selected`
+            : 'No points selected'}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function PositionSection({
   node,

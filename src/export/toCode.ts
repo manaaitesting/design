@@ -4,6 +4,7 @@ import {
   needsPaintLayers,
   nodeStyle,
   paintLayers,
+  shaderSurface,
   shapePaint,
   styleToCss,
   type ShapeStroke,
@@ -15,11 +16,11 @@ import { booleanOutlinePath } from '../document/boolean';
 import { maskStyles } from '../document/mask';
 import { defaultModes, modeVars, publish, resolveToken } from '../document/variables';
 import type { CSSProperties } from 'react';
-import type { Doc, SceneNode } from '../document/types';
+import type { Doc, SceneNode, ShaderSpec } from '../document/types';
 import { DEFAULT_COLLECTION, type Collection } from '../document/variables';
 import { fontFaceCss, googleHref, webFontsIn, type CustomFont } from '../lib/fonts';
 import { isPlain, plainText, runLines, runStyle, runsOf } from '../document/text';
-import { compose, SHADER_BY_ID } from '../webgl/shaders';
+import { compose, defaultParams, SHADER_BY_ID } from '../webgl/shaders';
 import type { Token } from '../document/store';
 
 function slug(name: string, id: string): string {
@@ -132,6 +133,50 @@ function htmlStyle(declarations: Record<string, string | number>): string {
 }
 
 
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+/**
+ * A shader surface, as markup.
+ *
+ * React gets the `Shader` component emitted with the component; HTML gets a
+ * canvas the runtime script below picks up by attribute. Both carry the same id
+ * and the same parameters, so the exported surface is the surface that was on
+ * the canvas rather than a still of it.
+ */
+function shaderMarkup(spec: ShaderSpec, mode: 'jsx' | 'html'): string {
+  // The canvas falls back to each parameter's own default for anything the node
+  // never set, so the export has to carry the same resolved set — otherwise an
+  // untouched slider reads as 0 in the export and the surface looks wrong.
+  const def = SHADER_BY_ID.get(spec.id);
+  const params = JSON.stringify(def ? { ...defaultParams(def), ...spec.params } : spec.params);
+  if (mode === 'jsx') return `<Shader id="${spec.id}" params={${params}} />`;
+  return (
+    `<canvas data-shader="${spec.id}" data-params="${escapeAttr(params)}"` +
+    ` style="display: block; width: 100%; height: 100%"></canvas>`
+  );
+}
+
+/**
+ * The canvas a shader *fill* paints on.
+ *
+ * A shader node paints one directly; every other layer wraps it in the same
+ * surface `NodeView` gives it, which is what keeps the exported fill under the
+ * layer's own radius instead of over its corners.
+ */
+function surfaceMarkup(
+  node: SceneNode,
+  pad: string,
+  mode: 'jsx' | 'html',
+  used: Set<string>,
+): string {
+  const surface = node.type === 'shader' ? null : shaderSurface(node);
+  if (!surface) return '';
+  used.add(surface.shader.id);
+  return `${pad}  <div ${styleAttr(surface.style, mode)}>${shaderMarkup(surface.shader, mode)}</div>`;
+}
+
 /**
  * The extra elements an adjusted or rotated image paint needs.
  *
@@ -181,36 +226,75 @@ function filterMarkup(
  * were looking at. The geometry itself is not restated — it comes from
  * `shapePaint`, exactly as the component's does.
  */
-function shapeMarkup(node: SceneNode, pad: string, mode: 'jsx' | 'html'): string {
+function shapeMarkup(
+  node: SceneNode,
+  pad: string,
+  mode: 'jsx' | 'html',
+  used: Set<string>,
+): string {
   const paint = shapePaint(node);
   if (!paint) return '';
   const out: string[] = [];
-  if (paint.fill) out.push(`${pad}  <div ${styleAttr(paint.fill, mode)}></div>`);
-  if (paint.stroke) {
+  if (paint.fill) {
+    // the shader goes inside the clipped layer, so the export fills the star
+    // rather than the star's bounding box — the same nesting the canvas uses
+    if (paint.shader) used.add(paint.shader.id);
+    const inner = paint.shader ? shaderMarkup(paint.shader, mode) : '';
+    out.push(`${pad}  <div ${styleAttr(paint.fill, mode)}>${inner}</div>`);
+  }
+  if (paint.stroke && paint.band) {
+    // a variable-width stroke is the band it sweeps, not a stroked line — the
+    // canvas draws it that way and so must the export
+    out.push(bandSvg(paint.band, paint.stroke.color, node.w, node.h, pad, mode));
+  } else if (paint.stroke) {
     out.push(strokeSvg(node.id, paint.d, paint.stroke, paint.fillRule, node.w, node.h, pad, mode));
   }
   return out.join('\n');
 }
 
+/** A tapering stroke: one filled outline, wound so the middle stays empty. */
+function bandSvg(
+  d: string,
+  color: string,
+  width: number,
+  height: number,
+  pad: string,
+  mode: 'jsx' | 'html',
+): string {
+  return (
+    `${pad}  <svg ${styleAttr(SVG_LAYER, mode)} viewBox="0 0 ${Math.max(width, 1)} ${Math.max(height, 1)}" ` +
+    `preserveAspectRatio="none"><path d="${d}" fill="${color}" ${attrName('fillRule', mode)}="evenodd"/></svg>`
+  );
+}
+
 /** A boolean group's nested clips and its outer stroke, as markup. */
-function booleanMarkup(node: SceneNode, doc: Doc, pad: string, mode: 'jsx' | 'html'): string {
+function booleanMarkup(
+  node: SceneNode,
+  doc: Doc,
+  pad: string,
+  mode: 'jsx' | 'html',
+  used: Set<string>,
+): string {
   const parts = node.children.map((id) => doc[id]).filter((child) => child?.visible) as SceneNode[];
   if (!parts.length) return '';
   const clips = booleanClips(node, parts);
   if (!clips.length) return '';
 
   const background = backgroundOf(node);
-  let body = background
-    ? `<div ${styleAttr(
-        {
-          position: 'absolute',
-          inset: 0,
-          background,
-          ...(background.includes('url(') ? imageSizing(node) : null),
-        },
-        mode,
-      )}></div>`
-    : '';
+  const shader = node.shader ?? null;
+  if (shader) used.add(shader.id);
+  let body =
+    background || shader
+      ? `<div ${styleAttr(
+          {
+            position: 'absolute',
+            inset: 0,
+            ...(background ? { background } : null),
+            ...(background.includes('url(') ? imageSizing(node) : null),
+          },
+          mode,
+        )}>${shader ? shaderMarkup(shader, mode) : ''}</div>`
+      : '';
   for (let i = clips.length - 1; i >= 0; i--) {
     const clip = clips[i];
     const style = {
@@ -339,9 +423,11 @@ export function toReact(
       ...modeVars(node, tokens, baseModes),
     };
     const masking = node.children.length ? maskStyles(node, doc) : null;
-    // the root of an export shouldn't be absolutely positioned inside nothing
+    // The root of an export shouldn't be absolutely positioned inside nothing —
+    // but it still has to be the containing block its own children resolve
+    // against, or every absolutely placed layer inside it escapes to the page.
     if (depth === 0) {
-      delete style.position;
+      style.position = 'relative';
       delete style.left;
       delete style.top;
     }
@@ -354,7 +440,14 @@ export function toReact(
       rules.push(`.${className}-fx${index} {\n${styleToCss(layer.style)}\n}`);
     });
     const overlays = layers
-      .map((_, index) => `${pad}  <div className="${className}-fx${index}" />`)
+      .map((layer, index) => {
+        if (!layer.shader) return `${pad}  <div className="${className}-fx${index}" />`;
+        usedShaders.add(layer.shader.id);
+        return (
+          `${pad}  <div className="${className}-fx${index}">` +
+          `${shaderMarkup(layer.shader, 'jsx')}</div>`
+        );
+      })
       .join('\n');
 
     if (node.type === 'text') {
@@ -364,28 +457,27 @@ export function toReact(
     }
     if (node.type === 'shader' && node.shader) {
       usedShaders.add(node.shader.id);
-      const params = JSON.stringify(node.shader.params);
-      return (
-        `${pad}<div className="${className}">\n` +
-        `${pad}  <Shader id="${node.shader.id}" params={${params}} />\n` +
-        `${pad}</div>`
-      );
+      const surface = `${pad}  ${shaderMarkup(node.shader, 'jsx')}`;
+      return `${pad}<div className="${className}">\n${[surface, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (paintsWithPath(node)) {
-      const shape = shapeMarkup(node, pad, 'jsx');
+      const shape = shapeMarkup(node, pad, 'jsx', usedShaders);
       return `${pad}<div className="${className}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (node.type === 'boolean') {
-      const shape = booleanMarkup(node, doc, pad, 'jsx');
+      const shape = booleanMarkup(node, doc, pad, 'jsx', usedShaders);
       return `${pad}<div className="${className}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
+    // a shader fill sits at the bottom of the stack, under the image paints
+    const surface = surfaceMarkup(node, pad, 'jsx', usedShaders);
     const paints = paintMarkup(node, pad, 'jsx');
     if (node.children.length === 0) {
-      const inner = [paints, overlays].filter(Boolean).join('\n');
+      const inner = [surface, paints, overlays].filter(Boolean).join('\n');
       if (!inner) return `${pad}<div className="${className}" />`;
       return `${pad}<div className="${className}">\n${inner}\n${pad}</div>`;
     }
     const children = [
+      surface,
       paints,
       node.children
         .map((childId) => walk(childId, depth + 1, masking?.styles[childId]))
@@ -475,20 +567,34 @@ function emitTokenRoot(css: string, tokens: Token[], modes: Record<string, strin
 }
 
 /**
+ * `{ id: `<glsl>` }` for the shaders a subtree uses.
+ *
+ * The React runtime and the HTML one both need the very same programs, so the
+ * sources are composed once here rather than in each emitter.
+ */
+function fragmentMap(ids: string[]): string {
+  return ids
+    .map((id) => {
+      const def = SHADER_BY_ID.get(id);
+      if (!def) return '';
+      const glsl = compose(def)
+        .replace(/\\/g, '\\\\')
+        .replace(/`/g, '\\`')
+        .replace(/\$\{/g, '\\${');
+      return `  ${JSON.stringify(id)}: \`${glsl}\`,`;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
  * A self-contained WebGL runtime for the shaders this subtree uses.
  *
  * Emitted alongside the component rather than referenced as a dependency, so
  * the exported code runs with nothing installed.
  */
 function emitShaderRuntime(ids: string[]): string {
-  const sources = ids
-    .map((id) => {
-      const def = SHADER_BY_ID.get(id);
-      if (!def) return '';
-      return `  ${JSON.stringify(id)}: \`${compose(def).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${')}\`,`;
-    })
-    .filter(Boolean)
-    .join('\n');
+  const sources = fragmentMap(ids);
 
   return `
 
@@ -565,6 +671,112 @@ export function Shader({ id, params = {} }) {
 `;
 }
 
+/**
+ * The same WebGL runtime, as a script tag for the standalone HTML.
+ *
+ * A shader is a GPU program, and there is no static markup that stands in for
+ * one — so rather than emit a placeholder, the page carries the programs and
+ * runs them. One shared frame loop drives every surface on the page, which is
+ * what the canvas does too. Each canvas is found by its `data-shader`
+ * attribute, so the markup above stays ordinary elements with ordinary styles.
+ */
+function emitHtmlShaderRuntime(ids: string[]): string {
+  const sources = fragmentMap(ids);
+  return `
+    <script>
+      (function () {
+        const VERTEX = \`#version 300 es
+in vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+\`;
+
+        const FRAGMENTS = {
+${sources}
+        };
+
+        function hexToRgb(hex) {
+          const v = String(hex).replace('#', '');
+          const n = parseInt(v.length === 3 ? v.split('').map(function (c) { return c + c; }).join('') : v, 16);
+          return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+        }
+
+        function build(gl, type, src) {
+          const s = gl.createShader(type);
+          gl.shaderSource(s, src);
+          gl.compileShader(s);
+          if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+          return s;
+        }
+
+        const live = [];
+        const canvases = document.querySelectorAll('canvas[data-shader]');
+        for (let i = 0; i < canvases.length; i++) {
+          const canvas = canvases[i];
+          const source = FRAGMENTS[canvas.getAttribute('data-shader')];
+          if (!source) continue;
+          const gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
+          if (!gl) continue;
+          let program;
+          try {
+            program = gl.createProgram();
+            gl.attachShader(program, build(gl, gl.VERTEX_SHADER, VERTEX));
+            gl.attachShader(program, build(gl, gl.FRAGMENT_SHADER, source));
+            gl.linkProgram(program);
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+          } catch (error) {
+            console.error('[shader]', error);
+            continue;
+          }
+          gl.useProgram(program);
+          gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+          const attr = gl.getAttribLocation(program, 'a_pos');
+          gl.enableVertexAttribArray(attr);
+          gl.vertexAttribPointer(attr, 2, gl.FLOAT, false, 0, 0);
+          let params = {};
+          try { params = JSON.parse(canvas.getAttribute('data-params') || '{}'); } catch (error) {}
+          live.push({ canvas: canvas, gl: gl, program: program, params: params });
+        }
+        if (!live.length) return;
+
+        const start = performance.now();
+        // one loop for every surface on the page: a frame each would cost a
+        // scheduling slot per shader, which is what the editor avoids too
+        function draw(now) {
+          for (let i = 0; i < live.length; i++) {
+            const s = live[i];
+            const gl = s.gl;
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const w = Math.max(1, Math.round(s.canvas.clientWidth * dpr));
+            const h = Math.max(1, Math.round(s.canvas.clientHeight * dpr));
+            if (s.canvas.width !== w || s.canvas.height !== h) {
+              s.canvas.width = w;
+              s.canvas.height = h;
+            }
+            gl.useProgram(s.program);
+            gl.viewport(0, 0, w, h);
+            gl.uniform2f(gl.getUniformLocation(s.program, 'u_resolution'), w, h);
+            gl.uniform1f(gl.getUniformLocation(s.program, 'u_time'), (now - start) / 1000);
+            for (const key in s.params) {
+              const loc = gl.getUniformLocation(s.program, 'u_' + key);
+              if (!loc) continue;
+              const value = s.params[key];
+              if (typeof value === 'string') {
+                const c = hexToRgb(value);
+                gl.uniform3f(loc, c[0], c[1], c[2]);
+              } else {
+                gl.uniform1f(loc, value);
+              }
+            }
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+          }
+          requestAnimationFrame(draw);
+        }
+        requestAnimationFrame(draw);
+      })();
+    </script>`;
+}
+
 /** Standalone HTML, styles inlined — paste into any page. */
 export function toHtml(
   rootId: string,
@@ -575,6 +787,7 @@ export function toHtml(
 ): string {
   const varNames = namesOf(tokens);
   const baseModes = defaultModes(collections);
+  const usedShaders = new Set<string>();
   const walk = (id: string, depth: number, extra?: CSSProperties): string => {
     const node = doc[id];
     if (!node || !node.visible) return '';
@@ -585,14 +798,19 @@ export function toHtml(
       ...modeVars(node, tokens, baseModes),
     };
     const masking = node.children.length ? maskStyles(node, doc) : null;
+    // the root is still what its absolutely placed children resolve against
     if (depth === 0) {
-      delete style.position;
+      style.position = 'relative';
       delete style.left;
       delete style.top;
     }
     const inline = styleToCss(style, '').replace(/\n/g, ' ').trim();
     const overlays = effectLayers(effectsOf(node), node.clip)
-      .map((layer) => `${pad}  <div style="${styleToCss(layer.style, '').replace(/\n/g, ' ').trim()}"></div>`)
+      .map((layer) => {
+        if (layer.shader) usedShaders.add(layer.shader.id);
+        const body = layer.shader ? shaderMarkup(layer.shader, 'html') : '';
+        return `${pad}  <div style="${styleToCss(layer.style, '').replace(/\n/g, ' ').trim()}">${body}</div>`;
+      })
       .join('\n');
 
     if (node.type === 'text') {
@@ -600,24 +818,28 @@ export function toHtml(
       if (!overlays) return `${pad}<div style="${inline}">${text}</div>`;
       return `${pad}<div style="${inline}">\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
     }
-    if (node.type === 'shader') {
-      // a GPU surface has no static equivalent — React export carries the GLSL
-      return `${pad}<div style="${inline}"><!-- shader: ${node.shader?.id} — export as React for the GLSL --></div>`;
+    if (node.type === 'shader' && node.shader) {
+      usedShaders.add(node.shader.id);
+      const surface = `${pad}  ${shaderMarkup(node.shader, 'html')}`;
+      return `${pad}<div style="${inline}">\n${[surface, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (paintsWithPath(node)) {
-      const shape = shapeMarkup(node, pad, 'html');
+      const shape = shapeMarkup(node, pad, 'html', usedShaders);
       return `${pad}<div style="${inline}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (node.type === 'boolean') {
-      const shape = booleanMarkup(node, doc, pad, 'html');
+      const shape = booleanMarkup(node, doc, pad, 'html', usedShaders);
       return `${pad}<div style="${inline}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
+    // a shader fill sits at the bottom of the stack, under the image paints
+    const surface = surfaceMarkup(node, pad, 'html', usedShaders);
     const paints = paintMarkup(node, pad, 'html');
     if (node.children.length === 0) {
-      const inner = [paints, overlays].filter(Boolean).join('\n');
+      const inner = [surface, paints, overlays].filter(Boolean).join('\n');
       return `${pad}<div style="${inline}">${inner ? `\n${inner}\n${pad}` : ''}</div>`;
     }
     const children = [
+      surface,
       paints,
       node.children
         .map((childId) => walk(childId, depth + 1, masking?.styles[childId]))
@@ -647,13 +869,17 @@ export function toHtml(
     families.some((family) => family?.includes(`"${font.name}"`)),
   );
   const faceCss = faces.length ? `\n    <style>${fontFaceCss(faces)}</style>` : '';
+  // The GLSL travels with the page. A shader has no static equivalent, so the
+  // alternative was a comment where the surface should be — this emits the same
+  // programs the canvas ran, driven by one shared frame loop.
+  const runtime = usedShaders.size ? emitHtmlShaderRuntime([...usedShaders]) : '';
 
   return `<!doctype html>
 <html>
   <head>${links}${faceCss}${style}
   </head>
   <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#EEEEEE">
-${body}
+${body}${runtime}
   </body>
 </html>
 `;

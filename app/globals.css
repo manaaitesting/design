@@ -1651,6 +1651,74 @@ select {
     gap: 6px;
     padding: 0 8px 0 16px;
   }
+  /* ─── Pages ──────────────────────────────────────────────────────────
+     The list is its own scroll region with a height the handle under it sets,
+     so a file with twenty pages cannot push the Layers tree off the panel. */
+  .fig-pages-list {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
+  }
+  /* The rule between Pages and Layers, doubling as the drag handle: the border
+     is the line, the padding around it is the grab area. Sizing it this way
+     means adding the handle shifts nothing. */
+  .fig-pages-resizer {
+    height: 9px;
+    margin: 4px 0 0;
+    flex: none;
+    cursor: ns-resize;
+    border-bottom: 1px solid var(--fig-line);
+    background-clip: content-box;
+  }
+  .fig-pages-resizer:hover,
+  .fig-pages-resizer[data-dragging] {
+    border-bottom-color: var(--color-select);
+  }
+  .fig-pages-resizer:focus-visible {
+    outline: 2px solid var(--color-select);
+    outline-offset: -2px;
+  }
+  /* the cursor has to survive the pointer leaving the handle mid-drag */
+  body.fig-resizing-v,
+  body.fig-resizing-v * {
+    cursor: ns-resize !important;
+  }
+
+  /* A section title that is also its own disclosure — the caret and the label
+     are one target, as they are in Figma. */
+  .fig-disclosure {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    margin-left: -18px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-weight: inherit;
+    color: inherit;
+    cursor: default;
+    text-align: left;
+  }
+  .fig-disclosure-caret {
+    display: flex;
+    width: 16px;
+    flex: none;
+    color: var(--fig-dim);
+  }
+  .fig-disclosure:hover .fig-disclosure-caret {
+    color: var(--fig-ink);
+  }
+
+  .fig-ellipsis {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
   .fig-left-section {
     height: 32px;
     display: flex;
@@ -2318,4 +2386,104 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Vector edit toolbar ──────────────────────────────────────────────────
+   Figma floats the sub-tools of vector edit mode over the bottom of the
+   canvas. The bar is the mode's only affordance, so it carries the way out
+   as well as the tools. */
+
+.vec-bar {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: #1e1e1e;
+  box-shadow:
+    0 2px 14px rgb(0 0 0 / 0.28),
+    0 0 0 0.5px rgb(255 255 255 / 0.12);
+  pointer-events: auto;
+  z-index: 30;
+  user-select: none;
+}
+
+.vec-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 450;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vec-tool:hover {
+  background: rgb(255 255 255 / 0.11);
+}
+
+.vec-tool[data-on='true'] {
+  background: var(--color-select, #0d99ff);
+  color: #fff;
+}
+
+.vec-close {
+  padding: 0 8px;
+  margin-left: 2px;
+  color: rgb(255 255 255 / 0.65);
+}
+
+.vec-more {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 190px;
+  padding: 5px;
+  border-radius: 10px;
+  background: #1e1e1e;
+  box-shadow:
+    0 6px 20px rgb(0 0 0 / 0.35),
+    0 0 0 0.5px rgb(255 255 255 / 0.12);
+}
+
+.vec-more button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  height: 27px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.vec-more button:hover {
+  background: var(--color-select, #0d99ff);
+}
+
+.vec-more kbd {
+  font: inherit;
+  color: rgb(255 255 255 / 0.55);
+}
+
+.vec-more button:hover kbd {
+  color: rgb(255 255 255 / 0.85);
 }

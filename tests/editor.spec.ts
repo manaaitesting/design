@@ -282,6 +282,52 @@ test('a shader surface exports as real pixels, not a blank rectangle', async ({ 
 });
 
 /**
+ * A shader is a paint, not a node type.
+ *
+ * The fill picker has always offered Shader, but the surface only ever rendered
+ * on a layer whose *type* was `shader` — so choosing it on a rectangle wrote the
+ * property and painted nothing. These two hold the line: any layer may carry a
+ * shader, and on a shape it fills the shape rather than the box around it.
+ */
+test('a shader chosen as a fill paints the layer that chose it', async ({ page }) => {
+  const id = await makeNode(page, 'rect', {
+    name: 'ShadedRect', x: 40, y: 500, w: 200, h: 200, fill: '#D9D9D9',
+  });
+  await select(page, [id]);
+  await page.locator('.fig-paint .fig-swatch').first().click();
+  await expect(page.getByTestId('paint-picker')).toBeVisible();
+  await page.locator('.fig-picker-type[title="Shader"] input').click({ force: true });
+
+  const surface = page.locator(`[data-node-id="${id}"] canvas`);
+  await expect(surface).toBeVisible();
+  expect((await surface.boundingBox())!.width).toBeGreaterThan(0);
+
+  // and the parameters are editable on this layer, not only on a shader node
+  await page.keyboard.press('Escape');
+  await expect(page.getByTitle('Browse shaders').first()).toBeVisible();
+  await removeNodes(page, [id]);
+});
+
+test('a shader fills the shape, not the box the shape sits in', async ({ page }) => {
+  const id = await makeNode(page, 'star', {
+    name: 'ShadedStar', x: 40, y: 500, w: 200, h: 200, sides: 5,
+    shader: { id: 'mesh', params: {} },
+  });
+  await select(page, [id]);
+  const surface = page.locator(`[data-node-id="${id}"] canvas`);
+  await expect(surface).toBeVisible();
+
+  // the surface sits inside the clipped layer — that clip is what makes the
+  // shader a star instead of a square with a star drawn near it
+  const clip = await page.evaluate((nodeId) => {
+    const canvas = document.querySelector(`[data-node-id="${nodeId}"] canvas`)!;
+    return getComputedStyle(canvas.parentElement!).clipPath;
+  }, id);
+  expect(clip).toContain('path(');
+  await removeNodes(page, [id]);
+});
+
+/**
  * Panel resizing.
  *
  * The handle carries no layout width of its own — the grab area is a
@@ -2536,5 +2582,309 @@ test.describe('auto layout', () => {
     const first = (await doc(page))[frame].children[0];
     await expect(page.locator(`[data-node-id="${first}"]`)).toHaveCSS('z-index', '3');
     await removeNodes(page, [frame]);
+  });
+});
+
+/**
+ * Pages.
+ *
+ * The panel is Figma's: a disclosure that collapses the list, a scroll region
+ * whose height a handle sets, and a right-click menu that is the only way to
+ * duplicate or delete. Each of these used to be either missing or inert — the
+ * `open` flag had no control, and picking Shader in the fill picker wrote a
+ * property nothing painted — so they are checked through the UI, not the store.
+ */
+test.describe('pages', () => {
+  test('duplicating copies the layers and lands right after the original', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const source = store.addPage('Source');
+      store.create('rect', source, { name: 'OnSource', x: 10, y: 20, w: 80, h: 60 });
+      store.commit();
+      const copy = store.duplicatePage(source)!;
+      store.commit();
+      const doc = window.paperlike!.doc();
+      const pages = store.listPages();
+      return {
+        source,
+        copy,
+        adjacent: pages.indexOf(copy) === pages.indexOf(source) + 1,
+        name: doc[copy]?.name,
+        children: doc[copy]?.children.map((id) => ({
+          name: doc[id]?.name, x: doc[id]?.x, y: doc[id]?.y,
+        })),
+      };
+    });
+
+    expect(ids.adjacent).toBe(true);
+    expect(ids.name).toBe('Source copy');
+    // the layer comes with it, at the position it had — a duplicate that
+    // normalised to the origin would put everything in the corner
+    expect(ids.children).toEqual([{ name: 'OnSource', x: 10, y: 20 }]);
+
+    await page.evaluate(([a, b]) => {
+      window.paperlike!.store.removePage(a);
+      window.paperlike!.store.removePage(b);
+    }, [ids.source, ids.copy] as const);
+  });
+
+  test('right-clicking a page offers Figma’s four commands', async ({ page }) => {
+    const extra = await page.evaluate(() => window.paperlike!.store.addPage('Scratch'));
+    await page.locator(`.fig-layer[data-page-id="${extra}"]`).click({ button: 'right' });
+
+    const menu = page.locator('.ctx').first();
+    await expect(menu.locator('.ctx-row')).toHaveText([
+      'Copy link to page',
+      'Rename page',
+      'Duplicate page',
+      'Delete page',
+    ]);
+    // more than one page, so deleting is available
+    await expect(menu.locator('.ctx-row', { hasText: 'Delete page' })).toBeEnabled();
+
+    await page.keyboard.press('Escape');
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), extra);
+  });
+
+  test('the only page cannot be deleted, and the row says so', async ({ page }) => {
+    await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      for (const id of store.listPages().slice(1)) store.removePage(id);
+    });
+    const only = await page.evaluate(() => window.paperlike!.store.listPages()[0]);
+    await page.locator(`.fig-layer[data-page-id="${only}"]`).click({ button: 'right' });
+    await expect(
+      page.locator('.ctx').first().locator('.ctx-row', { hasText: 'Delete page' }),
+    ).toBeDisabled();
+    await page.keyboard.press('Escape');
+  });
+
+  test('a copied page link opens on that page', async ({ page }) => {
+    const extra = await page.evaluate(() => {
+      const id = window.paperlike!.store.addPage('Deep');
+      window.paperlike!.store.commit();
+      return id;
+    });
+
+    await page.goto(`/f/testfile00?page=${extra}`);
+    await page.waitForFunction(() => !!window.paperlike);
+    await expect
+      .poll(() => page.evaluate(() => window.paperlike!.ui.getState().page))
+      .toBe(extra);
+
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), extra);
+    await openEditor(page);
+  });
+
+  test('the title collapses the list, and the handle resizes it', async ({ page }) => {
+    const list = page.locator('#fig-pages-list');
+    await expect(list).toBeVisible();
+    const before = (await list.boundingBox())!.height;
+
+    // the handle is the rule between Pages and Layers
+    const handle = page.locator('.fig-pages-resizer');
+    await handle.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await expect.poll(async () => (await list.boundingBox())!.height).toBeGreaterThan(before);
+
+    const title = page.getByRole('button', { name: 'Pages', exact: true });
+    await title.click();
+    await expect(title).toHaveAttribute('aria-expanded', 'false');
+    await expect(list).toBeHidden();
+    await title.click();
+    await expect(list).toBeVisible();
+  });
+
+  test('the page panel carries the background and whether exports show it', async ({ page }) => {
+    await page.evaluate(() => window.paperlike!.ui.getState().select([]));
+    const checkbox = page.getByLabel('Show in exports');
+    await expect(checkbox).toBeChecked();
+
+    await checkbox.uncheck();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const ui = window.paperlike!.ui.getState();
+          return window.paperlike!.doc()[ui.page]?.exportBackground;
+        }),
+      )
+      .toBe(false);
+
+    // …and the canvas publishes it, which is what the exporter reads
+    await expect(page.locator('[data-canvas-root]')).toHaveAttribute('data-export-background', 'off');
+    await checkbox.check();
+  });
+});
+
+/**
+ * Space is the hand tool for as long as it is held.
+ *
+ * It used to pan by poking `document.body.style.cursor` from a ref, so the tool
+ * rail still said Move while the canvas behaved like Hand — and the keydown was
+ * not swallowed, which meant a focused panel button fired instead.
+ */
+test.describe('space to pan', () => {
+  test('holding space arms the hand tool and pans, and releasing gives it back', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'PanProbe', x: 60, y: 560, w: 120, h: 90 });
+    const before = await page.evaluate(() => window.paperlike!.ui.getState().viewport);
+    const hand = page.getByRole('button', { name: 'Hand tool' });
+    await expect(hand).not.toHaveAttribute('data-on', 'true');
+
+    await page.mouse.move(700, 500);
+    await page.keyboard.down('Space');
+    // the rail says what the canvas is doing
+    await expect(hand).toHaveAttribute('data-on', 'true');
+
+    await dragBy(page, { x: 700, y: 500 }, { x: 120, y: 60 });
+    const after = await page.evaluate(() => window.paperlike!.ui.getState().viewport);
+    expect(Math.round(after.x - before.x)).toBe(120);
+    expect(Math.round(after.y - before.y)).toBe(60);
+
+    // panning must not have moved the layer — the canvas moved under it
+    expect((await doc(page))[id].x).toBe(60);
+
+    await page.keyboard.up('Space');
+    await expect(hand).not.toHaveAttribute('data-on', 'true');
+    // the tool it borrowed from is the tool it hands back
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+    await page.evaluate((vp) => window.paperlike!.ui.getState().setViewport(vp), before);
+    await removeNodes(page, [id]);
+  });
+
+  test('using a button in the chrome does not disable panning', async ({ page }) => {
+    // A button keeps focus after a click, and Space belongs to a focused
+    // button — so clicking anything in the chrome used to leave the canvas
+    // unable to pan until you clicked it again. Only a live run caught it:
+    // the assertions all pressed Space with focus already on the body.
+    await page.getByTitle('Zoom').click();
+    await page.getByRole('option', { name: /Zoom to 100%/ }).click();
+
+    await page.keyboard.down('Space');
+    await expect(page.getByRole('button', { name: 'Hand tool' })).toHaveAttribute('data-on', 'true');
+    await page.keyboard.up('Space');
+  });
+
+  test('the hand replaces the tool it borrowed, rather than joining it', async ({ page }) => {
+    const move = page.getByRole('button', { name: 'Move', exact: true });
+    const hand = page.getByRole('button', { name: 'Hand tool' });
+    await expect(move).toHaveAttribute('data-on', 'true');
+
+    await page.keyboard.down('Space');
+    await expect(hand).toHaveAttribute('data-on', 'true');
+    // two lit buttons would say two tools are armed
+    await expect(move).not.toHaveAttribute('data-on', 'true');
+    await page.keyboard.up('Space');
+    await expect(move).toHaveAttribute('data-on', 'true');
+  });
+
+  test('space still belongs to a focused control', async ({ page }) => {
+    await page.evaluate(() => window.paperlike!.ui.getState().select([]));
+    const checkbox = page.getByLabel('Show in exports');
+    await expect(checkbox).toBeChecked();
+
+    await checkbox.focus();
+    await page.keyboard.press('Space');
+    // the checkbox toggled, and the canvas did not quietly arm the hand tool
+    await expect(checkbox).not.toBeChecked();
+    await expect(page.getByRole('button', { name: 'Hand tool' })).not.toHaveAttribute('data-on', 'true');
+
+    await checkbox.check();
+  });
+});
+
+/**
+ * Zoom.
+ *
+ * The shortcuts scaled `zoom` and left `x`/`y` alone, so every keyboard zoom
+ * was about the world origin: press ⌘+ twice and whatever you were looking at
+ * has walked off the screen. Figma keeps the middle of the canvas still, which
+ * is what makes zoom feel like zoom rather than like a jump.
+ */
+test.describe('zoom', () => {
+  /** the world point sitting at the centre of the canvas area */
+  const centre = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => {
+      const rect = document.querySelector('[data-canvas-root]')!.getBoundingClientRect();
+      const vp = window.paperlike!.ui.getState().viewport;
+      return {
+        x: (rect.width / 2 - vp.x) / vp.zoom,
+        y: (rect.height / 2 - vp.y) / vp.zoom,
+        zoom: vp.zoom,
+      };
+    });
+
+  test('zooming in and out holds the middle of the canvas still', async ({ page }) => {
+    await page.evaluate(() =>
+      window.paperlike!.ui.getState().setViewport({ x: 120, y: 100, zoom: 1 }),
+    );
+    const before = await centre(page);
+
+    await page.keyboard.press('+');
+    const zoomedIn = await centre(page);
+    expect(zoomedIn.zoom).toBeCloseTo(1.25, 5);
+    // the point you were looking at is the point you are still looking at
+    expect(zoomedIn.x).toBeCloseTo(before.x, 1);
+    expect(zoomedIn.y).toBeCloseTo(before.y, 1);
+
+    await page.keyboard.press('-');
+    const back = await centre(page);
+    expect(back.zoom).toBeCloseTo(1, 5);
+    expect(back.x).toBeCloseTo(before.x, 1);
+    expect(back.y).toBeCloseTo(before.y, 1);
+  });
+
+  test('the shortcuts take the modifier or go without it', async ({ page }) => {
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+    await page.keyboard.press('Meta+=');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBeCloseTo(1.25, 5);
+    await page.keyboard.press('Meta+-');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBeCloseTo(1, 5);
+  });
+
+  test('zoom never escapes its limits, however hard it is pressed', async ({ page }) => {
+    for (let i = 0; i < 40; i++) await page.keyboard.press('-');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBeGreaterThanOrEqual(0.02);
+    for (let i = 0; i < 80; i++) await page.keyboard.press('+');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBeLessThanOrEqual(64);
+    await page.keyboard.press('Shift+0');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBe(1);
+  });
+
+  test('⇧2 frames the selection, and the menu offers the same commands', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'FarAway', x: 2400, y: 1800, w: 200, h: 150 });
+    await select(page, [id]);
+    await page.keyboard.press('Shift+2');
+
+    // the layer is on screen — before, "zoom to selection" did not exist at all
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThan(0);
+    expect(box!.y).toBeGreaterThan(0);
+
+    const readout = page.getByTitle('Zoom');
+    await readout.click();
+    await expect(page.getByRole('option', { name: /Zoom in/ })).toBeVisible();
+    await expect(page.getByRole('option', { name: /Zoom to selection/ })).toBeVisible();
+    await page.getByRole('option', { name: /Zoom to 100%/ }).click();
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBe(1);
+
+    await removeNodes(page, [id]);
+  });
+
+  test('typing a minus in a field does not zoom the canvas', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'TypeHere', x: 60, y: 560, w: 120, h: 90 });
+    await select(page, [id]);
+    const zoom = await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom);
+
+    const field = page.locator('.fig-input input').first();
+    await field.click();
+    await page.keyboard.press('-');
+    await page.keyboard.press('+');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBe(zoom);
+
+    await page.keyboard.press('Escape');
+    await removeNodes(page, [id]);
   });
 });

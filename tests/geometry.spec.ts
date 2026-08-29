@@ -12,13 +12,43 @@ import {
   rectPath,
   starPath,
   translatePath,
+  alignAnchors,
+  applyMirror,
+  bendSegment,
+  cubicAt,
+  cutAt,
+  editablePaths,
+  insertAnchor,
+  joinAnchors,
+  mirrorOf,
+  nearestOnSubpaths,
+  outlinePaths,
+  pathFromSubpaths,
+  regionBounds,
+  regionOf,
+  subpathBounds,
+  removeAnchors,
+  segmentPoints,
+  variableWidthPath,
+  type Anchor,
 } from '../src/document/geometry';
 import { maskStyles } from '../src/document/mask';
+import {
+  dropRegion,
+  interiorPoint,
+  mergeRegions,
+  regionAt,
+  vectorRegions,
+} from '../src/document/regions';
 import { clip, inside, signedArea, strokeRegion, type Region } from '../src/document/clipper';
 import { placedRegion } from '../src/document/geometry';
 import { resolveToken, tokenVars, modeVars } from '../src/document/variables';
 import { makeNode } from '../src/document/defaults';
-import type { Doc, SceneNode, Token } from '../src/document/types';
+import { shapePaint } from '../src/document/css';
+import { newEffect } from '../src/document/effects';
+import { toHtml, toReact } from '../src/export/toCode';
+import { SHADER_BY_ID } from '../src/webgl/shaders';
+import type { Doc, SceneNode, Token, VectorPath } from '../src/document/types';
 
 /**
  * Geometry has no pixels to look at.
@@ -321,5 +351,454 @@ test.describe('variable modes', () => {
 
   test('a frame with no mode re-declares nothing', () => {
     expect(modeVars(node({ id: 'f', type: 'frame' }), tokens, { default: 'light' })).toEqual({});
+  });
+});
+
+/**
+ * A shader is a paint, not a node type.
+ *
+ * Any layer may carry one, so the two questions worth asking directly are
+ * whether the surface lands *inside* the shape's clip — a shader on the box
+ * rather than on the star is the bug this prevents — and whether it survives
+ * both exports. The pixels themselves are checked in the editor suite; these
+ * are the structural claims underneath them.
+ */
+test.describe('shader paints', () => {
+  const shader = { id: 'aurora', params: { speed: 0.4 } };
+
+  test('a shape with a shader gets a clipped fill layer even with no background', () => {
+    const star = node({ id: 's', type: 'star', w: 100, h: 100, fill: null, shader });
+    const paint = shapePaint(star);
+    expect(paint?.shader).toEqual(shader);
+    // the clip is what confines the surface to the star instead of to its box
+    expect(String(paint?.fill?.clipPath)).toContain('path(');
+    expect(paint?.fill?.background).toBeUndefined();
+  });
+
+  test('an open path has no inside, so it takes no shader either', () => {
+    const line = node({ id: 'l', type: 'line', w: 100, h: 0, shader });
+    expect(shapePaint(line)?.shader).toBeNull();
+  });
+
+  test('React export nests the surface inside the shape’s clipped layer', () => {
+    const doc: Doc = {
+      root: node({ id: 'root', type: 'frame', parent: null, children: ['s'] }),
+      s: node({ id: 's', type: 'star', parent: 'root', w: 100, h: 100, shader }),
+    };
+    const { markup } = toReact('root', doc);
+    expect(markup).toContain('<Shader id="aurora"');
+    expect(markup).toMatch(/clipPath[^\n]*\n?[^\n]*<Shader/);
+    // the GLSL travels with the component
+    expect(markup).toContain('FRAGMENTS');
+  });
+
+  test('a shader fill on a box exports as a surface under the image paints', () => {
+    const doc: Doc = {
+      root: node({ id: 'root', type: 'frame', parent: null, children: [], w: 200, h: 200, shader }),
+    };
+    const html = toHtml('root', doc);
+    expect(html).toContain('data-shader="aurora"');
+    expect(html).not.toContain('export as React for the GLSL');
+  });
+
+  test('HTML export carries the programs and a loop to run them', () => {
+    const doc: Doc = {
+      root: node({ id: 'root', type: 'shader', parent: null, children: [], w: 200, h: 200, shader }),
+    };
+    const html = toHtml('root', doc);
+    expect(html).toContain('data-shader="aurora"');
+    expect(html).toContain('#version 300 es');
+    expect(html).toContain('requestAnimationFrame');
+    expect(html).toContain('u_time');
+  });
+
+  test('an untouched parameter exports at its default, not at zero', () => {
+    const doc: Doc = {
+      root: node({ id: 'root', type: 'shader', parent: null, children: [], shader: { id: 'aurora', params: {} } }),
+    };
+    const params = JSON.parse(
+      /data-params="([^"]*)"/.exec(toHtml('root', doc))![1].replace(/&quot;/g, '"'),
+    );
+    const def = SHADER_BY_ID.get('aurora')!;
+    expect(Object.keys(params).sort()).toEqual(def.params.map((p) => p.key).sort());
+  });
+
+  test('the exported root stays the containing block its children resolve against', () => {
+    // Dropping `position` entirely made the root `static`, so every absolutely
+    // placed layer inside it escaped to the page — the frame rendered as an
+    // empty coloured box with its contents piled in the corner.
+    const doc: Doc = {
+      root: node({ id: 'root', type: 'frame', parent: null, children: ['c'], w: 600, h: 400 }),
+      c: node({ id: 'c', type: 'rect', parent: 'root', x: 40, y: 40, w: 100, h: 100 }),
+    };
+    expect(toHtml('root', doc)).toContain('position: relative');
+    expect(toReact('root', doc).css).toContain('position: relative');
+  });
+
+  test('a shader effect exports too, rather than leaving an empty layer', () => {
+    const doc: Doc = {
+      root: node({
+        id: 'root',
+        type: 'frame',
+        parent: null,
+        children: [],
+        effects: [{ ...newEffect('shader'), shader }],
+      }),
+    };
+    expect(toHtml('root', doc)).toContain('data-shader="aurora"');
+    expect(toReact('root', doc).markup).toContain('<Shader id="aurora"');
+  });
+});
+
+/**
+ * Point editing.
+ *
+ * Every one of these is a question with a right answer that is invisible on the
+ * canvas until it is wrong: a point inserted a hair off the curve looks fine
+ * and moves the shape, a heal that forgets the handles leaves a dent, a cut
+ * that loses a control point straightens a segment nobody touched.
+ */
+test.describe('point editing', () => {
+  const curve = (): VectorPath[] => [
+    {
+      closed: false,
+      anchors: [
+        { x: 0, y: 0, out: [30, 0] },
+        { x: 90, y: 0, in: [-30, 0] },
+      ],
+    },
+  ];
+
+  test('inserting a point on a curve does not move the curve', () => {
+    const paths = curve();
+    const hit = nearestOnSubpaths(paths, { x: 45, y: 0 })!;
+    const { paths: next, at } = insertAnchor(paths, hit);
+    expect(next[0].anchors).toHaveLength(3);
+    expect(at.index).toBe(1);
+    // the two halves still pass through the same place the whole did
+    const before = cubicAt(segmentPoints(paths[0].anchors, 0), 0.5);
+    const middle = next[0].anchors[1];
+    expect(middle.x).toBeCloseTo(before[0], 4);
+    expect(middle.y).toBeCloseTo(before[1], 4);
+  });
+
+  test('inserting on a straight segment keeps it a polyline', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+    ];
+    const hit = nearestOnSubpaths(paths, { x: 40, y: 0 })!;
+    const { paths: next } = insertAnchor(paths, hit);
+    expect(next[0].anchors[1]).toMatchObject({ x: 40, y: 0 });
+    expect(pathFromSubpaths(next)).toBe('M 0 0 L 40 0 L 100 0');
+  });
+
+  test('bending a segment moves the curve under the pointer', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+    ];
+    const hit = nearestOnSubpaths(paths, { x: 50, y: 0 })!;
+    const bent = bendSegment(paths, hit, 0, 40);
+    const at = cubicAt(segmentPoints(bent[0].anchors, 0), hit.t);
+    expect(at[1]).toBeCloseTo(40, 3);
+  });
+
+  test('deleting a smooth point heals the curve rather than denting it', () => {
+    const paths: VectorPath[] = [
+      {
+        closed: false,
+        anchors: [
+          { x: 0, y: 0, out: [20, 0] },
+          { x: 50, y: 30, in: [-15, 0], out: [15, 0] },
+          { x: 100, y: 0, in: [-20, 0] },
+        ],
+      },
+    ];
+    const kept = removeAnchors(paths, [1]);
+    expect(kept[0].anchors).toHaveLength(2);
+    // the survivors reach further, so the span that doubled still bulges
+    expect(kept[0].anchors[0].out![0]).toBeCloseTo(30, 3);
+    expect(kept[0].anchors[1].in![0]).toBeCloseTo(-30, 3);
+  });
+
+  test('a polyline point deletes to a straight line, because there was no curve', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0 }, { x: 50, y: 40 }, { x: 100, y: 0 }] },
+    ];
+    expect(pathFromSubpaths(removeAnchors(paths, [1]))).toBe('M 0 0 L 100 0');
+  });
+
+  test('joining the two ends of one path closes it', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 50 }] },
+    ];
+    const joined = joinAnchors(paths, { sub: 0, index: 0 }, { sub: 0, index: 2 })!;
+    expect(joined[0].closed).toBe(true);
+  });
+
+  test('joining two paths turns them the right way round first', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0 }, { x: 10, y: 0 }] },
+      { closed: false, anchors: [{ x: 30, y: 0 }, { x: 20, y: 0 }] },
+    ];
+    // the ends that meet are the second point of each, so the second path flips
+    const joined = joinAnchors(paths, { sub: 0, index: 1 }, { sub: 1, index: 1 })!;
+    expect(joined).toHaveLength(1);
+    expect(joined[0].anchors.map((a) => a.x)).toEqual([0, 10, 20, 30]);
+  });
+
+  test('cutting a closed ring opens it at the cut', () => {
+    const paths: VectorPath[] = [
+      {
+        closed: true,
+        anchors: [
+          { x: 0, y: 0 },
+          { x: 100, y: 0 },
+          { x: 100, y: 100 },
+          { x: 0, y: 100 },
+        ],
+      },
+    ];
+    const hit = nearestOnSubpaths(paths, { x: 50, y: 0 })!;
+    const cut = cutAt(paths, hit);
+    expect(cut).toHaveLength(1);
+    expect(cut[0].closed).toBe(false);
+    // the ring is now a run that starts and ends where the knife went in
+    expect(cut[0].anchors[0]).toMatchObject({ x: 50, y: 0 });
+    expect(cut[0].anchors.at(-1)).toMatchObject({ x: 50, y: 0 });
+  });
+
+  test('cutting an open path leaves two', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+    ];
+    const cut = cutAt(paths, nearestOnSubpaths(paths, { x: 60, y: 0 })!);
+    expect(cut).toHaveLength(2);
+    expect(cut[0].anchors.at(-1)).toMatchObject({ x: 60, y: 0 });
+    expect(cut[1].anchors[0]).toMatchObject({ x: 60, y: 0 });
+  });
+
+  test('a point radius rounds the corner it sits on', () => {
+    const square: Anchor[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0, r: 20 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ];
+    const d = pathFromAnchors(square, true);
+    // the corner is trimmed both sides and arced across, not drawn as a point
+    expect(d).toContain('A 20 20');
+    expect(d).not.toContain('L 100 0');
+  });
+
+  test('a radius bigger than the corner can take is clamped, not inverted', () => {
+    const d = pathFromAnchors(
+      [{ x: 0, y: 0 }, { x: 20, y: 0, r: 500 }, { x: 20, y: 20 }],
+      true,
+    );
+    expect(d).toContain('A 10 10');
+  });
+
+  test('the three mirror states are read off the handles when none is stated', () => {
+    expect(mirrorOf({ x: 0, y: 0, in: [-10, 0], out: [10, 0] })).toBe('full');
+    expect(mirrorOf({ x: 0, y: 0, in: [-10, 0], out: [30, 0] })).toBe('angle');
+    expect(mirrorOf({ x: 0, y: 0, out: [10, 0] })).toBe('none');
+  });
+
+  test('mirroring the angle keeps the opposite handle its own length', () => {
+    const anchor = applyMirror({ x: 0, y: 0, in: [0, -30], out: [10, 0] }, 'angle');
+    expect(anchor.in![0]).toBeCloseTo(-30, 4);
+    expect(anchor.in![1]).toBeCloseTo(0, 4);
+    expect(Math.hypot(anchor.in![0], anchor.in![1])).toBeCloseTo(30, 4);
+  });
+
+  test('aligning points moves only the ones selected', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0 }, { x: 10, y: 40 }, { x: 20, y: 90 }] },
+    ];
+    const aligned = alignAnchors(paths, [0, 1], 'left');
+    expect(aligned[0].anchors.map((a) => a.x)).toEqual([0, 0, 20]);
+  });
+
+  test('a point with its own width draws the stroke as a band', () => {
+    const paths: VectorPath[] = [
+      { closed: false, anchors: [{ x: 0, y: 0, width: 2 }, { x: 100, y: 0, width: 20 }] },
+    ];
+    const band = variableWidthPath(paths, 4)!;
+    expect(band).toBeTruthy();
+    // a taper is a filled outline: it starts thin and ends thick
+    const ys = [...band.matchAll(/-?\d+(?:\.\d+)?\s(-?\d+(?:\.\d+)?)/g)].map((m) =>
+      Number(m[1]),
+    );
+    expect(Math.max(...ys)).toBeGreaterThan(9);
+    expect(Math.min(...ys)).toBeLessThan(-9);
+  });
+
+  test('a path with no varied points strokes normally', () => {
+    expect(variableWidthPath([{ closed: false, anchors: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }], 4)).toBeNull();
+  });
+
+  test('a tapered stroke exports as the band it draws, not as a stroked line', () => {
+    const doc: Doc = {
+      root: node({ id: 'root', type: 'page', children: ['t'] }),
+      t: node({
+        id: 't',
+        type: 'vector',
+        parent: 'root',
+        w: 200,
+        h: 1,
+        anchors: [
+          { x: 0, y: 0, width: 2 },
+          { x: 200, y: 0, width: 30 },
+        ],
+        closed: false,
+        border: { width: 2, color: '#111111', style: 'solid', position: 'center' },
+      }),
+    };
+    const jsx = toReact('t', doc).markup;
+    expect(jsx).toContain('fillRule="evenodd"');
+    expect(jsx).toContain('fill="#111111"');
+    // the ordinary stroke attributes are not there, because it is not one
+    expect(jsx).not.toContain('strokeLinecap');
+  });
+
+  test('a rounded rectangle opens with its corners, not squared off', () => {
+    const paths = outlinePaths(node({ id: 'r', type: 'rect', w: 100, h: 60, radius: 12 }));
+    expect(paths[0].anchors.map((a) => a.r)).toEqual([12, 12, 12, 12]);
+    // and they are still corners when drawn, rather than a number nobody reads
+    expect(pathFromAnchors(paths[0].anchors, true)).toContain('A 12 12');
+  });
+
+  test('a rounded rectangle flattens rounded, so a boolean sees the shape', () => {
+    const box = node({ id: 'r', type: 'rect', w: 100, h: 100, radius: 50 });
+    const ring = regionOf(box)[0];
+    // every point of a fully rounded 100×100 box is 50 from the centre
+    for (const [x, y] of ring) expect(Math.hypot(x - 50, y - 50)).toBeCloseTo(50, 0);
+  });
+
+  test('a pie slice outlines as a pie, not as the whole ellipse', () => {
+    const pie = node({ id: 'e', type: 'ellipse', w: 100, h: 100, arcStart: 0, arcEnd: 0.25 });
+    const paths = outlinePaths(pie);
+    expect(paths).toHaveLength(1);
+    expect(paths[0].closed).toBe(true);
+    // it comes back through the centre, which is what makes it a slice
+    expect(paths[0].anchors.at(-1)).toMatchObject({ x: 50, y: 50 });
+    const box = regionBounds(regionOf(pie))!;
+    expect(box.minX).toBeCloseTo(50, 0);
+    expect(box.maxX).toBeCloseTo(100, 0);
+    expect(box.minY).toBeCloseTo(0, 0);
+    expect(box.maxY).toBeCloseTo(50, 0);
+  });
+
+  test('a donut outlines as two rings', () => {
+    const paths = outlinePaths(
+      node({ id: 'e', type: 'ellipse', w: 100, h: 100, innerRadius: 0.5 }),
+    );
+    expect(paths).toHaveLength(2);
+    expect(paths.every((sub) => sub.closed)).toBe(true);
+    const inner = anchorBounds(paths[1].anchors)!;
+    expect(inner.maxX - inner.minX).toBeCloseTo(50, 3);
+  });
+
+  test('a rectangle can be opened for editing without becoming a vector', () => {
+    const box = node({ id: 'r', type: 'rect', w: 40, h: 20 });
+    const paths = editablePaths(box);
+    expect(box.type).toBe('rect');
+    expect(paths[0].anchors).toHaveLength(4);
+    expect(paths[0].closed).toBe(true);
+  });
+});
+
+/**
+ * Regions.
+ *
+ * A closed outline is one shape but not necessarily one area, and everything
+ * the paint bucket and the shape builder do rests on being able to say which
+ * areas a path encloses. Getting that wrong is invisible until someone clicks
+ * a lens and the whole shape fills.
+ */
+test.describe('vector regions', () => {
+  const ring = (x: number, y = 0, size = 100): VectorPath => ({
+    closed: true,
+    anchors: [
+      { x, y },
+      { x: x + size, y },
+      { x: x + size, y: y + size },
+      { x, y: y + size },
+    ],
+  });
+
+  test('one ring encloses one region', () => {
+    expect(vectorRegions([ring(0)])).toHaveLength(1);
+  });
+
+  test('two overlapping rings enclose three regions', () => {
+    const found = vectorRegions([ring(0), ring(50)]);
+    expect(found).toHaveLength(3);
+    // the lens they share is the smallest, and it is last
+    const lens = found.at(-1)!;
+    const box = regionBounds(lens.region)!;
+    expect(box.minX).toBeCloseTo(50, 3);
+    expect(box.maxX).toBeCloseTo(100, 3);
+  });
+
+  test('rings that never meet stay two regions', () => {
+    expect(vectorRegions([ring(0), ring(300)])).toHaveLength(2);
+  });
+
+  test('a click finds the region it landed in, smallest first', () => {
+    const found = vectorRegions([ring(0), ring(50)]);
+    // inside the overlap, which is the lens rather than either whole square
+    const at = regionAt(found, [75, 50]);
+    const box = regionBounds(found[at].region)!;
+    expect(box.minX).toBeCloseTo(50, 3);
+    expect(box.maxX).toBeCloseTo(100, 3);
+    // and off the shape entirely
+    expect(regionAt(found, [500, 500])).toBe(-1);
+  });
+
+  test('a seed lands inside the region it was taken from, crescents included', () => {
+    // a square with a bite out of one side: its centroid is still inside, so
+    // use a ring whose middle is genuinely outside it
+    const crescent: VectorPath = {
+      closed: true,
+      anchors: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+        { x: 60, y: 100 },
+        { x: 60, y: 20 },
+        { x: 40, y: 20 },
+        { x: 40, y: 100 },
+        { x: 0, y: 100 },
+      ],
+    };
+    const [region] = vectorRegions([crescent]);
+    expect(inside(interiorPoint(region.region), region.region)).toBe(true);
+  });
+
+  test('the shape builder merges the regions it is given and keeps the rest', () => {
+    const found = vectorRegions([ring(0), ring(50)]);
+    // merge the two outer slivers, leaving the lens alone
+    const lens = found.findIndex((entry) => regionBounds(entry.region)!.minX >= 50 - 1e-6 &&
+      regionBounds(entry.region)!.maxX <= 100 + 1e-6);
+    const outers = found.map((_, i) => i).filter((i) => i !== lens);
+    const built = mergeRegions(found, outers);
+    // one merged outline plus the region nobody picked
+    expect(built.length).toBeGreaterThanOrEqual(2);
+    const box = subpathBounds(built)!;
+    expect(box.minX).toBeCloseTo(0, 3);
+    expect(box.maxX).toBeCloseTo(150, 3);
+  });
+
+  test('dropping a region takes it out of the shape', () => {
+    const found = vectorRegions([ring(0), ring(300)]);
+    const kept = dropRegion(found, 0);
+    const box = subpathBounds(kept)!;
+    // only the far square is left
+    expect(box.minX).toBeCloseTo(300, 3);
+  });
+
+  test('a path with no closed ring encloses nothing', () => {
+    expect(vectorRegions([{ closed: false, anchors: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }])).toEqual([]);
   });
 });

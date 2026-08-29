@@ -711,3 +711,560 @@ test('an image fill can be cropped, and the crop reaches the CSS', async ({ page
   expect(style.position).toBe('10% 90%');
   await removeNodes(page, [id]);
 });
+
+/**
+ * Vector edit mode.
+ *
+ * The screenshots this was built from are Figma's: double-clicking a shape
+ * opens its points, hatches the inside blue, and brings up a toolbar of
+ * sub-tools along the bottom. These drive the real thing, because the whole
+ * point of the mode is what the pointer does inside it.
+ */
+test('double clicking a shape opens its points, and the toolbar with them', async ({ page }) => {
+  const id = await makeNode(page, 'rect', {
+    name: 'Plate',
+    x: 60,
+    y: 560,
+    w: 160,
+    h: 120,
+    fill: '#D9D9D9',
+  });
+  const box = (await page.locator(`[data-node-id="${id}"]`).boundingBox())!;
+  await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().vectorEdit)).toBe(id);
+  await expect(page.locator('.vec-bar')).toBeVisible();
+  await expect(page.locator('.vec-bar .vec-tool', { hasText: 'Bend' })).toBeVisible();
+  // a rectangle has four corners, and they are all on screen
+  await expect(page.locator('[data-vector-anchor]')).toHaveCount(4);
+  // the right panel is the point's, not the layer's
+  await expect(page.locator('.fig-section', { hasText: 'Vector' }).first()).toBeVisible();
+
+  // and none of that has converted anything yet
+  expect((await doc(page))[id].type).toBe('rect');
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('dragging a corner converts the rectangle and moves only that point', async ({ page }) => {
+  const id = await makeNode(page, 'rect', {
+    name: 'Plate',
+    x: 60,
+    y: 560,
+    w: 160,
+    h: 120,
+    fill: '#D9D9D9',
+  });
+  const box = (await page.locator(`[data-node-id="${id}"]`).boundingBox())!;
+  await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('[data-vector-anchor]')).toHaveCount(4);
+
+  // the top-left corner, pulled 40px to the right
+  await dragBy(page, { x: box.x, y: box.y }, { x: 40, y: 0 });
+
+  const after = (await doc(page))[id];
+  expect(after.type).toBe('vector');
+  // one corner moved and the other three did not, so the box is unchanged —
+  // the bottom-left is still holding the left edge where it was
+  expect(after.x).toBe(60);
+  expect(after.w).toBe(160);
+  expect(after.anchors!.map((a) => Math.round(a.x + after.x))).toEqual([100, 220, 220, 60]);
+  expect(after.anchors!.map((a) => Math.round(a.y + after.y))).toEqual([560, 560, 680, 680]);
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('a marquee inside the shape selects the points it covers', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Zigzag',
+    x: 60,
+    y: 560,
+    w: 200,
+    h: 100,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 100, y: 100 },
+      { x: 200, y: 0 },
+    ],
+    closed: false,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-vector-anchor]')).toHaveCount(3);
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).boundingBox())!;
+  // a band across the bottom of the box catches the middle point only
+  await dragBy(page, { x: box.x - 20, y: box.y + box.height - 20 }, { x: box.width + 40, y: 40 });
+
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().anchorSelection)).toEqual([1]);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('the Cut tool slices a closed path open where you click it', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Ring',
+    x: 60,
+    y: 560,
+    w: 200,
+    h: 200,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 200 },
+      { x: 0, y: 200 },
+    ],
+    closed: true,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'Cut' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).boundingBox())!;
+  // halfway along the top edge
+  await page.mouse.click(box.x + box.width / 2, box.y);
+
+  const after = (await doc(page))[id];
+  expect(after.paths?.[0].closed ?? after.closed).toBe(false);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('the Erase tool takes out the segment under the pointer', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Square',
+    x: 60,
+    y: 560,
+    w: 200,
+    h: 200,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 200 },
+      { x: 0, y: 200 },
+    ],
+    closed: true,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'Erase' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y);
+
+  const after = (await doc(page))[id];
+  // the ring is open now, and every corner survived: only the edge went
+  expect(after.paths?.[0].closed ?? after.closed).toBe(false);
+  expect(after.anchors).toHaveLength(4);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('the Paint tool closes the region you click and fills it', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Wedge',
+    x: 60,
+    y: 560,
+    w: 120,
+    h: 100,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 120, y: 0 },
+      { x: 60, y: 100 },
+    ],
+    closed: false,
+    fillVisible: false,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'Paint' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).boundingBox())!;
+  // well inside the wedge, near the top where it is widest
+  await page.mouse.click(box.x + box.width / 2, box.y + 20);
+
+  const after = (await doc(page))[id];
+  expect(after.paths?.[0].closed ?? after.closed).toBe(true);
+  expect(after.fillVisible).not.toBe(false);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('the Bend tool curves a straight segment', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Rule',
+    x: 60,
+    y: 600,
+    w: 200,
+    h: 1,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+    ],
+    closed: false,
+    border: { width: 2, color: '#111111', style: 'solid', position: 'center' },
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'Bend' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).first().boundingBox())!;
+  await dragBy(page, { x: box.x + box.width / 2, y: box.y }, { x: 0, y: 60 });
+
+  const after = (await doc(page))[id];
+  // both ends now carry a handle, which is what turned the line into a curve
+  expect(after.anchors![0].out).toBeTruthy();
+  expect(after.anchors![1].in).toBeTruthy();
+  expect(after.h).toBeGreaterThan(20);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('the Vector panel rounds the corner a point sits on', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Corner',
+    x: 60,
+    y: 560,
+    w: 200,
+    h: 200,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 200 },
+      { x: 0, y: 200 },
+    ],
+    closed: true,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('[data-vector-anchor="1"]').click();
+
+  const radius = page.getByTitle('Corner radius at this point').locator('input');
+  await radius.fill('24');
+  await radius.press('Enter');
+
+  const after = (await doc(page))[id];
+  expect(after.anchors![1].r).toBe(24);
+  // and the shape actually draws the arc, rather than storing a number nobody
+  // reads — the rendered path carries it
+  const d = await page
+    .locator(`[data-node-id="${id}"] svg path`)
+    .first()
+    .getAttribute('d');
+  expect(d).toContain('A 24 24');
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('Variable width tapers the stroke at the point it is dragged', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Taper',
+    x: 60,
+    y: 600,
+    w: 200,
+    h: 1,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+    ],
+    closed: false,
+    border: { width: 2, color: '#111111', style: 'solid', position: 'center' },
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'More' }).click();
+  await page.locator('.vec-more button', { hasText: 'Variable width' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).first().boundingBox())!;
+  await dragBy(page, { x: box.x + box.width, y: box.y }, { x: 0, y: 12 });
+
+  const after = (await doc(page))[id];
+  expect(after.anchors![1].width).toBeGreaterThan(20);
+  // a tapering stroke is drawn as the band it sweeps, so the stroke path fills
+  const filled = await page
+    .locator(`[data-node-id="${id}"] svg path[fill="#111111"]`)
+    .count();
+  expect(filled).toBe(1);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('the Lasso tool selects the points it is drawn around', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Zigzag',
+    x: 60,
+    y: 560,
+    w: 200,
+    h: 100,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 100, y: 100 },
+      { x: 200, y: 0 },
+    ],
+    closed: false,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'Lasso' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).first().boundingBox())!;
+  // a loop drawn around the bottom point only
+  const at = { x: box.x + box.width / 2, y: box.y + box.height };
+  await page.mouse.move(at.x - 30, at.y - 25);
+  await page.mouse.down();
+  for (const [dx, dy] of [
+    [30, -30],
+    [60, 0],
+    [60, 40],
+    [0, 40],
+    [-30, 10],
+  ] as const) {
+    await page.mouse.move(at.x - 30 + dx, at.y - 25 + dy);
+  }
+  await page.mouse.up();
+
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().anchorSelection)).toEqual([1]);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('outlining a tapered stroke keeps the taper', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Taper',
+    x: 60,
+    y: 600,
+    w: 200,
+    h: 1,
+    anchors: [
+      { x: 0, y: 0, width: 2 },
+      { x: 200, y: 0, width: 40 },
+    ],
+    closed: false,
+    border: { width: 2, color: '#111111', style: 'solid', position: 'center' },
+  });
+  await select(page, [id]);
+  await page.evaluate(() => {
+    const made = window.paperlike!.store.outlineStroke(
+      window.paperlike!.ui.getState().selection,
+    );
+    window.paperlike!.store.commit();
+    return made;
+  });
+
+  const outlined = await nodeNamed(page, 'Taper stroke');
+  expect(outlined).toBeTruthy();
+  // a uniform 2px pen would sweep a 2px band; this one ends 40 wide
+  expect(outlined!.h).toBeGreaterThan(30);
+  await removeNodes(page, [outlined!.id]);
+});
+
+test('the points of a rotated shape land on the shape', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Turned',
+    x: 400,
+    y: 560,
+    w: 200,
+    h: 100,
+    rotation: 45,
+    anchors: [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 200, y: 100 },
+      { x: 0, y: 100 },
+    ],
+    closed: true,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+
+  const anchor = page.locator('[data-vector-anchor="0"]');
+  const dot = (await anchor.boundingBox())!;
+  // the first corner of a 200×100 box turned 45° about its centre sits up and
+  // to the left of the centre by (100,50) rotated — that is where the handle
+  // has to be, not at the corner of the measured box
+  const centre = { x: 400 + 100, y: 560 + 50 };
+  const expected = {
+    x: centre.x + (-100 * Math.SQRT1_2 - -50 * Math.SQRT1_2),
+    y: centre.y + (-100 * Math.SQRT1_2 + -50 * Math.SQRT1_2),
+  };
+  const viewport = await page.evaluate(() => window.paperlike!.ui.getState().viewport);
+  const canvas = (await page.locator('[data-canvas-root]').boundingBox())!;
+  expect(dot.x + dot.width / 2).toBeCloseTo(canvas.x + expected.x * viewport.zoom + viewport.x, 0);
+  expect(dot.y + dot.height / 2).toBeCloseTo(canvas.y + expected.y * viewport.zoom + viewport.y, 0);
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('a rounded rectangle keeps its corners through a point edit', async ({ page }) => {
+  const id = await makeNode(page, 'rect', {
+    name: 'Pill',
+    x: 60,
+    y: 560,
+    w: 160,
+    h: 120,
+    radius: 16,
+    fill: '#D9D9D9',
+  });
+  const box = (await page.locator(`[data-node-id="${id}"]`).first().boundingBox())!;
+  await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('[data-vector-anchor]')).toHaveCount(4);
+
+  // move one corner: that is what converts the rectangle
+  await dragBy(page, { x: box.x, y: box.y }, { x: 30, y: 0 });
+
+  const after = (await doc(page))[id];
+  expect(after.type).toBe('vector');
+  // all four corners are still rounded — the radius moved onto the points
+  expect(after.anchors!.map((a) => a.r)).toEqual([16, 16, 16, 16]);
+  // and it is the shape on screen, not a number nobody reads: the fill is
+  // clipped to a path that arcs across every corner
+  const clip = await page
+    .locator(`[data-node-id="${id}"] > div[aria-hidden]`)
+    .first()
+    .evaluate((el) => getComputedStyle(el).clipPath);
+  expect(clip).toContain('A 16 16');
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('a pie slice opens as a pie and stays one', async ({ page }) => {
+  const id = await makeNode(page, 'ellipse', {
+    name: 'Slice',
+    x: 60,
+    y: 560,
+    w: 160,
+    h: 160,
+    arcStart: 0,
+    arcEnd: 0.25,
+    fill: '#D9D9D9',
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+
+  // an arc of a quarter turn is two cubic spans, plus the centre it returns to
+  await expect(page.locator('[data-vector-anchor]')).toHaveCount(3);
+  await page.evaluate((target) => {
+    window.paperlike!.store.outlineShape([target]);
+    window.paperlike!.store.commit();
+  }, id);
+
+  const after = (await doc(page))[id];
+  expect(after.type).toBe('vector');
+  expect(after.closed).toBe(true);
+  // the last point is the centre it came back through, not a fourth rim point
+  const last = after.anchors!.at(-1)!;
+  expect(last.x).toBeCloseTo(80, 0);
+  expect(last.y).toBeCloseTo(80, 0);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+/**
+ * Regions.
+ *
+ * Two rings that overlap enclose three areas, and both the paint bucket and the
+ * shape builder are about picking one of them. These drive the real canvas
+ * because the arrangement is derived from what is on screen.
+ */
+const OVERLAP = {
+  name: 'Overlap',
+  x: 60,
+  y: 560,
+  w: 150,
+  h: 100,
+  paths: [
+    {
+      closed: true,
+      anchors: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+        { x: 0, y: 100 },
+      ],
+    },
+    {
+      closed: true,
+      anchors: [
+        { x: 50, y: 0 },
+        { x: 150, y: 0 },
+        { x: 150, y: 100 },
+        { x: 50, y: 100 },
+      ],
+    },
+  ],
+};
+
+test('the Paint tool fills just the region you click', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    ...OVERLAP,
+    fill: '#D9D9D9',
+    fillVisible: false,
+  });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'Paint' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).first().boundingBox())!;
+  // well inside the left square, clear of the overlap that starts at 50
+  await page.mouse.click(box.x + 25, box.y + 50);
+
+  const after = (await doc(page))[id];
+  expect(after.fillSeeds).toHaveLength(1);
+  // the fill is clipped to that one region, so it stops where the overlap does
+  const clip = await page
+    .locator(`[data-node-id="${id}"] > div[aria-hidden]`)
+    .first()
+    .evaluate((el) => getComputedStyle(el).clipPath);
+  const far = Math.max(...[...clip.matchAll(/(-?\d+(?:\.\d+)?) -?\d+(?:\.\d+)?/g)].map((m) => Number(m[1])));
+  expect(far).toBeLessThan(60);
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('⌥ with the Paint tool empties a region again', async ({ page }) => {
+  const id = await makeNode(page, 'vector', { ...OVERLAP, fill: '#D9D9D9' });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'Paint' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).first().boundingBox())!;
+  // the lens the two squares share, taken out of a shape that was wholly filled
+  await page.keyboard.down('Alt');
+  await page.mouse.click(box.x + 75, box.y + 50);
+  await page.keyboard.up('Alt');
+
+  let after = (await doc(page))[id];
+  expect(after.fillSeeds).toHaveLength(2);
+
+  // and putting it back
+  await page.mouse.click(box.x + 75, box.y + 50);
+  after = (await doc(page))[id];
+  expect(after.fillSeeds).toHaveLength(3);
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('the Shape builder merges the regions you drag across', async ({ page }) => {
+  const id = await makeNode(page, 'vector', { ...OVERLAP, fill: '#D9D9D9' });
+  await select(page, [id]);
+  await page.keyboard.press('Enter');
+  await page.locator('.vec-bar .vec-tool', { hasText: 'More' }).click();
+  await page.locator('.vec-more button', { hasText: 'Shape builder' }).click();
+
+  const box = (await page.locator(`[data-node-id="${id}"]`).first().boundingBox())!;
+  // straight across all three regions: left only, the lens, right only
+  await dragBy(page, { x: box.x + 20, y: box.y + 50 }, { x: 110, y: 0 });
+
+  const after = (await doc(page))[id];
+  // two rings that happened to overlap are now the one silhouette they drew
+  expect(after.paths).toHaveLength(1);
+  expect(after.w).toBe(150);
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});

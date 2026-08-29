@@ -16,10 +16,12 @@ import { Resizer } from './Resizer';
 import { ShadersModal } from './ShadersModal';
 import { ToolRail } from './ToolRail';
 import { useDoc, useStore, useTokenVars } from './Session';
-import { PANEL, useUI, type Tool } from '../state/ui';
+import { PANEL, ZOOM, useUI, type Tool } from '../state/ui';
+import { fitBounds, fitView, selectionBounds } from '../lib/view';
 import { ROOT_ID, type BooleanOp, type Doc } from '../document/types';
 import { firstChild, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
+import { canEditPoints } from '../document/geometry';
 import { readNodes, writeNodes } from '../lib/clipboard';
 import { copyAsPng, copyProperties, flip, pasteAt, pasteProperties } from '../lib/actions';
 import { download, safeFilename } from '../export/raster';
@@ -64,38 +66,6 @@ function isTyping(target: EventTarget | null): boolean {
  */
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
-/** World-space bounding box of everything on the page. */
-function contentBounds(doc: Doc) {
-  const page = doc[ROOT_ID];
-  const kids = (page?.children ?? []).map((id) => doc[id]).filter(Boolean);
-  if (!kids.length) return null;
-  return {
-    minX: Math.min(...kids.map((n) => n.x)),
-    minY: Math.min(...kids.map((n) => n.y)),
-    maxX: Math.max(...kids.map((n) => n.x + n.w)),
-    maxY: Math.max(...kids.map((n) => n.y + n.h)),
-  };
-}
-
-/** Viewport that centres the page's content in the canvas area. */
-function fitView(doc: Doc, leftPanel: boolean, leftWidth: number, rightWidth: number) {
-  const bounds = contentBounds(doc);
-  if (!bounds) return null;
-  // each panel is a border wider than its content box
-  const left = leftPanel ? leftWidth + PANEL.border : 0;
-  const width = window.innerWidth - left - PANEL.toolRail - (rightWidth + PANEL.border);
-  const height = window.innerHeight;
-  const zoom = Math.min(
-    1,
-    Math.min(width / (bounds.maxX - bounds.minX + 160), height / (bounds.maxY - bounds.minY + 160)),
-  );
-  return {
-    zoom,
-    x: width / 2 - ((bounds.minX + bounds.maxX) / 2) * zoom,
-    y: height / 2 - ((bounds.minY + bounds.maxY) / 2) * zoom,
-  };
-}
-
 export function Editor({ fileName }: { fileName: string }) {
   const store = useStore();
   const doc = useDoc();
@@ -121,6 +91,21 @@ export function Editor({ fileName }: { fileName: string }) {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // A link copied from the Pages menu carries `?page=` — open on that page once
+  // the document has actually loaded it, rather than on whatever came first.
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (deepLinked.current) return;
+    const wanted = new URLSearchParams(window.location.search).get('page');
+    if (!wanted) {
+      deepLinked.current = true;
+      return;
+    }
+    if (!store.listPages().includes(wanted)) return;
+    deepLinked.current = true;
+    useUI.getState().setPage(wanted);
+  }, [doc, store]);
 
   // Frame the document once, as soon as the first content arrives from sync.
   const framed = useRef(false);
@@ -194,8 +179,10 @@ export function Editor({ fileName }: { fileName: string }) {
 
       // ── Walking the tree ───────────────────────────────────────────────
       if (event.key === 'Enter' && selection.length === 1 && !event.shiftKey) {
-        // a path has points rather than children; ⏎ edits them
-        if (doc[selection[0]]?.type === 'vector') {
+        // a shape has points rather than children; ⏎ edits them. A parametric
+        // one stays parametric until a point actually moves, so this is safe to
+        // press on a star you only wanted to look at.
+        if (canEditPoints(doc[selection[0]]?.type)) {
           event.preventDefault();
           ui.setVectorEdit(selection[0]);
           return;
@@ -454,25 +441,36 @@ export function Editor({ fileName }: { fileName: string }) {
       }
 
       // ── Zoom ───────────────────────────────────────────────────────────
-      if (mod && (event.key === '=' || event.key === '+')) {
+      // Figma takes these with or without the modifier, and every one of them
+      // zooms about the middle of the canvas rather than the world origin.
+      if (event.key === '=' || event.key === '+') {
         event.preventDefault();
-        ui.setViewport((vp) => ({ ...vp, zoom: Math.min(64, vp.zoom * 1.25) }));
+        ui.zoomBy(ZOOM.step);
         return;
       }
-      if (mod && event.key === '-') {
+      if (event.key === '-' || event.key === '_') {
         event.preventDefault();
-        ui.setViewport((vp) => ({ ...vp, zoom: Math.max(0.02, vp.zoom / 1.25) }));
+        ui.zoomBy(1 / ZOOM.step);
         return;
       }
-      if (mod && event.key === '0') {
+      // the bare digits are Figma's opacity shortcuts, so these want a modifier
+      if (event.key === '0' && (mod || event.shiftKey)) {
         event.preventDefault();
-        ui.setViewport((vp) => ({ ...vp, zoom: 1 }));
+        ui.zoomTo(1);
         return;
       }
-      if ((mod && event.key === '1') || (!mod && event.shiftKey && event.key === '1')) {
+      if (event.key === '1' && (mod || event.shiftKey)) {
         event.preventDefault();
         const fitted = fitView(doc, leftPanel, ui.leftWidth, ui.rightWidth);
         if (fitted) ui.setViewport(fitted);
+        return;
+      }
+      if (event.key === '2' && (mod || event.shiftKey)) {
+        event.preventDefault();
+        const bounds = selectionBounds(ui.selection, doc);
+        const fitted = bounds && fitBounds(bounds, leftPanel, ui.leftWidth, ui.rightWidth);
+        if (fitted) ui.setViewport(fitted);
+        return;
       }
     };
 

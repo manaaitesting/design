@@ -1,6 +1,15 @@
 import type { CSSProperties } from 'react';
 import { effectStyle, effectsOf } from './effects';
-import { fillRuleOf, isClosedShape, outlinePath, paintsWithPath, shapePath } from './geometry';
+import { pathOfRegions, seededRegions, vectorRegions } from './regions';
+import {
+  fillRuleOf,
+  isClosedShape,
+  outlinePath,
+  paintsWithPath,
+  shapePath,
+  subpathsOf,
+  variableWidthPath,
+} from './geometry';
 import {
   cssFilter,
   filterId,
@@ -19,6 +28,7 @@ import {
   type NumericField,
   type Paint,
   type SceneNode,
+  type ShaderSpec,
 } from './types';
 
 /**
@@ -49,7 +59,7 @@ function composePaints(paints: Paint[]): string {
     .join(', ');
 }
 
-function withAlpha(paint: string, alpha: number): string {
+export function withAlpha(paint: string, alpha: number): string {
   if (alpha >= 1) return paint;
   const hex = /^#([0-9a-fA-F]{6})$/.exec(paint.trim());
   if (!hex) return paint;
@@ -484,6 +494,29 @@ export function paintLayers(node: SceneNode): PaintLayer[] {
   });
 }
 
+/**
+ * The element a shader paint draws on.
+ *
+ * A shader is a live GPU surface, so unlike every other paint it cannot be a
+ * `background` — it needs a canvas of its own. That canvas sits at the bottom
+ * of the fill stack, beneath the layer's image paints and its children, which
+ * is where a fill belongs. `overflow` and the inherited radius are what round
+ * the surface off without clipping anything the layer contains.
+ */
+export function shaderSurface(node: SceneNode): { shader: ShaderSpec; style: CSSProperties } | null {
+  if (!node.shader) return null;
+  return {
+    shader: node.shader,
+    style: {
+      position: 'absolute',
+      inset: 0,
+      pointerEvents: 'none',
+      overflow: 'hidden',
+      borderRadius: 'inherit',
+    },
+  };
+}
+
 /** How a path shape's stroke is drawn. */
 export interface ShapeStroke {
   color: string;
@@ -507,7 +540,16 @@ export interface ShapePaint {
   d: string;
   fillRule: 'nonzero' | 'evenodd';
   fill: CSSProperties | null;
+  /** a shader paint, drawn on its own surface inside the clipped fill layer */
+  shader: ShaderSpec | null;
   stroke: ShapeStroke | null;
+  /**
+   * The stroke as a filled band, when the path's points carry their own widths.
+   *
+   * SVG strokes one width per path, so a tapering line has to be drawn as the
+   * shape it sweeps. Present only for a vector someone has actually varied.
+   */
+  band: string | null;
 }
 
 function dashOf(border: NonNullable<SceneNode['border']>): string | null {
@@ -572,20 +614,38 @@ export function shapePaint(node: SceneNode): ShapePaint | null {
   // hole out of the middle.
   const fillRule = fillRuleOf(node);
 
+  // Painted regions replace the outline as the thing the fill is clipped to.
+  // Once a path has had one of its regions painted, the ones nobody painted are
+  // empty — that is what makes a region a region rather than a decoration. The
+  // cells are disjoint, so even-odd over all of them is exactly their union.
+  const painted =
+    node.type === 'vector' && node.fillSeeds
+      ? pathOfRegions(
+          seededRegions(vectorRegions(subpathsOf(node), node.smooth ?? 0), node.fillSeeds),
+        )
+      : null;
+  const fillD = painted ?? d;
+  const fillRuleUsed = painted ? 'evenodd' : fillRule;
+
   let fill: CSSProperties | null = null;
-  if (closed) {
+  // A shader paints on a surface of its own, so the clipped layer is worth
+  // making for it even when the shape has no CSS background at all — that layer
+  // is what confines the shader to the star instead of to the star's box.
+  const shader = node.shader ?? null;
+  // a path with every region unpainted has no fill left to draw
+  if (closed && painted !== '') {
     const background = backgroundOf(node);
-    if (background) {
+    if (background || shader) {
       fill = {
         position: 'absolute',
         inset: 0,
-        background,
+        ...(background ? { background } : null),
         // an image paint has to be told how to sit in the box, exactly as an
         // image node's does
         ...(background.includes('url(') ? imageSizing(node) : null),
         // `path()` takes the element's own coordinate space, which is exactly
         // the space the geometry was authored in
-        clipPath: `path(${fillRule === 'evenodd' ? 'evenodd, ' : ''}'${d}')`,
+        clipPath: `path(${fillRuleUsed === 'evenodd' ? 'evenodd, ' : ''}'${fillD}')`,
         pointerEvents: 'none',
       };
     }
@@ -604,5 +664,10 @@ export function shapePaint(node: SceneNode): ShapePaint | null {
         }
       : null;
 
-  return { d, fillRule, fill, stroke };
+  const band =
+    node.type === 'vector' && stroke
+      ? variableWidthPath(subpathsOf(node), stroke.width, node.smooth ?? 0)
+      : null;
+
+  return { d, fillRule, fill, shader: closed ? shader : null, stroke, band };
 }

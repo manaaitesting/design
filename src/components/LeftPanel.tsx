@@ -19,7 +19,7 @@ import {
   type VarScope,
 } from '../document/variables';
 import type { Token } from '../document/types';
-import { useUI } from '../state/ui';
+import { PANEL, pageActions, useUI } from '../state/ui';
 import { ancestors, descendants, ROOT_ID, type NodeType } from '../document/types';
 import {
   flattenLayers,
@@ -246,6 +246,15 @@ export function LeftPanel({ fileName }: { fileName: string }) {
   );
 }
 
+/**
+ * Figma's Pages panel.
+ *
+ * Three things make it that rather than a list: the title is a disclosure that
+ * collapses the whole thing, the list is its own scroll region with a fixed
+ * height rather than growing until it pushes Layers off the panel, and the rule
+ * beneath it is a drag handle that sets that height. The rows are a grid so a
+ * screen reader reads "row 2 of 5, selected" instead of five loose buttons.
+ */
 function PagesSection() {
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -254,11 +263,31 @@ function PagesSection() {
   const pages = usePages();
   const active = useUI((s) => s.page);
   const setPage = useUI((s) => s.setPage);
+  const height = useUI((s) => s.pagesHeight);
+  const setHeight = useUI((s) => s.setPagesHeight);
+  const setContextMenu = useUI((s) => s.setContextMenu);
+
+  const remove = (id: string) => {
+    const next = pages.find((other) => other !== id);
+    store.removePage(id);
+    if (id === active && next) setPage(next);
+  };
 
   return (
     <div style={{ paddingTop: 8 }}>
       <div className="fig-left-section">
-        <span style={{ flex: 1 }}>Pages</span>
+        <button
+          type="button"
+          className="fig-disclosure"
+          aria-expanded={open}
+          aria-controls="fig-pages-list"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className="fig-disclosure-caret" aria-hidden>
+            <Icon.Chevron open={open} />
+          </span>
+          <span>Pages</span>
+        </button>
         <button type="button" className="fig-btn" title="Search pages">
           <Icon.Search />
         </button>
@@ -266,74 +295,173 @@ function PagesSection() {
           type="button"
           className="fig-btn"
           title="New page"
-          onClick={() => setPage(store.addPage())}
+          onClick={() => {
+            setPage(store.addPage());
+            if (!open) setOpen(true);
+          }}
         >
           <Icon.Plus />
         </button>
       </div>
 
-      {open &&
-        pages.map((id) => (
+      {open && (
+        <>
           <div
-            key={id}
-            className="fig-layer"
-            data-on={id === active}
-            style={{ paddingLeft: 10 }}
-            onClick={() => setPage(id)}
-            onDoubleClick={() => setRenaming(id)}
+            id="fig-pages-list"
+            className="fig-pages-list"
+            role="grid"
+            aria-label="Pages"
+            style={{ height }}
           >
-            <span style={{ display: 'flex', color: 'var(--color-ink-muted)' }}>
-              <Icon.Page />
-            </span>
-            {renaming === id ? (
-              <input
-                autoFocus
-                defaultValue={doc[id]?.name ?? 'Page'}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  border: 0,
-                  background: '#fff',
-                  borderRadius: 3,
-                  padding: '0 4px',
-                  outline: '1.5px solid var(--color-select)',
-                }}
-                onBlur={(e) => {
-                  const value = e.target.value.trim();
-                  if (value) store.update(id, { name: value });
-                  setRenaming(null);
-                }}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                  if (e.key === 'Escape') setRenaming(null);
-                }}
-              />
-            ) : (
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {doc[id]?.name ?? 'Page'}
-              </span>
-            )}
-            {pages.length > 1 && (
-              <button
-                type="button"
-                className="fig-btn fig-layer-icons"
-                style={{ flex: 'none' }}
-                title="Delete page"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const next = pages.find((other) => other !== id);
-                  store.removePage(id);
-                  if (id === active && next) setPage(next);
-                }}
-              >
-                <Icon.Minus />
-              </button>
-            )}
+            {pages.map((id, index) => (
+              <div key={id} role="row" aria-rowindex={index + 1} aria-selected={id === active}>
+                <div role="gridcell">
+                  <div
+                    className="fig-layer"
+                    data-page-id={id}
+                    data-on={id === active}
+                    aria-current={id === active ? 'page' : undefined}
+                    style={{ paddingLeft: 10 }}
+                    onClick={() => setPage(id)}
+                    onDoubleClick={() => setRenaming(id)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setPage(id);
+                      setContextMenu({ x: event.clientX, y: event.clientY, stack: [], page: id });
+                    }}
+                  >
+                    <span style={{ display: 'flex', color: 'var(--color-ink-muted)' }}>
+                      <Icon.Page />
+                    </span>
+                    {renaming === id ? (
+                      <input
+                        autoFocus
+                        aria-label="Page name"
+                        defaultValue={doc[id]?.name ?? 'Page'}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          border: 0,
+                          background: '#fff',
+                          borderRadius: 3,
+                          padding: '0 4px',
+                          outline: '1.5px solid var(--color-select)',
+                        }}
+                        onBlur={(e) => {
+                          const value = e.target.value.trim();
+                          if (value) store.update(id, { name: value });
+                          setRenaming(null);
+                        }}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                          if (e.key === 'Escape') setRenaming(null);
+                        }}
+                      />
+                    ) : (
+                      <span className="fig-ellipsis" style={{ flex: 1 }}>
+                        {doc[id]?.name ?? 'Page'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+          <PagesResizer height={height} onResize={setHeight} />
+        </>
+      )}
+      {/* the section owns the rename and delete its context menu asks for, so
+          the menu stays a list of labels and the state stays here */}
+      <PageMenuBridge onRename={setRenaming} onDelete={remove} />
     </div>
   );
+}
+
+/**
+ * The handle along the bottom of the Pages list.
+ *
+ * It is the rule between Pages and Layers, so the list gains a resize affordance
+ * without gaining a row of chrome — the same trade `Resizer` makes between a
+ * panel and the canvas.
+ */
+function PagesResizer({
+  height,
+  onResize,
+}: {
+  height: number;
+  onResize: (height: number) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const origin = useRef({ y: 0, height: 0 });
+
+  return (
+    <div
+      className="fig-pages-resizer"
+      role="slider"
+      tabIndex={0}
+      aria-label="Resize handle"
+      aria-orientation="vertical"
+      aria-valuenow={height}
+      aria-valuemin={PANEL.pages.min}
+      aria-valuemax={PANEL.pages.max}
+      aria-valuetext={`${height} pixels`}
+      data-dragging={dragging || undefined}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        origin.current = { y: event.clientY, height };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDragging(true);
+        document.body.classList.add('fig-resizing-v');
+      }}
+      onPointerMove={(event) => {
+        if (!dragging) return;
+        onResize(origin.current.height + (event.clientY - origin.current.y));
+      }}
+      onPointerUp={(event) => {
+        if (!dragging) return;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        setDragging(false);
+        document.body.classList.remove('fig-resizing-v');
+      }}
+      onDoubleClick={() => onResize(PANEL.pages.base)}
+      onKeyDown={(event) => {
+        const step = event.shiftKey ? 40 : 8;
+        if (event.key === 'ArrowDown') return onResize(height + step);
+        if (event.key === 'ArrowUp') return onResize(height - step);
+      }}
+    />
+  );
+}
+
+/**
+ * Lets the page context menu reach this section's rename and delete.
+ *
+ * Renaming is a piece of panel state — which row is showing an input — so the
+ * menu cannot own it, and a page the menu deletes has to hand the active page
+ * on to a survivor. Publishing the two callbacks is cheaper than lifting the
+ * whole list into the store for the sake of one menu.
+ */
+function PageMenuBridge({
+  onRename,
+  onDelete,
+}: {
+  onRename: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  useEffect(() => {
+    pageActions.rename = onRename;
+    pageActions.remove = onDelete;
+    return () => {
+      pageActions.rename = null;
+      pageActions.remove = null;
+    };
+  }, [onRename, onDelete]);
+  return null;
 }
 
 /**

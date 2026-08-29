@@ -47,11 +47,22 @@ children get correct handles for free, and hit-testing is `elementsFromPoint`.
 `nodeStyle()` output the canvas rendered. The React component you copy out is
 not an approximation of the design; it is the design.
 
-**Shaders are real GPU programs.** `src/webgl/` holds a WebGL2 renderer — one
-fullscreen triangle, one fragment shader, and a single shared `requestAnimationFrame`
-loop across every instance. Off-screen surfaces stop drawing via
-`IntersectionObserver`. Exporting a shader node emits its GLSL alongside a
-dependency-free `Shader.jsx` runtime.
+**Shaders are real GPU programs, and a shader is a paint.** `src/webgl/` holds a
+WebGL2 renderer — one fullscreen triangle, one fragment shader, and a single
+shared `requestAnimationFrame` loop across every instance. Off-screen surfaces
+stop drawing via `IntersectionObserver`.
+
+A shader is not a node type you place; it is a fill any layer can take, next to
+solid, gradient and image in the paint picker. On a box it is a surface at the
+bottom of the fill stack, under the image paints and under the children. On a
+star, a pen path or a boolean group it goes *inside* the clipped layer that
+shape already paints through — so the shader fills the shape rather than the box
+the shape sits in, and it needs no new renderer to do it. A `shader` node is
+just a layer whose only job is to carry one.
+
+Exporting emits the GLSL either way: React gets a dependency-free `Shader.jsx`
+runtime beside the component, HTML gets the same programs as a script that finds
+each surface by `data-shader` and drives them all from one frame loop.
 
 **The inspector is Figma's.** Measured from Figma's own right panel and rebuilt
 to match: 348px wide, `#F5F5F5` fields at 24px with a 24px glyph gutter, 9px
@@ -174,7 +185,7 @@ gets rendered, cropped to the slice.
 | format | what you get |
 |---|---|
 | React | a component plus a stylesheet, both from `nodeStyle()` |
-| HTML | one self-contained file with styles inlined |
+| HTML | one self-contained file with styles inlined, shaders included |
 | JSON | the raw scene graph |
 | PNG | rasterised at 1–4x through an SVG `foreignObject` |
 | SVG | the same serialisation, saved as vector |
@@ -439,7 +450,8 @@ image fills with fit, crop, rotation and the seven adjustments; comment threads;
 prototyping with overlays, smart animate, scroll behaviour, variables and device
 frames; the Assets and Inspect panels, with annotations and dev status; version
 history with comparison; quick actions; eight WebGL shaders with live
-parameters; and React / HTML / JSON / PNG / SVG export.
+parameters, usable as a fill on any shape or frame; and React / HTML / JSON /
+PNG / SVG export, with the GLSL travelling in the first two.
 
 The honest limits, all of them:
 
@@ -448,7 +460,13 @@ The honest limits, all of them:
   model before it needs an API.
 - **No text on a path.** Text is laid out by the browser, and the browser does
   not set type along an arbitrary curve without SVG taking the text away from
-  the layout engine everything else here depends on.
+  the layout engine everything else here depends on. Figma has no text on a path
+  either, for what is probably the same reason.
+- **A shader cannot fill text.** Every other layer paints its shader on a canvas
+  clipped to its own outline; text has no outline to clip to. `background-clip:
+  text` wants an image, and a live GL surface is not one — the honest options are
+  a per-frame snapshot or an SVG mask of the glyphs, and neither is the same
+  thing as the fill. Text takes a gradient, as it always has.
 - **The boolean kernel flattens curves before combining them.** A flattened
   boolean is a polygon at the sampling density the shapes deserved, not a set of
   béziers refitted to the result — which is what every design tool does here,
@@ -460,5 +478,3 @@ The honest limits, all of them:
 - **Create image / Create SVG** call no model. `lib/generate.ts` produces
   deterministic local gradients and polygons — replace those two functions with
   an endpoint and the tool is done.
-- **HTML export skips shaders.** A GPU surface has no static equivalent, so it
-  emits a comment pointing at the React export, which carries the GLSL.

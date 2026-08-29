@@ -5,7 +5,14 @@ import { NodeView } from './NodeView';
 import { Overlay, SIZE_BADGE } from './Overlay';
 import { Cursors } from './Cursors';
 import { Connections } from './Connections';
-import { anchorBounds, cloneAnchor, pathFromAnchors, type Anchor } from '../document/geometry';
+import {
+  anchorBounds,
+  canEditPoints,
+  cloneAnchor,
+  pathFromAnchors,
+  type Anchor,
+} from '../document/geometry';
+import { withAlpha } from '../document/css';
 import { CommentComposer, Comments } from './Comments';
 import { CursorChat } from './CursorChat';
 import { FollowLayer } from './Follow';
@@ -14,7 +21,7 @@ import { Rulers } from './Rulers';
 import { VectorEdit } from './VectorEdit';
 import { useDoc, useSession, useStore, useTokenVars } from './Session';
 import type { DocStore } from '../document/store';
-import { toScreen, toWorld, useUI, type Tool } from '../state/ui';
+import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
 import { isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
 import { snap, snapCandidates } from '../document/snapping';
 import { fitOnCanvas, imageFilesFrom, readImageFile } from '../lib/images';
@@ -44,8 +51,7 @@ const SEGMENT_TOOLS: Partial<Record<Tool, NodeType>> = {
   arrow: 'arrow',
 };
 
-const MIN_ZOOM = 0.02;
-const MAX_ZOOM = 64;
+
 
 interface Draft {
   type: NodeType;
@@ -82,6 +88,9 @@ export function Canvas() {
   const { provider } = useSession();
 
   const tool = useUI((s) => s.tool);
+  const spacePan = useUI((s) => s.spacePan);
+  /** true only while a pan drag is running, for the closed-hand cursor */
+  const [panning, setPanning] = useState(false);
   const setTool = useUI((s) => s.setTool);
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
@@ -104,7 +113,7 @@ export function Canvas() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [marquee, setMarquee] = useState<Draft | null>(null);
-  const spaceRef = useRef(false);
+
 
   /** in-progress pen path, in world coordinates */
   const [pen, setPen] = useState<Anchor[]>([]);
@@ -175,7 +184,7 @@ export function Canvas() {
       if (event.ctrlKey || event.metaKey) {
         setViewport((vp) => {
           const factor = Math.exp(-event.deltaY * 0.01);
-          const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, vp.zoom * factor));
+          const zoom = Math.min(ZOOM.max, Math.max(ZOOM.min, vp.zoom * factor));
           const scale = zoom / vp.zoom;
           // keep the point under the cursor pinned
           return { zoom, x: px - (px - vp.x) * scale, y: py - (py - vp.y) * scale };
@@ -189,24 +198,33 @@ export function Canvas() {
   }, [setViewport]);
 
   // ── Space-to-pan ───────────────────────────────────────────────────────
+  // Holding Space *is* the hand tool, so it lights the Hand button in the rail
+  // and takes the grab cursor for as long as the key is down — rather than
+  // quietly changing behaviour while the toolbar still says Move.
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !isTypingTarget(e.target)) {
-        spaceRef.current = true;
-        document.body.style.cursor = 'grab';
-      }
+      if (e.code !== 'Space' || isTypingTarget(e.target) || takesSpace(e.target)) return;
+      // Space scrolls the page when nothing claims it, so the canvas claims it
+      // — but only once the guard above has ruled out everything it belongs to.
+      e.preventDefault();
+      if (e.repeat) return;
+      useUI.getState().setSpacePan(true);
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        spaceRef.current = false;
-        document.body.style.cursor = '';
-      }
+      if (e.code === 'Space') useUI.getState().setSpacePan(false);
     };
+    // Releasing the key over another window never reaches us, and the canvas
+    // would be left panning with a grab cursor and no way to clear it.
+    const reset = () => useUI.getState().setSpacePan(false);
+
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
+    window.addEventListener('blur', reset);
     return () => {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', reset);
+      reset();
     };
   }, []);
 
@@ -267,6 +285,9 @@ export function Canvas() {
           y: anchor.y - box.minY,
         })),
       });
+      // a finished path is the new selection, and whatever path was open for
+      // point editing is not it
+      useUI.getState().setVectorEdit(null);
       select([id]);
       setTool('move');
     },
@@ -303,6 +324,11 @@ export function Canvas() {
 
   // ── Pointer interactions ───────────────────────────────────────────────
   const onPointerDown = (event: React.PointerEvent) => {
+    // whatever chrome button was last clicked still holds focus, and with it
+    // Space; a press on the canvas is the moment the canvas takes both back
+    if (rootRef.current && !rootRef.current.contains(document.activeElement)) {
+      rootRef.current.focus({ preventScroll: true });
+    }
     if (event.button === 2) return;
     const rect = rootRef.current!.getBoundingClientRect();
     const vp = useUI.getState().viewport;
@@ -310,15 +336,21 @@ export function Canvas() {
     const start = toWorld(vp, startScreen.x, startScreen.y);
 
     // Panning wins over everything
-    if (tool === 'pan' || spaceRef.current || event.button === 1) {
+    if (tool === 'pan' || useUI.getState().spacePan || event.button === 1) {
       const origin = { ...vp };
-      drag(store, event, (e) => {
-        setViewport({
-          ...origin,
-          x: origin.x + (e.clientX - event.clientX),
-          y: origin.y + (e.clientY - event.clientY),
-        });
-      });
+      setPanning(true);
+      drag(
+        store,
+        event,
+        (e) => {
+          setViewport({
+            ...origin,
+            x: origin.x + (e.clientX - event.clientX),
+            y: origin.y + (e.clientY - event.clientY),
+          });
+        },
+        () => setPanning(false),
+      );
       return;
     }
 
@@ -669,12 +701,18 @@ export function Canvas() {
     // a text layer you have reached is a text layer you want to edit
     const reached = doc[resolved.id];
     if (reached?.type === 'text') setEditing(resolved.id);
-    // …and a path you have reached is one you want to edit the points of
-    else if (reached?.type === 'vector') setVectorEdit(resolved.id);
+    // …and a shape you have reached is one you want to edit the points of.
+    // Every shape qualifies, not only a vector: in Figma a double click opens a
+    // rectangle's four corners just as readily, and it stays a rectangle until
+    // you move one of them.
+    else if (reached && canEditPoints(reached.type)) setVectorEdit(reached.id);
   };
 
-  const cursor =
-    tool === 'pan'
+  // a closed hand while the drag is actually moving the canvas, an open one
+  // while it is only offered — the pair every canvas tool uses
+  const cursor = panning
+    ? 'grabbing'
+    : tool === 'pan' || spacePan
       ? 'grab'
       : DRAW_TOOLS[tool] || SEGMENT_TOOLS[tool] || tool === 'pen'
         ? CROSSHAIR
@@ -686,7 +724,22 @@ export function Canvas() {
     <div
       ref={rootRef}
       data-canvas-root=""
-      style={{ position: 'relative', flex: 1, overflow: 'hidden', background: page?.fill ?? '#EEEEEE', cursor }}
+      // focusable so a click here takes focus off whatever chrome button had
+      // it — otherwise Space stays with that button and never pans
+      tabIndex={-1}
+      // the exporter reads this to decide whether a slice comes out on the page
+      // colour or on nothing — Figma's "Show in exports"
+      data-export-background={page?.exportBackground === false ? 'off' : undefined}
+      style={{
+        position: 'relative',
+        flex: 1,
+        overflow: 'hidden',
+        background:
+          page?.fillVisible === false
+            ? 'transparent'
+            : withAlpha(page?.fill ?? '#EEEEEE', page?.fillOpacity ?? 1),
+        cursor,
+      }}
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick as unknown as React.MouseEventHandler}
       onPointerMove={(e) => {
@@ -892,6 +945,25 @@ function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el) return false;
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+}
+
+/**
+ * Whether Space belongs to a focused control rather than to the canvas.
+ *
+ * Space is how a keyboard user ticks a checkbox and presses a button, so the
+ * canvas may only claim it when focus is somewhere neutral. Keeping focus
+ * *neutral* is the other half of the deal, and it is the chrome's job: a button
+ * that stays focused after a click would hold Space for as long as it did, so
+ * every button in the chrome hands focus back — see `ToolRail` and `ZoomMenu` —
+ * and a pointer down on the canvas takes it back regardless.
+ */
+function takesSpace(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== 'function') return false;
+  return !!el.closest(
+    'button, input, select, textarea, a[href], summary, [contenteditable], ' +
+      '[role="button"], [role="menuitem"], [role="checkbox"], [role="tab"], [role="slider"]',
+  );
 }
 
 /** Runs `move` until the pointer is released, then `end`, then closes the undo step. */

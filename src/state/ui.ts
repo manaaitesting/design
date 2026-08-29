@@ -23,6 +23,28 @@ export type Tool =
   | 'svg'
   | 'shaders';
 
+/**
+ * The sub-tools of vector edit mode.
+ *
+ *   move     select and drag points, handles and segments
+ *   lasso    draw around the points you want selected
+ *   paint    fill the region you click, closing it if it was open
+ *   bend     drag any segment into a curve, and any point into a smooth one
+ *   cut      slice a path in two, wherever you click on it
+ *   erase    delete the point or the segment under the pointer
+ *   builder  Shape builder: merge the overlapping rings into one outline
+ *   width    Variable width: drag a point's stroke wider or narrower
+ */
+export type VectorTool =
+  | 'move'
+  | 'lasso'
+  | 'paint'
+  | 'bend'
+  | 'cut'
+  | 'erase'
+  | 'builder'
+  | 'width';
+
 export interface Viewport {
   /** World-space offset of the viewport origin, in screen px. */
   x: number;
@@ -33,6 +55,20 @@ export interface Viewport {
 export interface UIState {
   tool: Tool;
   setTool: (tool: Tool) => void;
+
+  /** zoom about the middle of the canvas — the keyboard and the zoom menu */
+  zoomBy: (factor: number) => void;
+  zoomTo: (zoom: number) => void;
+
+  /**
+   * Space held down — the hand tool, borrowed for as long as the key is.
+   *
+   * It is state rather than a ref because the tool rail lights the Hand button
+   * while it is on: in Figma holding Space *is* the hand tool, and a cursor
+   * that changes while the toolbar disagrees reads as a glitch.
+   */
+  spacePan: boolean;
+  setSpacePan: (spacePan: boolean) => void;
 
   selection: string[];
   select: (ids: string[]) => void;
@@ -85,6 +121,17 @@ export interface UIState {
   setAnchorSelection: (indices: number[]) => void;
 
   /**
+   * Which sub-tool the vector toolbar is on.
+   *
+   * Vector edit mode has a toolbar of its own — Move, Lasso, Paint, Bend, Cut,
+   * Erase — because inside a path the pointer means six different things and no
+   * amount of modifier keys covers them. It resets to Move whenever the mode is
+   * entered, exactly as Figma's does.
+   */
+  vectorTool: VectorTool;
+  setVectorTool: (tool: VectorTool) => void;
+
+  /**
    * The image whose crop is being adjusted. While set, dragging on that layer
    * pans the picture inside it rather than moving the layer.
    */
@@ -111,8 +158,11 @@ export interface UIState {
    */
   leftWidth: number;
   rightWidth: number;
+  /** height of the Pages list, dragged by the handle along its bottom edge */
+  pagesHeight: number;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
+  setPagesHeight: (height: number) => void;
   resetLeftWidth: () => void;
   resetRightWidth: () => void;
   /** reads the saved widths — call once on mount, never during render */
@@ -148,8 +198,9 @@ export interface UIState {
   guides: SnapGuide[];
   setGuides: (guides: SnapGuide[]) => void;
 
-  contextMenu: { x: number; y: number; stack: string[] } | null;
-  setContextMenu: (menu: { x: number; y: number; stack: string[] } | null) => void;
+  /** `page` is set when the menu was opened on a row in the Pages list */
+  contextMenu: { x: number; y: number; stack: string[]; page?: string } | null;
+  setContextMenu: (menu: { x: number; y: number; stack: string[]; page?: string } | null) => void;
 
   shadersOpen: boolean;
   setShadersOpen: (open: boolean) => void;
@@ -197,6 +248,18 @@ export interface UIState {
 export type { ExportFormat };
 
 /**
+ * Rename and delete, published by the mounted Pages panel for its context menu.
+ *
+ * Which row is showing a rename input is panel state, and deleting a page has
+ * to hand the active page on to a survivor — both live in the panel. This is
+ * cheaper than lifting the list into the store for the sake of one menu.
+ */
+export const pageActions: {
+  rename: ((id: string) => void) | null;
+  remove: ((id: string) => void) | null;
+} = { rename: null, remove: null };
+
+/**
  * Panel geometry. `base` is the width the panel ships at — the same number the
  * stylesheet uses, so an un-dragged panel looks identical either way.
  */
@@ -209,6 +272,8 @@ export const PANEL = {
   canvasMin: 240,
   /** each panel is separated from the canvas by a 1px border */
   border: 1,
+  /** the Pages list: one row is 24px, so the default shows a few and scrolls */
+  pages: { min: 40, max: 400, base: 96 },
 } as const;
 
 interface PanelBounds {
@@ -218,6 +283,44 @@ interface PanelBounds {
 }
 
 const clamp = (value: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, value));
+
+/**
+ * Zoom limits, and the ratio one step of it moves.
+ *
+ * They live here rather than in the canvas because the wheel, the keyboard and
+ * the zoom menu all have to agree — they used to clamp to their own copies of
+ * the numbers, which is how two of them ended up with different ceilings.
+ */
+export const ZOOM = { min: 0.02, max: 64, step: 1.25 } as const;
+
+/**
+ * The middle of the canvas area, in the canvas element's own pixels.
+ *
+ * A zoom has to hold *something* still. The wheel holds the point under the
+ * pointer; a keyboard or menu zoom has no pointer, so it holds the middle of
+ * what you are looking at.
+ */
+function canvasCentre(): { x: number; y: number } {
+  const rect =
+    typeof document === 'undefined'
+      ? null
+      : document.querySelector('[data-canvas-root]')?.getBoundingClientRect();
+  return rect ? { x: rect.width / 2, y: rect.height / 2 } : { x: 0, y: 0 };
+}
+
+/**
+ * `vp` rescaled to `next`, with the canvas centre pinned.
+ *
+ * Scaling `zoom` on its own zooms about the world origin, which walks whatever
+ * you were looking at off the screen — the reason ⌘+ read as broken rather than
+ * merely coarse.
+ */
+function zoomed(vp: Viewport, next: number): Viewport {
+  const zoom = clamp(next, ZOOM.min, ZOOM.max);
+  const { x: px, y: py } = canvasCentre();
+  const scale = zoom / vp.zoom;
+  return { zoom, x: px - (px - vp.x) * scale, y: py - (py - vp.y) * scale };
+}
 
 /**
  * Clamp a panel to its own bounds, then again against the space the other
@@ -237,25 +340,27 @@ function fitPanel(width: number, bounds: PanelBounds, otherWidth: number): numbe
 const PANEL_KEY = 'paperlike:panels';
 
 /** Storage is unavailable in private windows and blocked by some settings. */
-function persistPanels(leftWidth: number, rightWidth: number): void {
+function persistPanels(leftWidth: number, rightWidth: number, pagesHeight: number): void {
   try {
-    localStorage.setItem(PANEL_KEY, JSON.stringify({ leftWidth, rightWidth }));
+    localStorage.setItem(PANEL_KEY, JSON.stringify({ leftWidth, rightWidth, pagesHeight }));
   } catch {
     // a panel width is not worth breaking a drag over
   }
 }
 
-function readPanels(): { leftWidth?: number; rightWidth?: number } | null {
+function readPanels(): { leftWidth?: number; rightWidth?: number; pagesHeight?: number } | null {
   try {
     const raw = localStorage.getItem(PANEL_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
-    const { leftWidth, rightWidth } = parsed as Record<string, unknown>;
+    const { leftWidth, rightWidth, pagesHeight } = parsed as Record<string, unknown>;
+    const number = (value: unknown) =>
+      typeof value === 'number' && Number.isFinite(value) ? value : undefined;
     return {
-      leftWidth: typeof leftWidth === 'number' && Number.isFinite(leftWidth) ? leftWidth : undefined,
-      rightWidth:
-        typeof rightWidth === 'number' && Number.isFinite(rightWidth) ? rightWidth : undefined,
+      leftWidth: number(leftWidth),
+      rightWidth: number(rightWidth),
+      pagesHeight: number(pagesHeight),
     };
   } catch {
     return null;
@@ -265,6 +370,12 @@ function readPanels(): { leftWidth?: number; rightWidth?: number } | null {
 export const useUI = create<UIState>((set) => ({
   tool: 'move',
   setTool: (tool) => set({ tool, prompt: tool === 'image' ? 'image' : tool === 'svg' ? 'svg' : null }),
+
+  spacePan: false,
+  setSpacePan: (spacePan) => set({ spacePan }),
+
+  zoomBy: (factor) => set((state) => ({ viewport: zoomed(state.viewport, state.viewport.zoom * factor) })),
+  zoomTo: (zoom) => set((state) => ({ viewport: zoomed(state.viewport, zoom) })),
 
   selection: [],
   select: (selection) => set({ selection }),
@@ -306,9 +417,13 @@ export const useUI = create<UIState>((set) => ({
   setEditing: (editing) => set({ editing }),
 
   vectorEdit: null,
-  setVectorEdit: (vectorEdit) => set({ vectorEdit, anchorSelection: [] }),
+  setVectorEdit: (vectorEdit) =>
+    set({ vectorEdit, anchorSelection: [], vectorTool: 'move', tool: 'move' }),
   anchorSelection: [],
   setAnchorSelection: (anchorSelection) => set({ anchorSelection }),
+
+  vectorTool: 'move',
+  setVectorTool: (vectorTool) => set({ vectorTool }),
 
   cropping: null,
   setCropping: (cropping) => set({ cropping }),
@@ -324,26 +439,33 @@ export const useUI = create<UIState>((set) => ({
 
   leftWidth: PANEL.left.base,
   rightWidth: PANEL.right.base,
+  pagesHeight: PANEL.pages.base,
   setLeftWidth: (width) =>
     set((state) => {
       const leftWidth = fitPanel(width, PANEL.left, state.rightWidth);
-      persistPanels(leftWidth, state.rightWidth);
+      persistPanels(leftWidth, state.rightWidth, state.pagesHeight);
       return { leftWidth };
     }),
   setRightWidth: (width) =>
     set((state) => {
       const rightWidth = fitPanel(width, PANEL.right, state.leftPanel ? state.leftWidth : 0);
-      persistPanels(state.leftWidth, rightWidth);
+      persistPanels(state.leftWidth, rightWidth, state.pagesHeight);
       return { rightWidth };
+    }),
+  setPagesHeight: (height) =>
+    set((state) => {
+      const pagesHeight = clamp(Math.round(height), PANEL.pages.min, PANEL.pages.max);
+      persistPanels(state.leftWidth, state.rightWidth, pagesHeight);
+      return { pagesHeight };
     }),
   resetLeftWidth: () =>
     set((state) => {
-      persistPanels(PANEL.left.base, state.rightWidth);
+      persistPanels(PANEL.left.base, state.rightWidth, state.pagesHeight);
       return { leftWidth: PANEL.left.base };
     }),
   resetRightWidth: () =>
     set((state) => {
-      persistPanels(state.leftWidth, PANEL.right.base);
+      persistPanels(state.leftWidth, PANEL.right.base, state.pagesHeight);
       return { rightWidth: PANEL.right.base };
     }),
   hydratePanels: () =>
@@ -351,7 +473,11 @@ export const useUI = create<UIState>((set) => ({
       const saved = readPanels();
       if (!saved) return {};
       const leftWidth = fitPanel(saved.leftWidth ?? state.leftWidth, PANEL.left, 0);
-      return { leftWidth, rightWidth: fitPanel(saved.rightWidth ?? state.rightWidth, PANEL.right, leftWidth) };
+      return {
+        leftWidth,
+        rightWidth: fitPanel(saved.rightWidth ?? state.rightWidth, PANEL.right, leftWidth),
+        pagesHeight: clamp(saved.pagesHeight ?? state.pagesHeight, PANEL.pages.min, PANEL.pages.max),
+      };
     }),
   tab: 'design',
   setTab: (tab) => set({ tab }),

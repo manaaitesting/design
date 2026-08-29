@@ -71,6 +71,10 @@ declare global {
             entries(): Iterable<[string, unknown]>;
           };
         };
+        listPages(): string[];
+        addPage(name?: string): string;
+        duplicatePage(id: string): string | null;
+        removePage(id: string): void;
         undo(): void;
         redo(): void;
       };

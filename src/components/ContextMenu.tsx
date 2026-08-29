@@ -5,6 +5,7 @@ import {
   useCollections,
   useCustomFonts,
   useDoc,
+  usePages,
   useStore,
   useTokenVars,
   useTokens,
@@ -25,7 +26,8 @@ import {
 } from '../lib/actions';
 import { download, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
-import { useUI } from '../state/ui';
+import { pageActions, useUI } from '../state/ui';
+import { canEditPoints } from '../document/geometry';
 import type { BooleanOp } from '../document/types';
 
 interface Item {
@@ -149,6 +151,60 @@ export function ContextMenu() {
 
 type OpenMenu = NonNullable<ReturnType<typeof useUI.getState>['contextMenu']>;
 
+/**
+ * The menu a right-click on a row in the Pages list opens.
+ *
+ * Kept apart from the canvas menu because it shares none of its commands: the
+ * subject is a page, not a selection, and every entry below acts on that page.
+ */
+function PageMenu({
+  id,
+  x,
+  y,
+  onClose,
+}: {
+  id: string;
+  x: number;
+  y: number;
+  onClose: () => void;
+}) {
+  const store = useStore();
+  const doc = useDoc();
+  const pages = usePages();
+  const only = pages.length <= 1;
+
+  const items: Item[] = [
+    {
+      label: 'Copy link to page',
+      // the page is a query on the file's own URL, which is what the editor
+      // reads back on load — see `Editor`
+      run: () => writeText(`${location.origin}${location.pathname}?page=${id}`),
+    },
+    {
+      label: 'Rename page',
+      divider: true,
+      run: () => pageActions.rename?.(id),
+    },
+    {
+      label: 'Duplicate page',
+      run: () => {
+        const copy = store.duplicatePage(id);
+        if (copy) useUI.getState().setPage(copy);
+      },
+    },
+    {
+      label: 'Delete page',
+      divider: true,
+      // a file with one page cannot lose it, so the row greys rather than lies
+      disabled: only,
+      run: () => pageActions.remove?.(id),
+    },
+  ];
+
+  if (!doc[id]) return null;
+  return <Panel items={items} x={x} y={y} width={200} onClose={onClose} />;
+}
+
 function Menu({ menu }: { menu: OpenMenu }) {
   const store = useStore();
   const doc = useDoc();
@@ -177,6 +233,9 @@ function Menu({ menu }: { menu: OpenMenu }) {
       window.removeEventListener('keydown', onKey);
     };
   }, [menu]);
+
+  // a right-click on a page row is about that page, not about the selection
+  if (menu.page) return <PageMenu id={menu.page} x={menu.x} y={menu.y} onClose={close} />;
 
   const has = selection.length > 0;
   const one = selection.length === 1;
@@ -364,7 +423,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
     {
       label: 'Edit points',
       shortcut: '⏎',
-      disabled: !one || first?.type !== 'vector',
+      disabled: !one || !first || !canEditPoints(first.type),
       run: () => useUI.getState().setVectorEdit(target),
     },
     {

@@ -5,9 +5,10 @@ import { newInteraction } from './prototype';
 import {
   anchorBounds,
   cloneAnchor,
+  flattenAnchors,
   isClosedShape,
   isPathType,
-  outlineAnchors,
+  outlinePaths,
   placedRegion,
   regionBounds,
   regionOf,
@@ -15,9 +16,11 @@ import {
   shiftRegion,
   subpathBounds,
   subpathsFromRegion,
+  subpathsOf,
+  variableWidthRegion,
   type Anchor,
 } from './geometry';
-import { clip, clipAll, strokeRegion } from './clipper';
+import { clip, clipAll, strokeRegion, type Region } from './clipper';
 import { booleanRegion } from './boolean';
 import {
   descendants,
@@ -386,6 +389,49 @@ export class DocStore {
       this.pages.push([id]);
     });
     return id;
+  }
+
+  /**
+   * Figma's Duplicate page: the page and everything on it, inserted directly
+   * after the original.
+   *
+   * Deliberately not the clipboard path. `serialize` normalises the roots it
+   * packs to the origin so a paste lands under the pointer — on a whole page
+   * that would drag the entire layout into the top-left corner.
+   */
+  duplicatePage(id: string): string | null {
+    const source = this.snap[id];
+    if (!source || source.type !== 'page') return null;
+    const copyId = newId();
+
+    this.transact(() => {
+      const copy = (from: string, parent: string | null, into: string, name?: string): void => {
+        const node = this.snap[from];
+        if (!node) return;
+        this.nodes.set(
+          into,
+          toY(makeNode(into, node.type, parent, {
+            ...node,
+            id: into,
+            parent,
+            children: [],
+            ...(name ? { name } : null),
+          })),
+        );
+        const list = this.childrenOf(into);
+        for (const child of node.children) {
+          const childId = newId();
+          copy(child, into, childId);
+          list?.push([childId]);
+        }
+      };
+
+      copy(id, null, copyId, `${source.name} copy`);
+      const index = this.pages.toArray().indexOf(id);
+      this.pages.insert(index < 0 ? this.pages.length : index + 1, [copyId]);
+    });
+
+    return copyId;
   }
 
   removePage(id: string): void {
@@ -1460,6 +1506,24 @@ export class DocStore {
   }
 
   /**
+   * Paint seeds moved along with the box they are measured in.
+   *
+   * A seed is a point in the node's own space, so re-fitting the box around
+   * edited points moves the geometry under it. Shifting the seeds by the same
+   * amount is what keeps a painted region painted while its shape is dragged
+   * about; one whose region is edited away simply stops finding it, which is
+   * the graceful half of storing a point rather than an outline.
+   */
+  private shiftSeeds(
+    node: SceneNode,
+    dx: number,
+    dy: number,
+  ): [number, number][] | undefined {
+    if (!node.fillSeeds?.length || (!dx && !dy)) return node.fillSeeds;
+    return node.fillSeeds.map(([x, y]) => [x - dx, y - dy] as [number, number]);
+  }
+
+  /**
    * Replaces a vector's anchors and re-fits its box around them.
    *
    * The path is stored relative to the layer, so an edit that moves a point
@@ -1481,6 +1545,7 @@ export class DocStore {
     }));
     this.update(id, {
       anchors: shifted,
+      fillSeeds: this.shiftSeeds(node, box.minX, box.minY),
       x: Math.round(node.x + box.minX),
       y: Math.round(node.y + box.minY),
       w: Math.max(1, Math.round(box.maxX - box.minX)),
@@ -1519,6 +1584,7 @@ export class DocStore {
       // everything that reads `anchors` should see the same geometry
       anchors: shifted.length === 1 ? shifted[0].anchors : undefined,
       closed: shifted.length === 1 ? shifted[0].closed : undefined,
+      fillSeeds: this.shiftSeeds(node, box.minX, box.minY),
       x: Math.round(node.x + box.minX),
       y: Math.round(node.y + box.minY),
       w: Math.max(1, Math.round(box.maxX - box.minX)),
@@ -1694,12 +1760,27 @@ export class DocStore {
       const node = this.snap[id];
       if (!node?.parent || !node.border || node.border.width <= 0) continue;
 
-      const outline = regionOf(node);
-      if (!outline.length) continue;
+      // A path is stroked along its whole length, so an open run of two points
+      // is a stroke source even though it is not a region — `regionOf` drops it
+      // because a two-point ring has no area to be a ring with.
+      const outline =
+        node.type === 'vector'
+          ? (subpathsOf(node)
+              .map((sub) => flattenAnchors(sub.anchors, sub.closed, node.smooth ?? 0))
+              .filter((ring) => ring.length >= 2) as Region)
+          : regionOf(node);
       const closed = isClosedShape(node);
-      const band = strokeRegion(outline, node.border.width, closed);
+      // A tapered stroke is already a shape rather than a width, so outlining
+      // it is a matter of taking the band it draws — running a round pen of one
+      // width down it would throw the taper away.
+      const varied =
+        node.type === 'vector'
+          ? variableWidthRegion(subpathsOf(node), node.border.width, node.smooth ?? 0)
+          : null;
+      if (!varied && !outline.length) continue;
+      const band = varied ?? strokeRegion(outline, node.border.width, closed);
       const region =
-        !closed || node.border.position === 'center'
+        varied || !closed || node.border.position === 'center'
           ? band
           : node.border.position === 'inside'
             ? clip(band, outline, 'intersect')
@@ -1755,12 +1836,20 @@ export class DocStore {
         // a rectangle and an ellipse can be outlined too — they are just boxes
         if (!node || (node.type !== 'rect' && node.type !== 'ellipse')) continue;
       }
-      const anchors = outlineAnchors(node);
-      if (anchors.length < 2) continue;
+      const paths = outlinePaths(node);
+      if (!paths.length || paths[0].anchors.length < 2) continue;
+      // The outline is the one already on screen, corners and arcs included: a
+      // rounded rectangle keeps its corners as per-point radii and a donut
+      // keeps both of its rings, so converting changes what the layer *knows*
+      // about itself and nothing about what it looks like.
       this.update(id, {
         type: 'vector',
-        anchors: anchors.map(cloneAnchor),
-        closed: isClosedShape(node),
+        paths: paths.map((sub) => ({
+          closed: sub.closed,
+          anchors: sub.anchors.map(cloneAnchor),
+        })),
+        anchors: paths.length === 1 ? paths[0].anchors.map(cloneAnchor) : undefined,
+        closed: paths.length === 1 ? paths[0].closed : undefined,
         smooth: 0,
         radius: 0,
         radii: null,
@@ -1834,6 +1923,18 @@ export class DocStore {
     if (source.font) node.set('font', { ...source.font, size: source.font.size * factor });
     if (source.anchors?.length) {
       node.set('anchors', scaleAnchors(source.anchors, factor, factor).map(cloneAnchor));
+    }
+    if (source.paths?.length) {
+      node.set(
+        'paths',
+        source.paths.map((sub) => ({
+          closed: sub.closed,
+          anchors: scaleAnchors(sub.anchors, factor, factor).map(cloneAnchor),
+        })),
+      );
+    }
+    if (source.fillSeeds?.length) {
+      node.set('fillSeeds', source.fillSeeds.map(([x, y]) => [x * factor, y * factor]));
     }
     if (source.points?.length) {
       node.set('points', source.points.map(([x, y]) => [x * factor, y * factor]));

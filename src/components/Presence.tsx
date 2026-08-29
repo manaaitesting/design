@@ -6,7 +6,85 @@ import { readableOn } from '../lib/color';
 import { Icon } from './ui/Icons';
 import { useConnected, useDoc, usePresence, useReadOnly, useSession } from './Session';
 import { openingFrame } from '../document/prototype';
-import { useUI } from '../state/ui';
+import { ZOOM, useUI } from '../state/ui';
+import { FigMenuItem, FigPopover } from './ui/Figma';
+import { contentBounds, fitBounds, selectionBounds, type Bounds } from '../lib/view';
+
+/**
+ * Figma's zoom control: the percentage is a menu, not a button.
+ *
+ * It used to reset to 100% on click, which is one of the six things this menu
+ * offers and the least likely one to be wanted — there was no way at all to
+ * zoom in, out, or to the selection without knowing the shortcut.
+ */
+function ZoomMenu({ zoom }: { zoom: number }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const doc = useDoc();
+
+  const frame = (bounds: Bounds | null) => {
+    const ui = useUI.getState();
+    const fitted = bounds && fitBounds(bounds, ui.leftPanel, ui.leftWidth, ui.rightWidth);
+    if (fitted) ui.setViewport(fitted);
+  };
+
+  const items: { label: string; tag: string; divider?: boolean; run: () => void }[] = [
+    { label: 'Zoom in', tag: '+', run: () => useUI.getState().zoomBy(ZOOM.step) },
+    { label: 'Zoom out', tag: '−', run: () => useUI.getState().zoomBy(1 / ZOOM.step) },
+    { label: 'Zoom to fit', tag: '⇧1', divider: true, run: () => frame(contentBounds(doc)) },
+    {
+      label: 'Zoom to selection',
+      tag: '⇧2',
+      run: () => frame(selectionBounds(useUI.getState().selection, doc)),
+    },
+    { label: 'Zoom to 100%', tag: '⇧0', divider: true, run: () => useUI.getState().zoomTo(1) },
+  ];
+
+  return (
+    <>
+      <button
+        type="button"
+        className="fig-btn"
+        data-text="true"
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        onClick={(event) => setAnchor(anchor ? null : event.currentTarget)}
+        // Space belongs to the canvas the moment this menu is done with it
+        onKeyUp={(event) => {
+          if (event.key === 'Escape') event.currentTarget.blur();
+        }}
+        title="Zoom"
+      >
+        {Math.round(zoom * 100)}%
+      </button>
+      {anchor && (
+        <FigPopover
+          anchor={anchor}
+          width={200}
+          onClose={() => {
+            setAnchor(null);
+            anchor.blur();
+          }}
+        >
+          {items.map((item) => (
+            <FigMenuItem
+              key={item.label}
+              label={item.label}
+              tag={item.tag}
+              divider={item.divider}
+              onSelect={() => {
+                item.run();
+                setAnchor(null);
+                // hand focus back, as the tool rail does: a still-focused
+                // button would swallow Space, which belongs to panning
+                anchor?.blur();
+              }}
+            />
+          ))}
+        </FigPopover>
+      )}
+    </>
+  );
+}
 
 function Avatar({
   name,
@@ -58,7 +136,6 @@ export function Presence() {
   const connected = useConnected();
   const doc = useDoc();
   const viewport = useUI((s) => s.viewport);
-  const setViewport = useUI((s) => s.setViewport);
   const [copied, setCopied] = useState(false);
   const following = useUI((s) => s.following);
   const setFollowing = useUI((s) => s.setFollowing);
@@ -178,15 +255,7 @@ export function Presence() {
         {copied ? 'Copied' : 'Share'}
       </button>
 
-      <button
-        type="button"
-        className="fig-btn"
-        data-text="true"
-        onClick={() => setViewport((vp) => ({ ...vp, zoom: 1 }))}
-        title="Reset zoom to 100%"
-      >
-        {Math.round(viewport.zoom * 100)}%
-      </button>
+      <ZoomMenu zoom={viewport.zoom} />
     </div>
   );
 }

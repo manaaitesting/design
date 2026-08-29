@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useEffect, useRef } from 'react';
-import { nodeStyle } from '../document/css';
+import { nodeStyle, shaderSurface } from '../document/css';
 import { effectLayers, effectsOf } from '../document/effects';
 import { ShaderSurface } from './ShaderSurface';
 import { Guides } from './Guides';
@@ -146,6 +146,10 @@ export const NodeView = memo(function NodeView({
   // masks are resolved by the parent, because which layers one covers is a
   // question about the sibling order rather than about any single layer
   const masking = node.children.length ? maskStyles(node, doc) : null;
+  // A shader fill is a live GPU surface, so it cannot be a `background` — it
+  // gets a canvas at the bottom of the fill stack, beneath the image paints and
+  // the children, which is where a fill belongs.
+  const surface = node.type === 'shader' ? null : shaderSurface(node);
   // Noise, texture, progressive blur and glass need a surface of their own —
   // they paint over the node instead of styling it.
   const layers = effectLayers(effectsOf(node), node.clip);
@@ -223,6 +227,11 @@ export const NodeView = memo(function NodeView({
       data-fix={node.scrollBehavior && node.scrollBehavior !== 'scrolls' ? node.scrollBehavior : undefined}
       style={style}
     >
+      {surface && (
+        <div aria-hidden style={surface.style}>
+          <ShaderSurface shaderId={surface.shader.id} params={surface.shader.params} />
+        </div>
+      )}
       <PaintLayers node={node} />
       {node.video?.src && (
         <video

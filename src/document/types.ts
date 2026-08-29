@@ -630,7 +630,24 @@ export interface SceneNode {
   imageFit?: 'fill' | 'fit' | 'crop' | 'tile';
   imageScale?: number;
   imageOffset?: [number, number];
-  /** shader nodes; null clears it, the way `video` does */
+  /**
+   * Page nodes: whether the page's background is painted into an export.
+   *
+   * Figma's "Show in exports". A slice cropped out of a page comes out on the
+   * page colour when this is on, and transparent when it is off. Undefined
+   * means on, so a document written before the control existed keeps the
+   * background it was exporting with.
+   */
+  exportBackground?: boolean;
+
+  /**
+   * The shader this layer paints with — a fill, not a node type.
+   *
+   * A `shader` node is a layer whose only job is to carry one, but any layer
+   * may hold one: a star filled with the aurora shader is a star with a shader
+   * paint, exactly as a star filled with a photo is a star with an image paint.
+   * Null clears it, the way `video` does, and the two are exclusive.
+   */
   shader?: ShaderSpec | null;
 
   /** the export settings this layer carries */
@@ -734,6 +751,17 @@ export interface SceneNode {
   paths?: VectorPath[];
   /** rounds the corners between segments */
   smooth?: number;
+  /**
+   * Which of the path's regions are painted — Figma's paint bucket.
+   *
+   * Stored as a point inside each painted region rather than as the region
+   * itself, because the regions are derived from the geometry and move when it
+   * does: a seed goes on pointing at the same area while its shape is edited,
+   * and quietly stops painting if that area is edited away. Absent means the
+   * whole outline is filled, which is what every shape does until someone
+   * paints a region of it.
+   */
+  fillSeeds?: [number, number][];
 
   /** polygon and star: how many sides / points */
   sides?: number;
