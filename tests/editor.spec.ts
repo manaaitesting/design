@@ -138,6 +138,25 @@ test('two children of an auto layout reorder together, keeping their order', asy
   await removeNodes(page, [built.frame]);
 });
 
+test('⇧⌘K opens a picker and places the image it is given', async ({ page }) => {
+  const chooser = page.waitForEvent('filechooser');
+  await page.keyboard.press('Shift+Meta+k');
+  await (await chooser).setFiles({
+    name: 'Speck.png',
+    mimeType: 'image/png',
+    // a 1x1 PNG, which is enough to be a real image
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    ),
+  });
+
+  await expect.poll(async () => (await nodeNamed(page, 'Speck'))?.type).toBe('image');
+  const placed = await nodeNamed(page, 'Speck');
+  expect(placed!.fill).toMatch(/^url\(data:image\/png/);
+  await removeNodes(page, [placed!.id]);
+});
+
 test('the arrow keys move a flowed child along the order, not across the canvas', async ({ page }) => {
   const built = await page.evaluate(() => {
     const store = window.paperlike!.store;

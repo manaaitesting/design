@@ -174,6 +174,36 @@ export function Canvas() {
     return () => window.removeEventListener('paste', onPaste);
   }, [placeImages]);
 
+  // ── ⇧⌘K — Figma's Place image ─────────────────────────────────────────
+  // The picker is the whole of it: there is no other way to reach a file from
+  // the keyboard, and drop and paste already share the code that places one.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (!mod || !event.shiftKey || event.code !== 'KeyK') return;
+      if (isTypingTarget(event.target)) return;
+      event.preventDefault();
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.multiple = true;
+      input.onchange = () => {
+        const files = Array.from(input.files ?? []);
+        if (!files.length) return;
+        // Figma hands the image to the cursor and you click to drop it; this
+        // lands it in the middle of what you are looking at, as a paste does.
+        const rect = rootRef.current?.getBoundingClientRect();
+        const vp = useUI.getState().viewport;
+        const centre = rect ? toWorld(vp, rect.width / 2, rect.height / 2) : { x: 0, y: 0 };
+        void placeImages(files, centre);
+      };
+      input.click();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [placeImages]);
+
   // ── Zoom & pan ─────────────────────────────────────────────────────────
   useEffect(() => {
     const el = rootRef.current;
