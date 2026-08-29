@@ -720,6 +720,7 @@ export function Canvas() {
             page.id,
             rootRef.current!.getBoundingClientRect(),
             useUI.getState().viewport,
+            { x: e.clientX, y: e.clientY },
           );
         },
       );
@@ -796,6 +797,7 @@ export function Canvas() {
           page.id,
           rootRef.current!.getBoundingClientRect(),
           useUI.getState().viewport,
+          { x: e.clientX, y: e.clientY },
         );
       },
     );
@@ -1222,6 +1224,8 @@ function dropInto(
   pageId: string,
   canvasRect: DOMRect,
   vp: { x: number; y: number; zoom: number },
+  /** where the pointer was released, for a drop into a layout */
+  pointer: { x: number; y: number },
 ): void {
   // insert back-to-front so a multi-layer drop keeps its stacking
   const ordered = [...movers].sort(
@@ -1242,7 +1246,13 @@ function dropInto(
       parentId === pageId
         ? { x: Math.round(world.x), y: Math.round(world.y) }
         : localOffset(parentId, world.x, world.y, doc, canvasRect, vp);
-    store.reparent(id, parentId);
+    // Into an auto layout, the pointer says *where* in the flow — appending
+    // would drop the layer at the end however carefully it was aimed. The
+    // layer is not a child yet, so a position among the existing children is
+    // already the index to insert at.
+    const target = doc[parentId];
+    const at = target?.flex ? flowPositionAt(target, id, pointer.x, pointer.y) : null;
+    store.reparent(id, parentId, at ?? undefined);
     store.update(id, local);
   }
 }

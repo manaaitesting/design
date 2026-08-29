@@ -109,6 +109,38 @@ test('dragging a layer clear of every frame returns it to the page', async ({ pa
   await removeNodes(page, [frame, id]);
 });
 
+test('dropping into an auto layout lands where the pointer is, not at the end', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'Rack', x: 700, y: 0, w: 300, h: 100, fill: '#FFFFFF',
+      flex: {
+        mode: 'flex', direction: 'row', gap: 10, padding: [0, 0, 0, 0],
+        align: 'start', justify: 'start', wrap: false,
+      },
+    } as never);
+    store.create('rect', frame, { name: 'First', w: 60, h: 60, fill: '#4CC3F0' } as never);
+    store.create('rect', frame, { name: 'Second', w: 60, h: 60, fill: '#9B7BF0' } as never);
+    const loose = store.create('rect', 'root', {
+      name: 'Arriving', x: 700, y: 300, w: 60, h: 60, fill: '#F2637F',
+    } as never);
+    store.commit();
+    return { frame, loose };
+  });
+  await select(page, [built.loose]);
+
+  // aim at the gap between the two children rather than past the end of them
+  const box = await page.locator(`[data-node-id="${built.loose}"]`).boundingBox();
+  await dragBy(page, { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }, { x: 35, y: -300 });
+
+  const nodes = await doc(page);
+  expect(nodes[built.frame].children.map((id: string) => nodes[id].name)).toEqual([
+    'First', 'Arriving', 'Second',
+  ]);
+
+  await removeNodes(page, [built.frame]);
+});
+
 /**
  * A child of an auto layout has no position of its own, so dragging it can only
  * mean one thing: put it somewhere else in the order. Dragging the frame away
