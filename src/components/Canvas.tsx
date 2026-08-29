@@ -658,8 +658,57 @@ export function Canvas() {
       }
     }
 
-    // A flowed child is positioned by its parent, so dragging it moves the
-    // nearest absolutely-placed ancestor — while selection stays on the child.
+    // ── Reordering inside an auto layout ─────────────────────────────────
+    // A flowed child has no x/y of its own, so dragging it moves it among its
+    // siblings. The reorder is applied live rather than previewed: the layout
+    // reflowing under the pointer *is* Figma's insertion indicator, and drawing
+    // a second one over a layout that had not moved would be the lie.
+    if (nextSelection.length === 1 && isInFlow(doc[nextSelection[0]], doc)) {
+      const childId = nextSelection[0];
+      const parentId = doc[childId].parent!;
+      let shifted = false;
+      drag(
+        store,
+        event,
+        (e) => {
+          if (!shifted && Math.hypot(e.clientX - event.clientX, e.clientY - event.clientY) < 3) return;
+          shifted = true;
+          const snapshot = store.getSnapshot();
+          const parent = snapshot[parentId];
+          if (!parent?.flex) return;
+          // outside the frame this is a drop, not a reorder — the release
+          // handler below hands it to the same code the free canvas uses
+          const want = flowPositionAt(parent, childId, e.clientX, e.clientY);
+          const at = parent.children.indexOf(childId);
+          // the list already reads this way — a write here would be a no-op
+          // that still costs every sibling a re-render
+          if (want === null || want === at) return;
+          // `moveMany` takes the layer out before inserting, so an index past
+          // where it currently sits has to account for its own removal
+          store.moveMany([childId], parentId, want >= at ? want + 1 : want);
+        },
+        (e) => {
+          if (!shifted) return;
+          const now = store.getSnapshot();
+          const skip = new Set([childId, ...descendants(childId, now)]);
+          const target = containerAt(e.clientX, e.clientY, now, skip) ?? page.id;
+          if (target === now[childId]?.parent) return;
+          dropInto(
+            store,
+            now,
+            [childId],
+            target,
+            page.id,
+            rootRef.current!.getBoundingClientRect(),
+            useUI.getState().viewport,
+          );
+        },
+      );
+      return;
+    }
+
+    // Anything else that flows — a multi-selection inside a layout — still moves
+    // the nearest absolutely-placed ancestor, while selection stays on the child.
     const movers = [...new Set(nextSelection.map((id) => draggableTarget(id, doc)))];
     // read positions from the live snapshot: duplicates were only just created
     const snapshot = store.getSnapshot();
@@ -1090,6 +1139,50 @@ function containerAt(
     current = current.parent ? doc[current.parent] : undefined;
   }
   return current?.id ?? null;
+}
+
+/**
+ * Where a pointer sits among an auto layout's children, counted over the
+ * siblings the dragged layer is *not* — so the answer is a position in that
+ * list, not an index into the parent's children.
+ *
+ * The siblings are measured rather than computed: the browser has already
+ * flowed them, and after a wrap or a grid track their positions are not
+ * something the document can be asked for. Returns null when nothing could be
+ * measured, which is the caller's signal to leave the order alone.
+ */
+function flowPositionAt(
+  parent: SceneNode,
+  childId: string,
+  clientX: number,
+  clientY: number,
+): number | null {
+  const others = parent.children.filter((id) => id !== childId);
+  if (!others.length) return null;
+  // a wrapping row and a grid both read left-to-right, top-to-bottom; a plain
+  // row or column has only its own axis to compare along
+  const wrapping = !!parent.flex && (parent.flex.mode === 'grid' || parent.flex.wrap);
+  const horizontal = parent.flex?.direction === 'row';
+
+  let seen = 0;
+  let measured = false;
+  for (const id of others) {
+    const rect = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`)?.getBoundingClientRect();
+    if (!rect) continue;
+    measured = true;
+    const past = wrapping
+      ? clientY > rect.bottom
+        ? true
+        : clientY < rect.top
+          ? false
+          : clientX > rect.left + rect.width / 2
+      : horizontal
+        ? clientX > rect.left + rect.width / 2
+        : clientY > rect.top + rect.height / 2;
+    if (past) seen++;
+  }
+  if (!measured) return null;
+  return seen;
 }
 
 /**

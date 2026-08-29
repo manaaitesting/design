@@ -109,6 +109,44 @@ test('dragging a layer clear of every frame returns it to the page', async ({ pa
 });
 
 /**
+ * A child of an auto layout has no position of its own, so dragging it can only
+ * mean one thing: put it somewhere else in the order. Dragging the frame away
+ * from under the pointer — which is what happens if the gesture walks up to the
+ * nearest absolutely-placed ancestor — is the opposite of what was asked for.
+ */
+test('dragging a child inside an auto layout reorders it, and leaves the frame alone', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'Flow', x: 700, y: 0, w: 300, h: 100, fill: '#FFFFFF',
+      flex: {
+        mode: 'flex', direction: 'row', gap: 10, padding: [0, 0, 0, 0],
+        align: 'start', justify: 'start', wrap: false,
+      },
+    } as never);
+    const kid = (name: string, fill: string) =>
+      store.create('rect', frame, { name, w: 60, h: 60, fill } as never);
+    const ids = [kid('Alpha', '#F2637F'), kid('Beta', '#4CC3F0'), kid('Gamma', '#9B7BF0')];
+    store.commit();
+    return { frame, ids };
+  });
+
+  const first = page.locator(`[data-node-id="${built.ids[0]}"]`);
+  const box = await first.boundingBox();
+  // ⌘ gets hold of the child itself; a plain press would select the frame
+  await dragBy(page, { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }, { x: 100, y: 0 }, ['Meta']);
+
+  const nodes = await doc(page);
+  expect(nodes[built.frame].children.map((id: string) => nodes[id].name)).toEqual([
+    'Beta', 'Alpha', 'Gamma',
+  ]);
+  // the frame stayed put — the drag was about the child, not its container
+  expect([nodes[built.frame].x, nodes[built.frame].y]).toEqual([700, 0]);
+
+  await removeNodes(page, [built.frame]);
+});
+
+/**
  * The size readout is the only feedback during a draw, so it has to track the
  * pointer — a number that only appears on release is a number you cannot draw
  * to.
