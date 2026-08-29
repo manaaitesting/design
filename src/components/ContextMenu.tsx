@@ -215,6 +215,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
   const tokenVars = useTokenVars();
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
+  const pageId = useUI((s) => s.page);
   const setHover = useUI((s) => s.setHover);
 
   const close = () => useUI.getState().setContextMenu(null);
@@ -340,15 +341,38 @@ function Menu({ menu }: { menu: OpenMenu }) {
 
   items.push(
     {
+      // Figma offers these four wherever you right-click, selection or not
+      label: 'Show/Hide UI',
+      shortcut: '⌘\\',
+      run: () => useUI.getState().toggleChrome(),
+    },
+    {
+      label: 'Show/Hide comments',
+      shortcut: '⇧C',
+      run: () => useUI.getState().toggleView('comments'),
+    },
+    {
+      label: 'Actions…',
+      shortcut: '⌘/',
+      divider: true,
+      run: () => useUI.getState().setPaletteOpen(true),
+    },
+    {
       label: 'Copy',
       shortcut: '⌘C',
-      divider: menu.stack.length > 1,
+      divider: true,
       disabled: !has,
       run: () => void writeNodes(store.serialize(selection)),
     },
     { label: 'Paste here', disabled: !hasNodes(), run: pasteHere },
     { label: 'Paste to replace', shortcut: '⇧⌘R', disabled: !hasNodes() || !has, run: pasteToReplace },
     { label: 'Copy/Paste as', items: copyPasteAs },
+    {
+      label: 'Duplicate',
+      shortcut: '⌘D',
+      disabled: !has,
+      run: () => select(store.duplicate(selection)),
+    },
 
     { label: 'Bring to front', shortcut: ']', divider: true, disabled: !has, run: () => store.reorder(selection, 'front') },
     { label: 'Send to back', shortcut: '[', disabled: !has, run: () => store.reorder(selection, 'back') },
@@ -390,7 +414,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
         { label: 'Union selection', shortcut: '⌥⌘U', run: () => combine('union') },
         { label: 'Subtract selection', shortcut: '⌥⌘S', run: () => combine('subtract') },
         { label: 'Intersect selection', shortcut: '⌥⌘I', run: () => combine('intersect') },
-        { label: 'Exclude selection', shortcut: '⌥⌘X', run: () => combine('exclude') },
+        { label: 'Exclude selection', shortcut: '⌥⌘E', run: () => combine('exclude') },
       ],
     },
     {
@@ -436,11 +460,28 @@ function Menu({ menu }: { menu: OpenMenu }) {
       },
     },
     {
-      label: 'Add auto layout',
+      label: first?.isMask ? 'Release mask' : 'Use as mask',
+      shortcut: '⌃⌘M',
+      disabled: !has,
+      run: () => store.toggleMask(selection),
+    },
+    {
+      label: 'Set as thumbnail',
+      // the file browser shows one frame per file; this is how you choose it
+      disabled: selection.length !== 1 || first?.type !== 'frame',
+      run: () => store.update(pageId, { thumbnailOf: selection[0] }),
+    },
+    {
+      // Figma's menu says which way it will go, rather than offering both
+      label: first?.flex ? 'Remove auto layout' : 'Add auto layout',
       shortcut: '⇧A',
       divider: true,
       disabled: !has,
       run: () => {
+        if (first?.flex) {
+          for (const id of selection) store.setAutoLayout(id, false);
+          return;
+        }
         const id = store.autoLayoutSelection(selection);
         if (id) select([id]);
       },

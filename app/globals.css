@@ -363,14 +363,11 @@ select {
 
   /* the styles-and-variables button fades out until the header is hovered,
      the way the chevron already does */
+  /* Figma keeps a section's own buttons — apply styles, the visibility eye —
+     on screen rather than fading them in on hover: they say what the section
+     can do, and a control you have to go looking for is one nobody finds. */
   .fig-head-fade {
     display: inline-flex;
-    opacity: 0;
-    transition: opacity 80ms linear;
-  }
-  .fig-head:hover > .fig-head-fade,
-  .fig-head-fade:focus-within {
-    opacity: 1;
   }
 
   /* the small grey caption Figma puts above each group of fields */
@@ -592,6 +589,101 @@ select {
     opacity: 1;
   }
 
+  /* The layer type at the head of the panel, with the dimension presets
+     behind it — Figma writes the type here, not the name. (Not `.fig-type`
+     or `.fig-type-label`: both belong to the type-settings dialog.) */
+  .fig-node-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 24px;
+    padding: 0 4px 0 6px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--color-ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .fig-node-type:not(:disabled):hover {
+    background: var(--color-row-active);
+  }
+  .fig-node-type:disabled {
+    padding-right: 6px;
+  }
+  .fig-node-type .fig-caret {
+    display: inline-flex;
+    color: var(--color-ink-dim);
+  }
+
+  /* ─── Outlines view ───────────────────────────────────────────────────
+     Figma's ⌥⇧O: the design reduced to its geometry. Everything that paints
+     stops painting and every box shows its edge, which is how you find the
+     layer that is there but invisible. Only the canvas is affected — the
+     panels still have to be readable while you look. */
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] {
+    background: none !important;
+    box-shadow: none !important;
+    outline: 1px solid var(--color-select-line);
+    outline-offset: -1px;
+    color: transparent !important;
+  }
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] svg,
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] img,
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] canvas,
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] video {
+    opacity: 0.12;
+  }
+
+  /* "Additional labels": a frame's size, written under it in the selection
+     colour but quieter than the selected layer's own badge. */
+  .fig-size-label {
+    position: absolute;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--color-select-line);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* The marker beside an annotated layer — small enough to ignore, legible
+     enough to find, and clickable straight through to the note. */
+  .fig-annotation-pin {
+    position: absolute;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--color-select);
+    color: #fff;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+    pointer-events: auto;
+    cursor: default;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  }
+
+  /* The editable percentage at the head of the zoom menu, as Figma has it. */
+  .fig-zoom-field {
+    width: 100%;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--color-select);
+    border-radius: 5px;
+    background: var(--color-control);
+    color: var(--color-ink);
+    font: inherit;
+    font-size: 11px;
+    outline: none;
+  }
+
   /* ─── Dark floating menus ─────────────────────────────────────────────
      Blend modes and the add-effect list belong to the canvas rather than the
      panel, so they take the right-click menu's colours, not the panel's. */
@@ -616,17 +708,23 @@ select {
   .fig-menu-item:hover {
     background: var(--fig-blue);
   }
+  /* The tick column. It takes the row's own colour: these menus come in both
+     a dark and a light variant, and a mark hard-coded to white is invisible in
+     half of them — which is what hid every checkmark in the light ones. */
   .fig-menu-mark {
     width: 16px;
     flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
+    color: inherit;
   }
   .fig-menu-sep {
     height: 1px;
     margin: 5px 6px;
+    background: var(--fig-line);
+  }
+  .fig-menu-dark .fig-menu-sep {
     background: rgba(255, 255, 255, 0.12);
   }
   .fig-menu-tag {
@@ -1077,15 +1175,13 @@ select {
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
     position: relative;
   }
-  .fig-device[data-device='laptop'] {
-    padding: 16px 16px 26px;
-    border-radius: 16px;
+  .fig-device[data-device='laptop'],
+  .fig-device[data-device='desktop'] {
+    padding-bottom: 26px;
   }
-  .fig-device[data-device='tablet'] {
-    padding: 20px;
-    border-radius: 26px;
-  }
-  .fig-device[data-device='phone']::before {
+  /* the notch, on the devices that have one */
+  .fig-device[data-device='phone']::before,
+  .fig-device[data-device='phone-large']::before {
     content: '';
     position: absolute;
     left: 50%;
@@ -1097,7 +1193,8 @@ select {
     background: #000;
     z-index: 6;
   }
-  .fig-device[data-device='laptop']::after {
+  .fig-device[data-device='laptop']::after,
+  .fig-device[data-device='desktop']::after {
     content: '';
     position: absolute;
     left: 50%;
@@ -1893,9 +1990,128 @@ select {
     top: 0;
     overflow: hidden;
   }
+  /* One interaction, as a single line in the panel: what fires it, what it
+     does, where it goes. Clicking it opens the editor beside the panel. */
+  .fig-interaction-row {
+    gap: 4px;
+  }
+  .fig-interaction-summary {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 24px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--fig-bg-2, rgba(0, 0, 0, 0.04));
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .fig-interaction-summary:hover {
+    background: var(--fig-bg-3, rgba(0, 0, 0, 0.08));
+  }
+  .fig-interaction-trigger {
+    flex: 0 0 auto;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fig-interaction-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    opacity: 0.6;
+  }
+  .fig-interaction-target {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.75;
+  }
+
+  /* Two labels over a two-field row, so each number says what it is. */
+  .fig-cols {
+    display: flex;
+    gap: 8px;
+    padding: 6px 16px 0;
+  }
+  .fig-cols > * {
+    flex: 1;
+    padding: 0;
+  }
+
+  /* The if / else-if / else list of a conditional action. */
+  .fig-branches {
+    margin: 4px 0 2px;
+    border-left: 2px solid var(--fig-border);
+    padding-left: 8px;
+  }
+  .fig-branch {
+    padding-bottom: 4px;
+  }
+  .fig-branch-word {
+    font-style: italic;
+    opacity: 0.7;
+    min-width: 40px;
+  }
+  .fig-branch-action {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    border-top: 1px solid var(--fig-border);
+    margin-top: 4px;
+    padding-top: 4px;
+  }
+  .fig-branch-action > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+  .fig-note.fig-bad {
+    color: var(--fig-red, #d33);
+  }
+
+  /* A dot running the easing on a loop, under the custom easing controls. */
+  .fig-easing-preview {
+    height: 20px;
+    margin: 4px 8px 2px;
+    border-radius: 3px;
+    background: var(--fig-bg-2, rgba(0, 0, 0, 0.04));
+    position: relative;
+    overflow: hidden;
+  }
+  .fig-easing-preview span {
+    position: absolute;
+    top: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fig-blue);
+    animation: fig-easing-run 1.6s infinite;
+  }
+  @keyframes fig-easing-run {
+    0% {
+      left: 4px;
+    }
+    60%,
+    100% {
+      left: calc(100% - 12px);
+    }
+  }
+
   /* the incoming frame has to sit over the one it is replacing */
   .fig-present-screen[data-role='incoming'] {
     z-index: 1;
+  }
+  /* except in a move-out or slide-out, where what you watch is the old frame
+     leaving — so that is the one on top */
+  .fig-present-screen[data-role='outgoing'][data-leaving] {
+    z-index: 2;
   }
   .fig-hotspot {
     position: absolute;
@@ -2486,4 +2702,320 @@ select {
 
 .vec-more button:hover kbd {
   color: rgb(255 255 255 / 0.85);
+}
+
+/* ─── Fonts ─────────────────────────────────────────────────────────────
+   The font picker and the type-settings dialog. Both open beside the panel
+   rather than under the row that opened them, so they never cover the design
+   or the rows you are checking them against. */
+@layer components {
+  /* a value that is the variable's to change, not the field's — Figma tints it
+     so a menu reading "Body Weight" is not mistaken for a style called that */
+  .fig-value[data-variable='true'] {
+    color: var(--fig-purple);
+  }
+
+  /* a field acting as a trigger reads as pressed while its menu is up */
+  .fig-input[data-on='true'] {
+    background: var(--fig-selected);
+    box-shadow: inset 0 0 0 1px var(--fig-blue);
+  }
+
+  /* the caret that opens the size presets, inside the field */
+  .fig-caret-btn {
+    width: 20px;
+    height: 20px;
+    margin-right: 2px;
+    flex: none;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fig-dim);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+  }
+  .fig-caret-btn:hover {
+    background: var(--fig-hover);
+    color: var(--fig-ink);
+  }
+
+  /* the current size, pinned above the presets and already chosen */
+  .fig-menu-item[data-current='true'] {
+    background: var(--fig-blue);
+  }
+
+  .fig-fonts {
+    padding: 12px 12px 8px;
+  }
+  .fig-fonts-head {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    margin-bottom: 8px;
+  }
+  .fig-fonts-title {
+    flex: 1;
+    font-weight: 550;
+  }
+
+  /* Figma's search field: a magnifier, the query, and a ⊗ once there is one */
+  .fig-search {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 6px;
+    border-radius: 6px;
+    background: var(--fig-field);
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+  .fig-search:focus-within {
+    background: #fff;
+    box-shadow: inset 0 0 0 1px var(--fig-blue);
+  }
+  .fig-search-glyph {
+    display: inline-flex;
+    flex: none;
+    color: var(--fig-dim);
+  }
+  .fig-search > input {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+    padding: 0 6px;
+    border: 0;
+    background: transparent;
+    outline: none;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+  }
+  .fig-search-clear {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--fig-dim);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+  }
+  .fig-search-clear:hover {
+    color: var(--fig-ink);
+  }
+
+  /* which slice of the directory the list is showing */
+  .fig-source {
+    width: 100%;
+    height: 28px;
+    margin-top: 8px;
+    padding: 0 8px;
+    border: 1px solid var(--fig-line);
+    border-radius: 6px;
+    background: #fff;
+    color: inherit;
+    font: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: default;
+  }
+  .fig-source:hover {
+    background: var(--fig-field);
+  }
+
+  /* Only the rows on screen are rendered, so the list is positioned rather
+     than flowed — the spacer inside it holds the scrollbar's full length. */
+  .fig-font-list {
+    margin: 8px -6px 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .fig-font-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .fig-font-row[data-cursor='true'] {
+    background: var(--fig-hover);
+  }
+  .fig-font-check {
+    width: 16px;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* the specimen: the family's name, set in the family */
+  .fig-font-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 15px;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Type settings ─────────────────────────────────────────────────── */
+  .fig-type {
+    padding: 10px 12px 12px;
+  }
+  .fig-type-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin: 0 -4px 10px;
+  }
+  .fig-type-tabs > button {
+    height: 26px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fig-dim);
+    font: inherit;
+    font-size: 12px;
+    cursor: default;
+  }
+  .fig-type-tabs > button:hover {
+    background: var(--fig-hover);
+  }
+  .fig-type-tabs > button[data-on='true'] {
+    background: var(--fig-field);
+    color: var(--fig-ink);
+    font-weight: 550;
+  }
+  .fig-type-tabs > .fig-btn {
+    margin-left: auto;
+  }
+
+  .fig-type-preview {
+    height: 92px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    background: var(--fig-field);
+    color: var(--fig-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    overflow: hidden;
+  }
+
+  .fig-type-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  /* a control whose feature does nothing to the text as it is currently set */
+  .fig-type-row[data-dim='true'] > .fig-type-label {
+    color: rgba(0, 0, 0, 0.28);
+  }
+  .fig-type-label {
+    width: 96px;
+    flex: none;
+    color: var(--fig-dim);
+  }
+  .fig-type-rule {
+    height: 1px;
+    margin: 14px -12px 10px;
+    background: var(--fig-line);
+  }
+  .fig-type-legend {
+    margin-top: 10px;
+    font-weight: 550;
+  }
+
+  /* the — / ✓ pair: narrower than a full segmented control, and right-aligned
+     the way Figma sets its detail switches */
+  .fig-seg.fig-seg-pair {
+    flex: none;
+    width: 68px;
+    margin-left: auto;
+  }
+  .fig-seg.fig-seg-pair[data-disabled='true'] {
+    opacity: 0.4;
+  }
+
+  /* ── Variable axes ─────────────────────────────────────────────────── */
+  .fig-axis {
+    margin-bottom: 14px;
+  }
+  .fig-axis-track {
+    position: relative;
+    margin-top: 10px;
+    padding-bottom: 6px;
+  }
+  .fig-slider {
+    width: 100%;
+    height: 14px;
+    margin: 0;
+    appearance: none;
+    background: transparent;
+    cursor: default;
+  }
+  .fig-slider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--fig-blue);
+  }
+  .fig-slider::-moz-range-track {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--fig-blue);
+  }
+  .fig-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border: 2px solid var(--fig-blue);
+    border-radius: 50%;
+    background: #fff;
+  }
+  .fig-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--fig-blue);
+    border-radius: 50%;
+    background: #fff;
+  }
+  /* the named cuts along the axis, so a slider that can stop anywhere still
+     shows where the family's own weights are */
+  .fig-axis-stops {
+    position: absolute;
+    left: 7px;
+    right: 7px;
+    top: 5px;
+    height: 4px;
+    pointer-events: none;
+  }
+  .fig-axis-stops > span {
+    position: absolute;
+    top: 1px;
+    width: 2px;
+    height: 2px;
+    margin-left: -1px;
+    border-radius: 50%;
+    background: #fff;
+  }
 }

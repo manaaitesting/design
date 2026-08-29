@@ -70,6 +70,22 @@ export function db(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS files_owner ON files(owner_id);
     CREATE INDEX IF NOT EXISTS members_user ON file_members(user_id);
     CREATE INDEX IF NOT EXISTS library_file ON library_components(file_id);
+
+    -- Code Connect: which node is which component in the codebase.
+    --
+    -- The mapping belongs beside the file index rather than in the document,
+    -- because it describes the repository, not the design: a file opened on a
+    -- machine without the code is still a valid file, just without the links.
+    CREATE TABLE IF NOT EXISTS code_connect (
+      file_id        TEXT NOT NULL,
+      node_id        TEXT NOT NULL,
+      label          TEXT NOT NULL,
+      component_name TEXT NOT NULL,
+      source         TEXT NOT NULL,
+      template       TEXT,
+      updated_at     INTEGER NOT NULL,
+      PRIMARY KEY (file_id, node_id, label)
+    );
   `);
   // A file browser with no pictures in it is a list of filenames. The column is
   // added after the fact so an existing database keeps working untouched.
@@ -115,6 +131,11 @@ export function createUser(user: User & { passwordHash: string }): void {
   db()
     .prepare('INSERT INTO users (id, email, name, color, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(user.id, user.email.toLowerCase(), user.name, user.color, user.passwordHash, Date.now());
+}
+
+/** Everyone with an account — the MCP server has no session to ask. */
+export function listAllUsers(): User[] {
+  return db().prepare('SELECT id, email, name, color FROM users ORDER BY created_at').all() as unknown as User[];
 }
 
 // ── Files ────────────────────────────────────────────────────────────────
@@ -298,6 +319,28 @@ export function listLibrary(userId: string): LibraryComponent[] {
     .all(userId) as unknown as LibraryComponent[];
 }
 
+/** What one file has published — the library it is, rather than the ones it uses. */
+export function listLibraryForFile(fileId: string): LibraryComponent[] {
+  return db()
+    .prepare(
+      `SELECT c.*, f.name AS file_name
+         FROM library_components c JOIN files f ON f.id = c.file_id
+        WHERE c.file_id = ? ORDER BY c.name`,
+    )
+    .all(fileId) as unknown as LibraryComponent[];
+}
+
+/** Everything published anywhere in the workspace — what a file could add. */
+export function listAllLibrary(): LibraryComponent[] {
+  return db()
+    .prepare(
+      `SELECT c.*, f.name AS file_name
+         FROM library_components c JOIN files f ON f.id = c.file_id
+        ORDER BY f.name, c.name`,
+    )
+    .all() as unknown as LibraryComponent[];
+}
+
 export function getLibraryComponent(id: string): LibraryComponent | undefined {
   return db()
     .prepare(
@@ -316,4 +359,64 @@ export function listMembers(fileId: string): User[] {
         WHERE m.file_id = ? ORDER BY m.role DESC, u.name`,
     )
     .all(fileId) as unknown as User[];
+}
+
+// ── Code Connect ─────────────────────────────────────────────────────────
+
+export interface CodeConnectRow {
+  file_id: string;
+  node_id: string;
+  label: string;
+  component_name: string;
+  source: string;
+  template?: string | null;
+  updated_at: number;
+}
+
+/**
+ * Points a node at the component that implements it.
+ *
+ * One row per label, so the same node can be a React component here and a
+ * SwiftUI view there, exactly as Figma's Code Connect allows.
+ */
+export function mapCodeConnect(entry: Omit<CodeConnectRow, 'updated_at'>): void {
+  db()
+    .prepare(
+      `INSERT OR REPLACE INTO code_connect
+         (file_id, node_id, label, component_name, source, template, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      entry.file_id,
+      entry.node_id,
+      entry.label,
+      entry.component_name,
+      entry.source,
+      entry.template ?? null,
+      Date.now(),
+    );
+}
+
+/** Every mapping in a file, or just the ones for the nodes asked about. */
+export function codeConnectFor(fileId: string, nodeIds?: string[]): CodeConnectRow[] {
+  if (!nodeIds?.length) {
+    return db()
+      .prepare('SELECT * FROM code_connect WHERE file_id = ? ORDER BY node_id, label')
+      .all(fileId) as unknown as CodeConnectRow[];
+  }
+  const holes = nodeIds.map(() => '?').join(', ');
+  return db()
+    .prepare(
+      `SELECT * FROM code_connect WHERE file_id = ? AND node_id IN (${holes}) ORDER BY node_id, label`,
+    )
+    .all(fileId, ...nodeIds) as unknown as CodeConnectRow[];
+}
+
+export function unmapCodeConnect(fileId: string, nodeId: string, label?: string): number {
+  const result = label
+    ? db()
+        .prepare('DELETE FROM code_connect WHERE file_id = ? AND node_id = ? AND label = ?')
+        .run(fileId, nodeId, label)
+    : db().prepare('DELETE FROM code_connect WHERE file_id = ? AND node_id = ?').run(fileId, nodeId);
+  return Number(result.changes);
 }

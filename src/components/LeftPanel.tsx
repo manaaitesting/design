@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './ui/Icons';
+import { FigIcon } from './ui/FigIcon';
+import { FigButton } from './ui/Figma';
 import { useCollections, useDoc, usePages, useReadOnly, useSession, useStore, useTokens } from './Session';
 import {
   fetchLibraryComponentAction,
@@ -235,6 +237,12 @@ export function LeftPanel({ fileName }: { fileName: string }) {
           <PagesSection />
           <div className="fig-left-section" style={{ borderTop: '1px solid var(--fig-line)' }}>
             <span style={{ flex: 1 }}>Layers</span>
+            <FigButton
+              title="Collapse layers  ⌥L"
+              onClick={() => useUI.getState().collapseLayers()}
+            >
+              <FigIcon name="Collapse layers" />
+            </FigButton>
           </div>
           <LayersTree />
         </>

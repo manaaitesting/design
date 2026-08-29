@@ -188,6 +188,20 @@ export const Icon = {
       <path d="M10.2 10.2 13.4 13.4" />
     </Svg>
   ),
+  /** the ⊗ that empties a search field */
+  ClearField: () => (
+    <Svg size={14}>
+      <circle cx={8} cy={8} r={5.4} />
+      <path d="M6.2 6.2 9.8 9.8M9.8 6.2 6.2 9.8" />
+    </Svg>
+  ),
+  /** the gear on the font picker's header */
+  Settings: () => (
+    <Svg size={14}>
+      <circle cx={8} cy={8} r={2.1} />
+      <path d="M8 1.9v1.6M8 12.5v1.6M13.1 8h-1.6M4.5 8H2.9M11.6 4.4l-1.1 1.1M5.5 10.5l-1.1 1.1M11.6 11.6l-1.1-1.1M5.5 5.5 4.4 4.4" />
+    </Svg>
+  ),
   Page: () => (
     <Svg size={14}>
       <path d="M4 2.6h4.6L12 6v7.4H4V2.6Z" />
@@ -383,6 +397,27 @@ export const Icon = {
       <rect x={5} y={5} width={6} height={6} rx={0.8} strokeDasharray="1.6 1.4" />
     </Svg>
   ),
+  /** A measuring line with a tick at each end. */
+  Measure: () => (
+    <Svg size={14}>
+      <path d="M2.6 8h10.8M2.6 5.4v5.2M13.4 5.4v5.2" />
+    </Svg>
+  ),
+  /** A note pinned to a layer: a tag with a fold. */
+  Annotate: () => (
+    <Svg size={14}>
+      <path d="M3.4 2.6h6l3.2 3.2v7.6H3.4z" />
+      <path d="M9.2 2.8v3.2h3.2" />
+      <path d="M5.6 8.6h4.8M5.6 10.8h3.2" />
+    </Svg>
+  ),
+  /** Figma's link glyph: two chain links, drawn at the panel's stroke weight. */
+  Link: () => (
+    <Svg size={14}>
+      <path d="M6.6 9.4a2.6 2.6 0 0 0 3.9.3l1.6-1.6a2.6 2.6 0 0 0-3.7-3.7l-.9.9" />
+      <path d="M9.4 6.6a2.6 2.6 0 0 0-3.9-.3L3.9 7.9a2.6 2.6 0 0 0 3.7 3.7l.9-.9" />
+    </Svg>
+  ),
   Copy: () => (
     <Svg size={14}>
       <rect x={5.4} y={5.4} width={7.4} height={7.4} rx={1.4} />
@@ -549,7 +584,7 @@ export const Icon = {
   ),
 
   /** Figma's Text case: the same two letters, cased four ways. */
-  TextCase: ({ at }: { at: 'none' | 'upper' | 'lower' | 'title' }) => (
+  TextCase: ({ at }: { at: 'none' | 'upper' | 'lower' | 'title' | 'small' }) => (
     <Svg size={14}>
       <text
         x={8}
@@ -561,7 +596,15 @@ export const Icon = {
         stroke="none"
         fontFamily="Inter, system-ui, sans-serif"
       >
-        {at === 'upper' ? 'AA' : at === 'lower' ? 'aa' : at === 'title' ? 'Aa' : '—'}
+        {at === 'upper'
+          ? 'AA'
+          : at === 'lower'
+            ? 'aa'
+            : at === 'title'
+              ? 'Aa'
+              : at === 'small'
+                ? 'Aᴀ'
+                : '—'}
       </text>
     </Svg>
   ),
@@ -576,11 +619,72 @@ export const Icon = {
   ),
 
   // ── Alignment ──────────────────────────────────────────────────────────
-  AlignH: ({ at }: { at: 'left' | 'center' | 'right' }) => (
+  AlignH: ({ at }: { at: 'left' | 'center' | 'right' | 'justify' }) => (
     <Svg size={14}>
       {at === 'left' && <path d="M3 3v10M5.4 6h7M5.4 10h4" />}
       {at === 'center' && <path d="M8 2.4v11.2M4 6h8M5.6 10h4.8" />}
       {at === 'right' && <path d="M13 3v10M3.6 6h7M6.6 10h4" />}
+      {/* justify sets both edges flush, so the glyph is four full-width rules */}
+      {at === 'justify' && <path d="M3 3.4h10M3 6.2h10M3 9h10M3 11.8h10" />}
+    </Svg>
+  ),
+
+  /**
+   * Vertical trim: a line box with the half-leading kept, or cropped to the
+   * letters. The tight one draws the rules on the cap and the baseline.
+   */
+  Trim: ({ tight }: { tight?: boolean }) => (
+    <Svg size={14}>
+      <text
+        x={8}
+        y={11}
+        textAnchor="middle"
+        fontSize={9}
+        fontWeight={600}
+        fill="currentColor"
+        stroke="none"
+        fontFamily="Inter, system-ui, sans-serif"
+      >
+        Ag
+      </text>
+      {tight ? <path d="M2.6 3.4h10.8M2.6 11.4h10.8" /> : <path d="M2.6 1.8h10.8M2.6 13.4h10.8" />}
+    </Svg>
+  ),
+
+  /** List style: bullets or numbers beside two rules. */
+  List: ({ ordered }: { ordered?: boolean }) => (
+    <Svg size={14}>
+      <path d="M6.4 5h7M6.4 10h7" />
+      {ordered ? (
+        <text
+          x={2.8}
+          y={6.4}
+          textAnchor="middle"
+          fontSize={5.5}
+          fill="currentColor"
+          stroke="none"
+          fontFamily="Inter, system-ui, sans-serif"
+        >
+          1
+        </text>
+      ) : (
+        <circle cx={2.9} cy={5} r={1.1} fill="currentColor" strokeWidth={0} />
+      )}
+      {ordered ? (
+        <text
+          x={2.8}
+          y={11.4}
+          textAnchor="middle"
+          fontSize={5.5}
+          fill="currentColor"
+          stroke="none"
+          fontFamily="Inter, system-ui, sans-serif"
+        >
+          2
+        </text>
+      ) : (
+        <circle cx={2.9} cy={10} r={1.1} fill="currentColor" strokeWidth={0} />
+      )}
     </Svg>
   ),
   AlignV: ({ at }: { at: 'top' | 'middle' | 'bottom' }) => (

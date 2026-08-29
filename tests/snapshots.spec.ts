@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { createHmac } from 'node:crypto';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,10 +35,11 @@ function token(fileId: string, role: 'editor' | 'viewer' = 'editor'): string {
 async function join(
   role: 'editor' | 'viewer' = 'editor',
   room = ROOM,
+  port = PORT,
 ): Promise<{ store: DocStore; provider: WebsocketProvider }> {
   const ydoc = new Y.Doc();
   const store = new DocStore(ydoc);
-  const provider = new WebsocketProvider(`ws://localhost:${PORT}`, room, ydoc, {
+  const provider = new WebsocketProvider(`ws://localhost:${port}`, room, ydoc, {
     params: { token: token(room, role) },
     WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
     // Two providers in one process would otherwise sync to each other over a
@@ -148,4 +149,69 @@ test('restoring re-inserts content that a connected client already deleted', asy
 
   await expect.poll(() => store.getSnapshot()[ROOT_ID].children.length).toBe(6);
   provider.destroy();
+});
+
+/**
+ * A room the last person leaves has to be *freed*, not merely forgotten.
+ *
+ * Awareness runs an interval to expire stale peers, and that timer keeps the
+ * awareness — and through it the entire document — reachable however many
+ * references the server drops. The server ran for weeks like that and nobody
+ * noticed; then the editor suite, which opens and closes the same room once per
+ * test, walked it into a 4 GB heap and killed it two thirds of the way through.
+ *
+ * So the assertion is the thing that actually broke: a server given a small
+ * heap still has to survive being used. Leaking, it dies here in single-figure
+ * cycles; freeing, its live set is one document and it never comes close.
+ */
+test('a room that goes idle is freed, not just forgotten', async () => {
+  const port = PORT + 1;
+  const room = 'leak-probe';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paperlike-leak-'));
+  const capped = spawn('node', ['--max-old-space-size=192', 'server/ws.mjs'], {
+    env: { ...process.env, AUTH_SECRET: SECRET, SYNC_PORT: String(port), DATA_DIR: dir },
+    stdio: 'pipe',
+  });
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('capped sync server never started')), 10_000);
+    capped.stdout!.on('data', (chunk: Buffer) => {
+      if (!chunk.toString().includes('listening')) return;
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+
+  /** One full round trip: join, edit, leave — open through release. */
+  async function cycle(fill?: (store: DocStore) => void): Promise<void> {
+    const { store, provider } = await join('editor', room, port);
+    if (fill) fill(store);
+    else store.create('rect', ROOT_ID, { name: 'touch' });
+    // the release path only runs once the server has seen the socket close
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    provider.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+
+  try {
+    // a document with some substance, so a retained copy of it costs something
+    await cycle((store) => {
+      store.ydoc.transact(() => {
+        for (let index = 0; index < 3_000; index++) {
+          store.create('rect', ROOT_ID, { name: `layer ${index}` });
+        }
+      });
+    });
+    for (let round = 0; round < 12; round++) {
+      await cycle();
+      expect(capped.exitCode, `the sync server died after ${round + 1} idle rooms`).toBeNull();
+    }
+
+    // and it is still a working server, not merely a living process
+    const { store, provider } = await join('editor', room, port);
+    expect(store.getSnapshot()[ROOT_ID].children.length).toBeGreaterThan(3_000);
+    provider.destroy();
+  } finally {
+    capped.kill();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

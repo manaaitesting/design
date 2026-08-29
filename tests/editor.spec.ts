@@ -932,13 +932,14 @@ test.describe('prototype', () => {
     await openTab(page);
 
     await page.locator('button[title="Add interactions"]').click();
+    await page.locator('.fig-interaction-summary').click();
     let node = (await doc(page))[button];
     expect(node.interactions).toHaveLength(1);
     expect(node.interactions![0].trigger).toBe('click');
 
     // point it at the second frame through the panel's own control
     await page.locator('.fig-interaction button', { hasText: 'Pick a frame' }).click();
-    await page.getByRole('listbox').getByRole('button', { name: 'Second' }).click();
+    await page.getByRole('listbox').getByRole('option', { name: 'Second' }).click();
 
     node = (await doc(page))[button];
     expect(node.interactions![0].destination).toBe(second);
@@ -1356,6 +1357,7 @@ test.describe('control padding', () => {
     await select(page, [cover!.id]);
     await page.locator('.fig-tab', { hasText: 'Prototype' }).click();
     await page.locator('button[title="Add interactions"]').click();
+    await page.locator('.fig-interaction-summary').click();
 
     expect(await padding(page, '.fig-interaction .fig-value')).toEqual({
       left: '8px',
@@ -1382,9 +1384,10 @@ test.describe('control padding', () => {
     await select(page, [cover!.id]);
     await page.locator('.fig-tab', { hasText: 'Prototype' }).click();
     await page.locator('button[title="Add interactions"]').click();
+    await page.locator('.fig-interaction-summary').click();
     await page.locator('.fig-interaction .fig-input').first().click();
 
-    const option = page.getByRole('listbox').getByRole('button', { name: 'While hovering' });
+    const option = page.getByRole('listbox').getByRole('option', { name: 'While hovering' });
     expect(await option.evaluate((el) => getComputedStyle(el as HTMLElement).paddingLeft)).toBe('8px');
     // the icon buttons beside it stay square
     const icon = page.locator('.fig-interaction .fig-btn:not([data-text])').first();
@@ -1550,10 +1553,14 @@ test.describe('panel controls that used to do nothing', () => {
     const caption = await nodeNamed(page, 'Caption');
     await select(page, [caption!.id]);
 
+    // case and truncation live in the Type settings dialog, where Figma keeps them
+    await page.locator('button[title="Type settings"]').click();
+
     await page.getByRole('button', { name: 'Uppercase' }).click();
     await expect(page.locator(`[data-node-id="${caption!.id}"]`)).toHaveCSS('text-transform', 'uppercase');
 
-    await page.getByTitle(/Truncate after/).locator('input').fill('2');
+    await page.getByRole('button', { name: 'Truncate with an ellipsis' }).click();
+    await page.getByTitle('Lines to keep').locator('input').fill('2');
     await page.keyboard.press('Enter');
     await expect(page.locator(`[data-node-id="${caption!.id}"]`)).toHaveCSS('-webkit-line-clamp', '2');
   });
@@ -1817,7 +1824,7 @@ test('swapping an instance rebuilds it from the other component, in place', asyn
   await select(page, [instance!]);
 
   await page.getByTitle('Swap instance').click();
-  await page.getByRole('button', { name: 'Green' }).click();
+  await page.getByRole('option', { name: 'Green' }).click();
 
   const next = (await selection(page))[0];
   const nodes = await doc(page);
@@ -1855,10 +1862,9 @@ test.describe('multi-selection', () => {
     await expect(page.getByTitle('Width').locator('input')).toHaveValue('Mixed');
     await expect(page.getByTitle('Opacity').locator('input')).toHaveValue('Mixed');
 
-    // and the header names the count rather than one of the layers
-    const name = page.locator('.fig-section input[title]').first();
-    await expect(name).toHaveValue('2 layers');
-    await expect(name).toBeDisabled();
+    // the header carries actions only — the name is edited in the layers
+    // panel, as it is in Figma — so there is no field here to disagree
+    await expect(page.locator('.fig-section input[title]')).toHaveCount(0);
 
     await removeNodes(page, ids);
   });
@@ -2059,7 +2065,7 @@ test.describe('component properties', () => {
     // point the dot at it
     await select(page, [badge]);
     await page.getByTitle('Applied property').click();
-    await page.getByRole('button', { name: /Boolean · Boolean/ }).click();
+    await page.getByRole('option', { name: /Boolean · Boolean/ }).click();
     expect((await doc(page))[badge].bindings![0].field).toBe('visible');
 
     // and switch it off on an instance
@@ -2355,7 +2361,7 @@ test.describe('layout grid and text blocks', () => {
     );
 
     await page.getByTitle('Type').click();
-    await page.getByRole('listbox').getByRole('button', { name: 'Right', exact: true }).click();
+    await page.getByRole('listbox').getByRole('option', { name: 'Right', exact: true }).click();
     await page.getByTitle('Column width').locator('input').fill('40');
     await page.keyboard.press('Enter');
 
@@ -2372,15 +2378,14 @@ test.describe('layout grid and text blocks', () => {
       name: 'Prose', x: 700, y: 40, w: 240, h: 120, text: 'One\nTwo\nThree',
     });
     await select(page, [id]);
-    await page.locator('button[title="Type details"]').click();
+    await page.locator('button[title="Type settings"]').click();
 
-    await page.getByTitle('Paragraph spacing').locator('input').fill('12');
+    await page.getByTitle('Space between paragraphs').locator('input').fill('12');
     await page.keyboard.press('Enter');
     const blocks = page.locator(`[data-node-id="${id}"] > div`);
     await expect(blocks).toHaveCount(3);
     await expect(blocks.nth(1)).toHaveCSS('margin-top', '12px');
 
-    await page.getByTitle('List style').click();
     await page.getByRole('button', { name: 'Numbered' }).click();
     await expect(page.locator(`[data-node-id="${id}"] ol li`)).toHaveCount(3);
 
@@ -2550,7 +2555,7 @@ test.describe('auto layout', () => {
     await select(page, [child]);
     // a rectangle is not a container, but the layout still sizes it
     await page.getByTitle('Horizontal resizing').click();
-    await page.getByRole('button', { name: 'Fill container' }).click();
+    await page.getByRole('option', { name: 'Fill container' }).click();
     expect((await doc(page))[child].wMode).toBe('fill');
     await removeNodes(page, [frame]);
   });

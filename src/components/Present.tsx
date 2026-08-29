@@ -1,19 +1,39 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { NodeView } from './NodeView';
+import { NodeView, SwapContext } from './NodeView';
 import { Icon } from './ui/Icons';
-import { useDoc, useTokenVars, useVarNames } from './Session';
+import { useCollections, useDoc, useTokenVars, useTokens, useVarNames } from './Session';
+import {
+  DEFAULT_COLLECTION_ID,
+  defaultModes,
+  publish,
+  resolveToken,
+} from '../document/variables';
 import { useUI } from '../state/ui';
 import {
+  easingCss,
   flowsOn,
   hitInteraction,
   hotspotsIn,
   interactionsOf,
   offsetInFrame,
 } from '../document/prototype';
+import { DEVICES, descendants } from '../document/types';
+import type { PrototypeDevice } from '../document/types';
 import type { Doc, Interaction, OverlaySpec, SceneNode, TransitionSpec } from '../document/types';
-import { DEFAULT_OVERLAY } from '../document/prototype';
+import { DEFAULT_OVERLAY, DEFAULT_TRANSITION } from '../document/prototype';
+import { evaluate } from '../document/condition';
+
+/** The hyperlink on a layer, or on the nearest ancestor carrying one. */
+function linkAt(nodeId: string | undefined, doc: Doc): string | null {
+  let current = nodeId ? doc[nodeId] : undefined;
+  while (current) {
+    if (current.link) return current.link;
+    current = current.parent ? doc[current.parent] : undefined;
+  }
+  return null;
+}
 
 /** Padding around the frame, so a full-bleed design still reads as a screen. */
 const MARGIN = 48;
@@ -56,7 +76,7 @@ export function Present() {
   const presenting = useUI((s) => s.presenting);
   const present = useUI((s) => s.present);
   const pageId = useUI((s) => s.page);
-  const device = useUI((s) => s.device);
+  const chosen = useUI((s) => s.device);
   const setDevice = useUI((s) => s.setDevice);
 
   const [stack, setStack] = useState<string[]>([]);
@@ -73,6 +93,21 @@ export function Present() {
    */
   const smart = useRef<Map<string, DOMRect> | null>(null);
   /**
+   * Where each frame was scrolled to, by node.
+   *
+   * A frame unmounts when you navigate away from it, so without this every
+   * return trip would land back at the top. Figma remembers, and forgets only
+   * when an interaction says to.
+   */
+  const scrolls = useRef<Record<string, Record<string, [number, number]>>>({});
+  /**
+   * Where each frame's videos had got to, and whether they were running.
+   *
+   * Same reason as the scroll offsets: the frame unmounts, so without this a
+   * video would start from the beginning every time you came back to it.
+   */
+  const videos = useRef<Record<string, Record<string, { time: number; paused: boolean }>>>({});
+  /**
    * Variables a `set-variable` interaction has changed while playing.
    *
    * They are re-declared on the stage rather than written to the document: a
@@ -80,12 +115,31 @@ export function Present() {
    * from how the designer left it.
    */
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  /**
+   * Instances a "Change to" has swapped during this run.
+   *
+   * Like the variable overrides, they are held here rather than written: a run
+   * is a rehearsal, and it must not leave the document different.
+   */
+  const [swaps, setSwaps] = useState<Record<string, string>>({});
   const [flash, setFlash] = useState(false);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const current = stack.at(-1) ?? null;
   const frame: SceneNode | undefined = current ? doc[current] : undefined;
+
+  /**
+   * The prototype's own settings, which live on the page.
+   *
+   * The toolbar's picker still wins while it is open, because changing the
+   * frame to check a layout is a thing you do *during* a run — but the document
+   * is what a fresh run starts from, so everybody sees the same prototype.
+   */
+  const page = doc[pageId];
+  const device = chosen === 'none' ? page?.prototypeDevice ?? 'none' : chosen;
+  const spec = DEVICES.find((entry) => entry.id === device) ?? DEVICES[0];
+  const background = page?.prototypeBackground ?? null;
 
   const after = useCallback((fn: () => void, ms: number) => {
     timers.current.push(setTimeout(fn, ms));
@@ -97,6 +151,7 @@ export function Present() {
     setStack([presenting]);
     setOverlays([]);
     setOverrides({});
+    setSwaps({});
     setMove(null);
   }, [presenting]);
 
@@ -132,8 +187,42 @@ export function Present() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  /**
+   * What an interaction forgets on the way in — Figma's "State" section.
+   *
+   * Scroll and swapped variants are both remembered by default, so arriving
+   * somewhere looks like coming back to it; these are the two ways of saying
+   * arrive fresh instead.
+   */
+  const arrive = useCallback(
+    (to: string, interaction: Interaction) => {
+      if (interaction.resetScroll) delete scrolls.current[to];
+      if (interaction.resetVideo) delete videos.current[to];
+      if (interaction.resetComponentState) {
+        // only the destination's own instances: a swap on another frame is that
+        // frame's state, and arriving here says nothing about it
+        const inside = new Set(descendants(to, doc));
+        setSwaps((prev) =>
+          Object.fromEntries(Object.entries(prev).filter(([id]) => !inside.has(id))),
+        );
+      }
+    },
+    [doc],
+  );
+
+  /**
+   * What a variable holds right now: whatever the run has set, else what the
+   * document publishes. Conditions read through this and nothing else.
+   */
+  const readVariable = useCallback(
+    (name: string) => overrides[`--${name}`] ?? tokenVars[`--${name}`],
+    [overrides, tokenVars],
+  );
+
   const go = useCallback(
-    (interaction: Interaction) => {
+    (interaction: Interaction, nodeId = '') => {
+      // a branch action, or one an agent wrote, may carry no transition at all
+      const transition = interaction.transition ?? DEFAULT_TRANSITION;
       if (interaction.action === 'url') {
         if (interaction.url) window.open(interaction.url, '_blank', 'noopener');
         return;
@@ -171,6 +260,45 @@ export function Present() {
         }
         return;
       }
+      if (interaction.action === 'set-mode') {
+        // a mode is a set of variable values; playing one is re-declaring them
+        // on the stage, exactly as `set-variable` does with a single value
+        if (!interaction.collection || !interaction.mode) return;
+        setOverrides((prev) => ({ ...prev, ...modeVars(interaction.collection!, interaction.mode!) }));
+        return;
+      }
+      if (interaction.action === 'play-pause' || interaction.action === 'set-playhead') {
+        const target = interaction.animation ?? nodeId;
+        const video = stageRef.current?.querySelector<HTMLVideoElement>(
+          `[data-node-id="${target}"] video`,
+        );
+        if (!video) return;
+        if (interaction.action === 'set-playhead') {
+          video.currentTime = Math.max(0, interaction.timestamp ?? 0);
+          return;
+        }
+        const behavior = interaction.behavior ?? 'toggle';
+        const play = behavior === 'play' || (behavior === 'toggle' && video.paused);
+        if (play) void video.play().catch(() => {});
+        else video.pause();
+        return;
+      }
+      if (interaction.action === 'conditional') {
+        // the first branch that holds wins; a branch with no condition is the
+        // `else`, so it always does
+        const branch = (interaction.branches ?? []).find((entry) =>
+          evaluate(entry.condition, readVariable),
+        );
+        for (const step of branch?.actions ?? []) go(step, nodeId);
+        return;
+      }
+      if (interaction.action === 'change-to') {
+        // swapping an instance during a run must not edit the document, so the
+        // swap is remembered here and the frame is re-rendered against it
+        if (!interaction.destination) return;
+        setSwaps((prev) => ({ ...prev, [nodeId]: interaction.destination! }));
+        return;
+      }
       if (interaction.action === 'scroll-to') {
         const target = interaction.destination
           ? stageRef.current?.querySelector<HTMLElement>(`[data-node-id="${interaction.destination}"]`)
@@ -183,9 +311,10 @@ export function Present() {
           if (prev.length < 2) return prev;
           const from = prev.at(-1)!;
           const to = prev.at(-2)!;
-          if (interaction.transition.type !== 'instant') {
-            setMove({ from, to, transition: interaction.transition, reverse: true });
-            after(() => setMove(null), interaction.transition.duration + 20);
+          arrive(to, interaction);
+          if (transition.type !== 'instant') {
+            setMove({ from, to, transition, reverse: true });
+            after(() => setMove(null), transition.duration + 20);
           }
           return prev.slice(0, -1);
         });
@@ -193,21 +322,73 @@ export function Present() {
       }
       if (interaction.action !== 'navigate' || !interaction.destination) return;
       const to = interaction.destination;
+      arrive(to, interaction);
       setStack((prev) => {
         const from = prev.at(-1);
         if (!from || from === to) return prev;
         // measure before the swap: after it, the old frame is already gone
         smart.current =
-          interaction.transition.type === 'smart-animate' ? capture(from) : null;
-        if (interaction.transition.type !== 'instant') {
-          setMove({ from, to, transition: interaction.transition, reverse: false });
-          after(() => setMove(null), interaction.transition.duration + 20);
+          transition.type === 'smart-animate' ? capture(from) : null;
+        if (transition.type !== 'instant') {
+          setMove({ from, to, transition, reverse: false });
+          after(() => setMove(null), transition.duration + 20);
         }
         return [...prev, to];
       });
     },
-    [after, capture],
+    [after, capture, arrive, readVariable],
   );
+
+  // Put a frame back where it was scrolled to. It runs before paint so the
+  // return trip never flashes at the top first.
+  useLayoutEffect(() => {
+    if (!current) return;
+    const remembered = scrolls.current[current];
+    if (!remembered) return;
+    const root = stageRef.current?.querySelector<HTMLElement>(`[data-frame-id="${current}"]`);
+    if (!root) return;
+    for (const [id, [x, y]] of Object.entries(remembered)) {
+      const el = root.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+      if (!el) continue;
+      el.scrollLeft = x;
+      el.scrollTop = y;
+    }
+  }, [current]);
+
+  // Put the videos back where they had got to, for the same reason.
+  useEffect(() => {
+    if (!current) return;
+    const remembered = videos.current[current];
+    if (!remembered) return;
+    const root = stageRef.current?.querySelector<HTMLElement>(`[data-frame-id="${current}"]`);
+    if (!root) return;
+    for (const [id, at] of Object.entries(remembered)) {
+      const el = root.querySelector<HTMLVideoElement>(`[data-node-id="${id}"] video`);
+      if (!el) continue;
+      el.currentTime = at.time;
+      if (at.paused) el.pause();
+      else void el.play().catch(() => {});
+    }
+  }, [current]);
+
+  // Record where every video is, so leaving a frame does not lose the place.
+  useEffect(() => {
+    if (!presenting) return;
+    const tick = window.setInterval(() => {
+      const frame = stack.at(-1);
+      const root = frame
+        ? stageRef.current?.querySelector<HTMLElement>(`[data-frame-id="${frame}"]`)
+        : null;
+      if (!frame || !root) return;
+      const seen: Record<string, { time: number; paused: boolean }> = {};
+      for (const el of root.querySelectorAll<HTMLVideoElement>('video')) {
+        const id = el.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
+        if (id) seen[id] = { time: el.currentTime, paused: el.paused };
+      }
+      if (Object.keys(seen).length) videos.current[frame] = seen;
+    }, 250);
+    return () => window.clearInterval(tick);
+  }, [presenting, stack]);
 
   // Smart animate: the incoming frame has just laid out, so every layer that
   // exists in both frames is put back where it was and let go.
@@ -237,7 +418,7 @@ export function Present() {
           { transformOrigin: '0 0', transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` },
           { transformOrigin: '0 0', transform: 'none' },
         ],
-        { duration: move.transition.duration, easing: move.transition.easing, fill: 'both' },
+        { duration: move.transition.duration, easing: easingCss(move.transition), fill: 'both' },
       );
     }
   }, [move, doc]);
@@ -287,6 +468,31 @@ export function Present() {
   }, [presenting, exit, current, doc, go, overlays.length]);
 
   const variableNames = useVarNames();
+  const tokens = useTokens();
+  const collections = useCollections();
+
+  /**
+   * The custom properties one mode of one collection sets.
+   *
+   * "Set variable mode" is "set variable" for a whole collection at once, so it
+   * resolves to the same thing: declarations re-declared on the stage.
+   */
+  const modeVars = useCallback(
+    (collectionId: string, modeId: string): Record<string, string> => {
+      const byId = new Map(tokens.map((token) => [token.id, token]));
+      const base = defaultModes(collections);
+      const out: Record<string, string> = {};
+      for (const token of tokens) {
+        if ((token.collection ?? DEFAULT_COLLECTION_ID) !== collectionId) continue;
+        out[`--${token.name}`] = publish(
+          token,
+          resolveToken(token, { ...base, [collectionId]: modeId }, byId),
+        );
+      }
+      return out;
+    },
+    [tokens, collections],
+  );
   const flows = useMemo(() => flowsOn(doc, pageId), [doc, pageId]);
   const flowName = flows.find((flow) => flow.id === stack[0])?.name;
 
@@ -302,16 +508,32 @@ export function Present() {
     const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-node-id]');
     const hit = el?.dataset.nodeId ? hitInteraction(el.dataset.nodeId, doc, trigger) : null;
     if (hit) {
-      go(hit.interaction);
+      go(hit.interaction, hit.node);
       return true;
+    }
+    // A hyperlink is an interaction the layer carries without one being drawn:
+    // Figma follows it on click while playing, and so does this.
+    if (trigger === 'click') {
+      const link = linkAt(el?.dataset.nodeId, doc);
+      if (link) {
+        window.open(link, '_blank', 'noreferrer,noopener');
+        return true;
+      }
     }
     return false;
   };
 
   return (
+    <SwapContext.Provider value={swaps}>
     <div
       className="fig-present"
-      style={{ ...(tokenVars as React.CSSProperties), ...overrides } as React.CSSProperties}
+      style={
+        {
+          ...(tokenVars as React.CSSProperties),
+          ...overrides,
+          ...(background ? { background } : {}),
+        } as React.CSSProperties
+      }
     >
       <div className="fig-present-bar">
         <button type="button" className="fig-present-btn" title="Close  Esc" onClick={exit}>
@@ -335,12 +557,13 @@ export function Present() {
           className="fig-present-device"
           value={device}
           title="Device frame"
-          onChange={(event) => setDevice(event.target.value as typeof device)}
+          onChange={(event) => setDevice(event.target.value as PrototypeDevice)}
         >
-          <option value="none">No frame</option>
-          <option value="phone">Phone</option>
-          <option value="tablet">Tablet</option>
-          <option value="laptop">Laptop</option>
+          {DEVICES.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.id === 'none' ? 'No frame' : entry.label}
+            </option>
+          ))}
         </select>
 
         <button
@@ -370,15 +593,25 @@ export function Present() {
             if (Math.hypot(up.clientX - startX, up.clientY - startY) < 12) return;
             const el = target?.closest<HTMLElement>('[data-node-id]');
             const hit = el?.dataset.nodeId ? hitInteraction(el.dataset.nodeId, doc, 'drag') : null;
-            if (hit) go(hit.interaction);
+            if (hit) go(hit.interaction, hit.node);
           };
           window.addEventListener('pointerup', onUp);
 
+          fire(event, 'mouse-down');
           // a click that hits nothing flashes the hotspots, as Figma does
           if (!fire(event, 'press') && !fire(event, 'click')) {
             setFlash(true);
             after(() => setFlash(false), HOTSPOT_FLASH_MS);
           }
+        }}
+        onPointerUp={(event) => {
+          fire(event, 'mouse-up');
+        }}
+        onScrollCapture={(event) => {
+          const el = event.target as HTMLElement | null;
+          const id = el?.dataset?.nodeId;
+          if (!id || !current) return;
+          (scrolls.current[current] ??= {})[id] = [el!.scrollLeft, el!.scrollTop];
         }}
         onPointerOver={(event) => {
           fire(event, 'hover');
@@ -391,6 +624,11 @@ export function Present() {
         <div
           className={device === 'none' ? undefined : 'fig-device'}
           data-device={device === 'none' ? undefined : device}
+          style={
+            device === 'none'
+              ? undefined
+              : { padding: spec.bezel, borderRadius: spec.radius + spec.bezel }
+          }
         >
         <div
           className="fig-present-frame"
@@ -474,6 +712,7 @@ export function Present() {
         </div>
       </div>
     </div>
+    </SwapContext.Provider>
   );
 }
 
@@ -518,8 +757,11 @@ function Screen({
     const end = role === 'incoming' ? 0 : -1;
     const phase = entered ? end : start;
     if (moves) {
-      // move-in leaves the outgoing frame where it is; push and slide take it
-      const held = spec.type === 'move' && role === 'outgoing';
+      // move-in leaves the outgoing frame where it is and move-out leaves the
+      // incoming one; push and slide take both
+      const held =
+        (spec.type === 'move' && role === 'outgoing') ||
+        (spec.type === 'move-out' && role === 'incoming');
       transform = held ? 'translate(0, 0)' : `translate(${at.x * phase * 100}%, ${at.y * phase * 100}%)`;
     }
     if (spec.type === 'dissolve' || spec.type === 'smart-animate') {
@@ -534,6 +776,9 @@ function Screen({
       className="fig-present-screen"
       data-frame-id={id}
       data-role={role}
+      // an "out" transition is the outgoing frame leaving, so that is the one
+      // you have to be able to see
+      data-leaving={spec?.type === 'move-out' || spec?.type === 'slide-out' ? '' : undefined}
       style={{
         width: node.w,
         height: node.h,
@@ -541,7 +786,7 @@ function Screen({
         transformOrigin: '0 0',
         opacity,
         transition: animating
-          ? `transform ${spec.duration}ms ${spec.easing}, opacity ${spec.duration}ms ${spec.easing}`
+          ? `transform ${spec.duration}ms ${easingCss(spec)}, opacity ${spec.duration}ms ${easingCss(spec)}`
           : undefined,
         background: node.fill ?? '#fff',
       }}

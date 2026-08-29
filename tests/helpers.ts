@@ -80,6 +80,13 @@ declare global {
       };
       doc(): Doc;
       ui: { getState(): UIState };
+      easingCss(spec: {
+        easing: string;
+        duration: number;
+        bezier?: [number, number, number, number];
+        spring?: { stiffness: number; damping: number; mass: number };
+      }): string;
+      evaluate(condition: string, vars: Record<string, string>): boolean;
     };
   }
 }

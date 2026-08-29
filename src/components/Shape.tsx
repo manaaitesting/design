@@ -93,6 +93,7 @@ export function StrokePath({
         strokeDasharray={stroke.dash ?? undefined}
         strokeLinecap={stroke.cap}
         strokeLinejoin={stroke.join}
+        strokeMiterlimit={stroke.join === 'miter' ? stroke.miterLimit : undefined}
         vectorEffect="non-scaling-stroke"
         clipPath={stroke.align === 'inside' ? `url(#${clipId})` : undefined}
         mask={stroke.align === 'outside' ? `url(#${maskId})` : undefined}
@@ -239,6 +240,9 @@ function strokeOf(node: SceneNode): ShapeStroke | null {
     dash: border.dash ? `${border.dash} ${border.gap ?? border.dash}` : null,
     cap: border.cap ?? 'butt',
     join: border.join ?? 'miter',
+    // Figma states the limit as the angle a mitre gives up at; SVG wants the
+    // ratio it corresponds to
+    miterLimit: 1 / Math.sin((((border.miterAngle ?? 28.96) * Math.PI) / 180) / 2),
     align: border.position ?? 'center',
   };
 }

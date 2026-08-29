@@ -2,7 +2,18 @@
 
 import { create } from 'zustand';
 import type { SnapGuide } from '../document/snapping';
-import type { ExportFormat } from '../document/types';
+import type { ExportFormat, PrototypeDevice } from '../document/types';
+
+/** The view options that are simply on or off — pixel preview has three states. */
+export type BooleanView =
+  | 'pixelGrid'
+  | 'snapToPixel'
+  | 'layoutGuides'
+  | 'cursors'
+  | 'comments'
+  | 'annotations'
+  | 'outlines'
+  | 'labels';
 
 export type Tool =
   | 'move'
@@ -21,7 +32,10 @@ export type Tool =
   | 'comment'
   | 'image'
   | 'svg'
-  | 'shaders';
+  | 'shaders'
+  // Figma keeps these two beside Comment: one measures, one annotates
+  | 'measure'
+  | 'annotate';
 
 /**
  * The sub-tools of vector edit mode.
@@ -87,6 +101,17 @@ export interface UIState {
   expanded: Record<string, boolean>;
   toggleExpanded: (id: string) => void;
   setExpanded: (ids: string[], open: boolean) => void;
+  /** Figma's ⌥L: shut every open row at once. */
+  collapseLayers: () => void;
+
+  /**
+   * Figma's ⌘\: every panel out of the way, leaving the canvas.
+   *
+   * It is how you look at what you have made rather than at the tool, and it
+   * is the one piece of chrome state worth a shortcut of its own.
+   */
+  chrome: boolean;
+  toggleChrome: () => void;
 
   /**
    * The row a range-select measures from — the last one clicked without shift,
@@ -117,6 +142,9 @@ export interface UIState {
    */
   vectorEdit: string | null;
   setVectorEdit: (id: string | null) => void;
+  /** the text layer whose hyperlink editor ⌘K has just opened */
+  linkEditor: string | null;
+  setLinkEditor: (id: string | null) => void;
   anchorSelection: number[];
   setAnchorSelection: (indices: number[]) => void;
 
@@ -140,6 +168,44 @@ export interface UIState {
 
   /** rulers down the top and left edges, with the guides you drag off them */
   rulers: boolean;
+  /**
+   * Figma's view options, all of them "show this while I work" rather than
+   * anything the document remembers — which is why they live here and not on
+   * the page. Each one is a toggle in the zoom menu, with Figma's shortcut.
+   */
+  view: {
+    /** the 1px grid, drawn once a pixel is big enough to see */
+    pixelGrid: boolean;
+    /** round every drag and resize to whole pixels */
+    snapToPixel: boolean;
+    /** the layout grids frames carry */
+    layoutGuides: boolean;
+    /** everyone else's pointers */
+    cursors: boolean;
+    /** comment pins */
+    comments: boolean;
+    /** the handoff notes pinned to layers */
+    annotations: boolean;
+    /** draw the design as outlines only — Figma's ⌥⇧O */
+    outlines: boolean;
+    /**
+     * Figma's "Additional labels": the size written under every frame on the
+     * page, not only under the one you have selected. It is what you turn on
+     * while checking that a set of boards agree with each other.
+     */
+    labels: boolean;
+    /**
+     * Figma's pixel preview: the design as it *rasterises*, at 1× or 2×.
+     *
+     * Off is the normal canvas, which draws vectors at whatever the zoom is.
+     * The preview instead renders once at the chosen density and shows that
+     * image back with nearest-neighbour scaling — which is the only way to see
+     * what a hairline or a small glyph is really going to do to a pixel.
+     */
+    pixelPreview: 'off' | '1x' | '2x';
+  };
+  toggleView: (key: BooleanView) => void;
+  setPixelPreview: (mode: UIState['view']['pixelPreview']) => void;
   toggleRulers: () => void;
 
   /**
@@ -183,8 +249,9 @@ export interface UIState {
   present: (frame: string | null) => void;
 
   /** the bezel Present draws around the frame */
-  device: 'none' | 'phone' | 'tablet' | 'laptop';
-  setDevice: (device: 'none' | 'phone' | 'tablet' | 'laptop') => void;
+  /** the device the *viewer* has picked for this run; the page holds the default */
+  device: PrototypeDevice;
+  setDevice: (device: PrototypeDevice) => void;
 
   /** the page currently on the canvas */
   page: string;
@@ -369,7 +436,13 @@ function readPanels(): { leftWidth?: number; rightWidth?: number; pagesHeight?: 
 
 export const useUI = create<UIState>((set) => ({
   tool: 'move',
-  setTool: (tool) => set({ tool, prompt: tool === 'image' ? 'image' : tool === 'svg' ? 'svg' : null }),
+  setTool: (tool) =>
+    set({
+      tool,
+      prompt: tool === 'image' ? 'image' : tool === 'svg' ? 'svg' : null,
+      // the Measure tool is the ⌥ readout, held on until you pick another tool
+      measuring: tool === 'measure',
+    }),
 
   spacePan: false,
   setSpacePan: (spacePan) => set({ spacePan }),
@@ -403,6 +476,11 @@ export const useUI = create<UIState>((set) => ({
       return { expanded };
     }),
 
+  collapseLayers: () => set({ expanded: {} }),
+
+  chrome: true,
+  toggleChrome: () => set((state) => ({ chrome: !state.chrome })),
+
   anchor: null,
   setAnchor: (anchor) => set({ anchor }),
 
@@ -419,6 +497,9 @@ export const useUI = create<UIState>((set) => ({
   vectorEdit: null,
   setVectorEdit: (vectorEdit) =>
     set({ vectorEdit, anchorSelection: [], vectorTool: 'move', tool: 'move' }),
+
+  linkEditor: null,
+  setLinkEditor: (linkEditor) => set({ linkEditor }),
   anchorSelection: [],
   setAnchorSelection: (anchorSelection) => set({ anchorSelection }),
 
@@ -430,6 +511,22 @@ export const useUI = create<UIState>((set) => ({
 
   rulers: false,
   toggleRulers: () => set((state) => ({ rulers: !state.rulers })),
+
+  view: {
+    pixelGrid: true,
+    snapToPixel: true,
+    layoutGuides: true,
+    cursors: true,
+    comments: true,
+    annotations: true,
+    outlines: false,
+    labels: false,
+    pixelPreview: 'off',
+  },
+  toggleView: (key) =>
+    set((state) => ({ view: { ...state.view, [key]: !state.view[key] } })),
+  setPixelPreview: (pixelPreview) =>
+    set((state) => ({ view: { ...state.view, pixelPreview } })),
 
   measuring: false,
   setMeasuring: (measuring) => set({ measuring }),

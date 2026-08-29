@@ -13,6 +13,7 @@ const TITLE: Record<StyleSlot, string> = {
   stroke: 'Stroke, apply styles and variables',
   text: 'Text, apply styles',
   effect: 'Effects, apply styles',
+  grid: 'Layout grid, apply styles',
 };
 
 /**
@@ -34,15 +35,25 @@ export function StylePicker({
   onPickVariable?: (reference: string) => void;
 }) {
   const store = useStore();
-  const styles = useStyles(slot === 'stroke' ? 'paint' : slot === 'fill' ? 'paint' : slot);
+  const styles = useStyles(slot === 'fill' || slot === 'stroke' ? 'paint' : slot);
   const tokens = useTokens();
   const selection = useUI((s) => s.selection);
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
   const [draft, setDraft] = useState('');
+  // Figma puts a search at the top of this dialog, because a real file has more
+  // styles than fit in a popover
+  const [query, setQuery] = useState('');
   const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
 
   const worn = node.styles?.[slot];
+  const needle = query.trim().toLowerCase();
+  const shownStyles = needle
+    ? styles.filter((style) => style.name.toLowerCase().includes(needle))
+    : styles;
+  const shownTokens = needle
+    ? tokens.filter((token) => token.name.toLowerCase().includes(needle))
+    : tokens;
 
   return (
     <span ref={setAnchor} style={{ display: 'inline-flex' }}>
@@ -52,6 +63,11 @@ export function StylePicker({
       {open && (
         <FigPopover anchor={anchor} placement="beside" width={244} onClose={() => setOpen(false)}>
           <div style={{ padding: 4 }}>
+            {(styles.length > 0 || tokens.length > 0) && (
+              <div style={{ padding: 2 }}>
+                <FigText value={query} placeholder="Search" onChange={setQuery} live />
+              </div>
+            )}
             {naming ? (
               <div style={{ display: 'flex', gap: 6, padding: 2 }}>
                 <FigText
@@ -92,13 +108,13 @@ export function StylePicker({
             <div className="fig-label" style={{ padding: '0 6px' }}>
               Styles
             </div>
-            {styles.length === 0 ? (
+            {shownStyles.length === 0 ? (
               <div style={{ color: 'var(--fig-dim)', padding: '0 6px 6px' }}>
-                None yet — create one from a layer you like.
+                {needle ? 'No style by that name.' : 'None yet — create one from a layer you like.'}
               </div>
             ) : (
               <ul role="listbox" aria-label="Styles" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                {styles.map((style) => (
+                {shownStyles.map((style) => (
                   <li key={style.id}>
                     <FigMenuItem
                       label={style.name}
@@ -119,13 +135,13 @@ export function StylePicker({
                 <div className="fig-label" style={{ padding: '0 6px' }}>
                   Variables
                 </div>
-                {tokens.length === 0 ? (
+                {shownTokens.length === 0 ? (
                   <div style={{ color: 'var(--fig-dim)', padding: '0 6px 4px' }}>
-                    None yet — create them in the Theme tab.
+                    {needle ? 'No variable by that name.' : 'None yet — create them in the Theme tab.'}
                   </div>
                 ) : (
                   <ul role="listbox" aria-label="Variables" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                    {tokens.map((token) => (
+                    {shownTokens.map((token) => (
                       <li key={token.id}>
                         <FigMenuItem
                           label={token.name}
@@ -173,6 +189,12 @@ function StyleChit({ kind, value }: { kind: string; value: unknown }) {
       <span style={{ width: 16, textAlign: 'center', fontFamily: font?.family, fontWeight: font?.weight }}>
         A
       </span>
+    );
+  }
+  if (kind === 'grid') {
+    const guides = value as SceneNode['guides'];
+    return (
+      <span style={{ width: 16, textAlign: 'center', color: guides?.color ?? 'currentColor' }}>▦</span>
     );
   }
   return <span style={{ width: 16, textAlign: 'center' }}>◍</span>;

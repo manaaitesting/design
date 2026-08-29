@@ -24,6 +24,9 @@ export function Comments() {
   const pageId = useUI((s) => s.page);
   const viewport = useUI((s) => s.viewport);
   const tool = useUI((s) => s.tool);
+  // the view menu hides the pins; the comment tool still works, exactly as in
+  // Figma, because turning them off is about reading the design, not editing it
+  const shown = useUI((s) => s.view.comments);
   const comments = useComments(pageId);
   const store = useStore();
   const { identity } = useSession();
@@ -32,7 +35,8 @@ export function Comments() {
   const [showResolved, setShowResolved] = useState(false);
   const [draft, setDraft] = useState('');
 
-  const visible = showResolved ? comments : comments.filter((c) => !c.resolved);
+  const all = showResolved ? comments : comments.filter((c) => !c.resolved);
+  const visible = shown ? all : [];
   if (tool !== 'comment' && visible.length === 0) return null;
 
   return (

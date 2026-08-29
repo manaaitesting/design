@@ -13,8 +13,11 @@ import {
   topLevelOf,
   type Doc,
   type Interaction,
+  type Easing,
   type OverlaySpec,
+  type PrototypeDevice,
   type SceneNode,
+  type SpringSpec,
   type TransitionSpec,
 } from './types';
 
@@ -24,6 +27,96 @@ export const DEFAULT_TRANSITION: TransitionSpec = {
   duration: 300,
   easing: 'ease-out',
 };
+
+/**
+ * The seven curves, as cubic beziers.
+ *
+ * The first four are CSS keywords already; the "back" three overshoot, which is
+ * why their control points step outside the 0–1 box.
+ */
+const CURVES: Record<string, string> = {
+  linear: 'linear',
+  'ease-in': 'ease-in',
+  'ease-out': 'ease-out',
+  'ease-in-out': 'ease-in-out',
+  'ease-in-back': 'cubic-bezier(0.36, 0, 0.66, -0.56)',
+  'ease-out-back': 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+  'ease-in-out-back': 'cubic-bezier(0.68, -0.6, 0.32, 1.6)',
+};
+
+/** Figma's four named springs. */
+export const SPRINGS: Record<string, SpringSpec> = {
+  gentle: { stiffness: 100, damping: 15, mass: 1 },
+  quick: { stiffness: 300, damping: 20, mass: 1 },
+  bouncy: { stiffness: 600, damping: 15, mass: 1 },
+  slow: { stiffness: 80, damping: 20, mass: 1 },
+};
+
+export const DEFAULT_SPRING: SpringSpec = { stiffness: 200, damping: 20, mass: 1 };
+export const DEFAULT_BEZIER: [number, number, number, number] = [0.42, 0, 0.58, 1];
+
+/** Where a damped spring has got to, as a fraction of the distance, at time t. */
+function springAt(spring: SpringSpec, t: number): number {
+  const { stiffness: k, damping: c, mass: m } = spring;
+  const omega = Math.sqrt(k / Math.max(m, 0.0001));
+  const zeta = c / (2 * Math.sqrt(Math.max(k * m, 0.0001)));
+  if (zeta < 1) {
+    const wd = omega * Math.sqrt(1 - zeta * zeta);
+    return (
+      1 -
+      Math.exp(-zeta * omega * t) *
+        (Math.cos(wd * t) + ((zeta * omega) / wd) * Math.sin(wd * t))
+    );
+  }
+  // critically damped and beyond: no overshoot, just a slower arrival
+  return 1 - Math.exp(-omega * t) * (1 + omega * t);
+}
+
+const SAMPLES = 40;
+
+/**
+ * A spring as a CSS easing.
+ *
+ * CSS has no spring, so the simulation is sampled into `linear()` — a
+ * piecewise-linear curve through the positions the spring actually passes
+ * through. Enough samples and the difference is invisible, and unlike a bezier
+ * it can overshoot and settle the way a spring does.
+ */
+export function springCss(spring: SpringSpec, durationMs: number): string {
+  const seconds = Math.max(durationMs, 1) / 1000;
+  const stops: string[] = [];
+  for (let i = 0; i <= SAMPLES; i++) {
+    const t = (i / SAMPLES) * seconds;
+    const value = i === SAMPLES ? 1 : springAt(spring, t);
+    stops.push(Number(value.toFixed(4)).toString());
+  }
+  return `linear(${stops.join(', ')})`;
+}
+
+/** The spring a transition means, if it means one at all. */
+export function springOf(spec: {
+  easing: Easing;
+  spring?: SpringSpec;
+}): SpringSpec | null {
+  if (spec.easing === 'custom-spring') return spec.spring ?? DEFAULT_SPRING;
+  return SPRINGS[spec.easing] ?? null;
+}
+
+/** What to put in a CSS `transition-timing-function` for this transition. */
+export function easingCss(spec: {
+  easing: Easing;
+  duration: number;
+  bezier?: [number, number, number, number];
+  spring?: SpringSpec;
+}): string {
+  const spring = springOf(spec);
+  if (spring) return springCss(spring, spec.duration);
+  if (spec.easing === 'custom-bezier') {
+    const [x1, y1, x2, y2] = spec.bezier ?? DEFAULT_BEZIER;
+    return `cubic-bezier(${x1}, ${y1}, ${x2}, ${y2})`;
+  }
+  return CURVES[spec.easing] ?? 'ease';
+}
 
 /** A fresh interaction — Figma's default is a click that goes nowhere yet. */
 export function newInteraction(patch: Partial<Interaction> = {}): Interaction {
@@ -165,15 +258,69 @@ export function offsetInFrame(id: string, frameId: string, doc: Doc): { x: numbe
 
 /** A one-line summary of an interaction, as the panel and tooltips show it. */
 export const TRIGGER_LABEL: Record<Interaction['trigger'], string> = {
+  none: 'None',
   click: 'On click',
+  drag: 'On drag',
   hover: 'While hovering',
+  press: 'While pressing',
+  key: 'Key/Gamepad',
   'mouse-enter': 'Mouse enter',
   'mouse-leave': 'Mouse leave',
-  press: 'While pressing',
-  drag: 'On drag',
-  key: 'On key press',
+  'mouse-down': 'Mouse down',
+  'mouse-up': 'Mouse up',
   delay: 'After delay',
 };
+
+/**
+ * Figma renames three of the triggers on a touch device, because a tap is not
+ * a click and there is no mouse to press. The prototype device decides it.
+ */
+const TOUCH_LABEL: Partial<Record<Interaction['trigger'], string>> = {
+  click: 'On tap',
+  'mouse-down': 'Touch down',
+  'mouse-up': 'Touch up',
+};
+
+export function triggerLabel(trigger: Interaction['trigger'], touch: boolean): string {
+  return (touch && TOUCH_LABEL[trigger]) || TRIGGER_LABEL[trigger];
+}
+
+/**
+ * The short forms the Interactions list uses.
+ *
+ * The row has three narrow columns, so it drops the "On" and the "While" that
+ * the menu spells out — Figma writes "Tap", not "On tap", once you have chosen.
+ */
+const SHORT_TRIGGER: Record<Interaction['trigger'], string> = {
+  none: 'None',
+  click: 'Click',
+  drag: 'Drag',
+  hover: 'Hover',
+  press: 'Press',
+  key: 'Key',
+  'mouse-enter': 'Mouse enter',
+  'mouse-leave': 'Mouse leave',
+  'mouse-down': 'Mouse down',
+  'mouse-up': 'Mouse up',
+  delay: 'Delay',
+};
+
+const SHORT_TOUCH: Partial<Record<Interaction['trigger'], string>> = {
+  click: 'Tap',
+  'mouse-down': 'Touch down',
+  'mouse-up': 'Touch up',
+};
+
+export function shortTrigger(trigger: Interaction['trigger'], touch: boolean): string {
+  return (touch && SHORT_TOUCH[trigger]) || SHORT_TRIGGER[trigger];
+}
+
+const TOUCH_DEVICES = new Set<string>(['phone', 'phone-large', 'tablet', 'watch']);
+
+/** Whether the prototype is played with a finger rather than a pointer. */
+export function isTouch(device: PrototypeDevice | undefined): boolean {
+  return TOUCH_DEVICES.has(device ?? 'none');
+}
 
 export const ACTION_LABEL: Record<Interaction['action'], string> = {
   navigate: 'Navigate to',
@@ -184,6 +331,11 @@ export const ACTION_LABEL: Record<Interaction['action'], string> = {
   'swap-overlay': 'Swap overlay with',
   'scroll-to': 'Scroll to',
   'set-variable': 'Set variable',
+  'change-to': 'Change to',
+  'set-mode': 'Set variable mode',
+  conditional: 'Conditional',
+  'play-pause': 'Play/Pause animation',
+  'set-playhead': 'Set playhead',
   none: 'None',
 };
 
@@ -199,7 +351,10 @@ export function needsDestination(action: Interaction['action']): boolean {
     action === 'navigate' ||
     action === 'open-overlay' ||
     action === 'swap-overlay' ||
-    action === 'scroll-to'
+    action === 'scroll-to' ||
+    // "Change to" points at a variant rather than a frame, but it is still a
+    // destination as far as the panel is concerned
+    action === 'change-to'
   );
 }
 

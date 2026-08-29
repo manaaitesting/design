@@ -11,12 +11,56 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { closeAll, openFile, outline } from './mcp-doc';
-import { listAllFiles } from '../src/server/db';
+import { assetsIn, closeRenderer, decodeDataUrl, renderNode, svgOfShape, writeAsset } from './mcp-render';
+import {
+  codeConnectFor,
+  createFile,
+  getLibraryComponent,
+  listAllFiles,
+  listAllLibrary,
+  listAllUsers,
+  listLibraryForFile,
+  mapCodeConnect,
+  publishComponent,
+  unmapCodeConnect,
+} from '../src/server/db';
 import { toHtml, toJson, toReact } from '../src/export/toCode';
-import { ROOT_ID, type NodeType, type SceneNode } from '../src/document/types';
+import { newId } from '../src/lib/id';
+import {
+  ROOT_ID,
+  type InteractionAction,
+  type NodeType,
+  type SceneNode,
+} from '../src/document/types';
 import { DEFAULT_FONT } from '../src/document/defaults';
-import { effectsOf, newEffect, splitColor } from '../src/document/effects';
-import type { Effect, EffectType } from '../src/document/types';
+import {
+  EFFECT_LABEL,
+  EFFECT_MENU,
+  EFFECT_PRESETS,
+  effectsOf,
+  newEffect,
+  splitColor,
+} from '../src/document/effects';
+import { SHADERS, SHADER_BY_ID, SHADER_CATEGORIES, compose, defaultParams } from '../src/webgl/shaders';
+import {
+  DEFAULT_TRANSITION,
+  describe,
+  easingCss,
+  flowsOn,
+  interactionsOf,
+  newInteraction,
+} from '../src/document/prototype';
+import { defaultModes, publish, resolveToken } from '../src/document/variables';
+import type {
+  BooleanOp,
+  Doc,
+  Effect,
+  EffectType,
+  FlexSpec,
+  PropType,
+  StyleSlot,
+  TransitionSpec,
+} from '../src/document/types';
 
 /**
  * Paperlike's MCP server.
@@ -38,8 +82,19 @@ const server = new McpServer(
       'approximation of it.',
       '',
       'Start with `list_files`, then `get_metadata` to see the tree, then',
-      '`get_design_context` on the node you care about. Edits through',
-      '`create_node` / `update_node` appear live on every open canvas.',
+      '`get_design_context` on the node you care about. `get_screenshot` draws',
+      'that same node headlessly when you need to look at it, and',
+      '`download_assets` writes it and its images out to disk.',
+      '',
+      'Before generating anything, check `get_code_connect_map`: a node that is',
+      'already implemented should be reused, not rebuilt. `search_design_system`',
+      'and `get_variable_defs` say which components and variables the design is',
+      'made of, and `get_motion_context` says how it behaves.',
+      '',
+      'Edits go through `create_node` / `update_node` for single changes and',
+      '`edit_design` for everything else the canvas can do — grouping, auto',
+      'layout, booleans, components, instances, styles, prototyping. They appear',
+      'live on every open canvas.',
     ].join('\n'),
   },
 );
@@ -106,10 +161,23 @@ server.registerTool(
     const collections = store.listCollections();
     const fonts = store.listFonts();
 
+    // A node someone has already built should be used, not generated again —
+    // so the mapping arrives with the code rather than in a tool call the agent
+    // has to think to make.
+    const mapped = codeConnectFor(fileId, subtreeIds(nodeId, doc));
+    const preamble = mapped.length
+      ? `${mapped
+          .map(
+            (row) =>
+              `// ${doc[row.node_id]?.name ?? row.node_id} (${row.node_id}) is already built: ${row.component_name} in ${row.source} [${row.label}] — use it`,
+          )
+          .join('\n')}\n\n`
+      : '';
+
     if (format === 'json') return text(toJson(nodeId, doc));
-    if (format === 'html') return text(toHtml(nodeId, doc, tokens, collections, fonts));
+    if (format === 'html') return text(preamble + toHtml(nodeId, doc, tokens, collections, fonts));
     const { markup, css } = toReact(nodeId, doc, tokens, collections, fonts);
-    return text(`${markup}\n/* ── stylesheet ── */\n\n${css}`);
+    return text(`${preamble}${markup}\n/* ── stylesheet ── */\n\n${css}`);
   },
 );
 
@@ -156,10 +224,487 @@ server.registerTool(
   },
 );
 
+// ── Reading: pictures, assets and the design system ──────────────────────
+
+/** Everything the exporters need from a file, gathered once. */
+async function contextOf(fileId: string) {
+  const { store } = await openFile(fileId);
+  return {
+    store,
+    render: {
+      doc: store.getSnapshot(),
+      tokens: store.listTokens(),
+      collections: store.listCollections(),
+      fonts: store.listFonts(),
+    },
+  };
+}
+
+server.registerTool(
+  'get_screenshot',
+  {
+    title: 'Render a node',
+    description:
+      'A PNG of the node, rendered headlessly from the same HTML export the canvas produces — so it is the design, not an approximation. `maxDimension` caps the longer edge (default 1024); raise it to inspect detail, lower it for a thumbnail.',
+    inputSchema: {
+      fileId: z.string(),
+      nodeId: z.string(),
+      maxDimension: z.number().int().min(16).max(8192).default(1024),
+      contentsOnly: z
+        .boolean()
+        .default(false)
+        .describe('Drop the layer\'s own background, border and shadow; keep what is inside it.'),
+    },
+  },
+  async ({ fileId, nodeId, maxDimension, contentsOnly }) => {
+    const { render } = await contextOf(fileId);
+    if (!render.doc[nodeId]) return text(`No node "${nodeId}" in ${fileId}.`);
+    const shot = await renderNode(nodeId, render, { maxDimension, contentsOnly });
+    return {
+      content: [
+        { type: 'image' as const, data: shot.data.toString('base64'), mimeType: 'image/png' },
+        {
+          type: 'text' as const,
+          text: JSON.stringify({
+            width: shot.width,
+            height: shot.height,
+            original_width: shot.originalWidth,
+            original_height: shot.originalHeight,
+            scale: Number(shot.scale.toFixed(3)),
+          }),
+        },
+      ],
+    };
+  },
+);
+
+server.registerTool(
+  'download_assets',
+  {
+    title: 'Export a node and its assets',
+    description:
+      'Writes three things to disk for one node: a render of the node itself, the source images used as fills anywhere inside it, and an SVG for each vector layer. Returns the paths.',
+    inputSchema: {
+      fileId: z.string(),
+      nodeId: z.string(),
+      dir: z.string().optional().describe('Where to write. Defaults to .data/exports/<file>/<node>.'),
+      format: z.enum(['png', 'jpeg', 'svg']).default('png').describe('Format of the node render.'),
+      scale: z.number().min(0.1).max(4).default(1),
+    },
+  },
+  async ({ fileId, nodeId, dir, format, scale }) => {
+    const { render } = await contextOf(fileId);
+    const node = render.doc[nodeId];
+    if (!node) return text(`No node "${nodeId}" in ${fileId}.`);
+
+    const target = dir ?? path.resolve(process.cwd(), '.data', 'exports', fileId, nodeId);
+    const assets: string[] = [];
+
+    const shot = await renderNode(nodeId, render, { format, scale, maxDimension: 8192 });
+    const main = writeAsset(target, `${safeName(node.name)}.${format === 'jpeg' ? 'jpg' : format}`, shot.data);
+    assets.push(`export      ${main.file}  ${shot.width}×${shot.height}  ${main.bytes} bytes`);
+
+    const { images, vectors } = assetsIn(nodeId, render.doc);
+    for (const image of images) {
+      const decoded = image.src ? decodeDataUrl(image.src) : null;
+      if (!decoded) {
+        assets.push(`raw image   ${image.name} → ${image.src?.slice(0, 120)} (remote; not downloaded)`);
+        continue;
+      }
+      const written = writeAsset(target, `${safeName(image.name)}-${image.id}.${decoded.format}`, decoded.data);
+      assets.push(`raw image   ${written.file}  ${written.bytes} bytes`);
+    }
+    for (const vector of vectors) {
+      const svg = svgOfShape(vector);
+      if (!svg) continue;
+      const written = writeAsset(target, `${safeName(vector.name)}-${vector.id}.svg`, svg);
+      assets.push(`svg         ${written.file}  ${written.bytes} bytes`);
+    }
+
+    return text(assets.join('\n'));
+  },
+);
+
+/** Filenames come from layer names, which can be anything at all. */
+function safeName(name: string): string {
+  return (name || 'layer').trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'layer';
+}
+
+server.registerTool(
+  'get_variable_defs',
+  {
+    title: 'Get the variables a node uses',
+    description:
+      'The design variables referenced anywhere in a subtree, resolved to their values — the set a developer has to have on hand to build this node. Use get_variables for the whole file.',
+    inputSchema: {
+      fileId: z.string(),
+      nodeId: z.string().optional().describe('Defaults to the page.'),
+    },
+  },
+  async ({ fileId, nodeId }) => {
+    const { store } = await openFile(fileId);
+    const doc = store.getSnapshot();
+    const root = nodeId ?? ROOT_ID;
+    if (!doc[root]) return text(`No node "${root}" in ${fileId}.`);
+
+    const tokens = store.listTokens();
+    const byId = new Map(tokens.map((token) => [token.id, token]));
+    const modes = defaultModes(store.listCollections());
+    const used = new Set<string>();
+
+    const walk = (id: string): void => {
+      const node = doc[id];
+      if (!node) return;
+      for (const match of JSON.stringify(node).matchAll(/var\(--([a-zA-Z0-9_-]+)\)/g)) used.add(match[1]);
+      for (const tokenId of Object.values(node.vars ?? {})) {
+        const token = tokenId ? byId.get(tokenId) : null;
+        if (token) used.add(token.name);
+      }
+      for (const child of node.children) walk(child);
+    };
+    walk(root);
+
+    const hits = tokens.filter((token) => used.has(token.name));
+    if (!hits.length) return text(`Nothing under "${root}" references a variable.`);
+    return text(
+      hits
+        .map((token) => `${token.name}: ${publish(token, resolveToken(token, modes, byId))}   (${token.type})`)
+        .join('\n'),
+    );
+  },
+);
+
+server.registerTool(
+  'get_libraries',
+  {
+    title: 'Get the libraries in play',
+    description:
+      'Two lists: what this file publishes and what it has already imported, then everything else published in the workspace that it could import. Component ids from here go to create_instance in edit_design.',
+    inputSchema: { fileId: z.string() },
+  },
+  async ({ fileId }) => {
+    const { store } = await openFile(fileId);
+    const doc = store.getSnapshot();
+    const published = listLibraryForFile(fileId);
+    const mine = Object.values(doc).filter((node) => node.isComponent && !node.libraryId);
+    const imported = Object.values(doc).filter((node) => node.libraryId);
+    const elsewhere = listAllLibrary().filter((entry) => entry.file_id !== fileId);
+
+    const lines = [
+      `Main components in this file (${mine.length}):`,
+      ...mine.map((node) => `  ${node.name}  id=${node.id}${node.isComponentSet ? '  [variant set]' : ''}`),
+      '',
+      `Published from this file (${published.length}):`,
+      ...published.map((entry) => `  ${entry.name}  library=${entry.id}  v${entry.version}  node=${entry.node_id}`),
+      '',
+      `Imported into this file (${imported.length}):`,
+      ...imported.map((node) => `  ${node.name}  id=${node.id}  from=${node.libraryId}  v${node.libraryVersion ?? '?'}`),
+      '',
+      `Available to add (${elsewhere.length}):`,
+      ...elsewhere.map((entry) => `  ${entry.name}  library=${entry.id}  v${entry.version}  in "${entry.file_name}"`),
+    ];
+    return text(lines.join('\n'));
+  },
+);
+
+server.registerTool(
+  'search_design_system',
+  {
+    title: 'Search components, styles and variables',
+    description:
+      'Finds design system assets by name across the file and the shared library. One intent per query — search again rather than combining alternatives.',
+    inputSchema: {
+      query: z.string(),
+      fileId: z.string(),
+      includeComponents: z.boolean().default(true),
+      includeStyles: z.boolean().default(true),
+      includeVariables: z.boolean().default(true),
+    },
+  },
+  async ({ query, fileId, includeComponents, includeStyles, includeVariables }) => {
+    const { store } = await openFile(fileId);
+    const doc = store.getSnapshot();
+    const needle = query.trim().toLowerCase();
+    const hit = (value: string | undefined) => (value ?? '').toLowerCase().includes(needle);
+    const found: string[] = [];
+
+    if (includeComponents) {
+      for (const node of Object.values(doc)) {
+        if (!node.isComponent || !hit(node.name)) continue;
+        found.push(`component  ${node.name}  id=${node.id}  ${Math.round(node.w)}×${Math.round(node.h)}`);
+      }
+      for (const entry of listAllLibrary()) {
+        if (!hit(entry.name)) continue;
+        found.push(`library    ${entry.name}  library=${entry.id}  v${entry.version}  in "${entry.file_name}"`);
+      }
+    }
+    if (includeStyles) {
+      for (const style of store.listStyles()) {
+        if (!hit(style.name)) continue;
+        found.push(`style      ${style.name}  id=${style.id}  (${style.kind})`);
+      }
+    }
+    if (includeVariables) {
+      const tokens = store.listTokens();
+      const byId = new Map(tokens.map((token) => [token.id, token]));
+      const modes = defaultModes(store.listCollections());
+      for (const token of tokens) {
+        if (!hit(token.name) && !hit(token.description)) continue;
+        found.push(
+          `variable   ${token.name} = ${publish(token, resolveToken(token, modes, byId))}  id=${token.id}  (${token.type})`,
+        );
+      }
+    }
+
+    return text(found.length ? found.join('\n') : `Nothing matching "${query}".`);
+  },
+);
+
+const TRAVEL: Record<string, [number, number]> = {
+  left: [-100, 0],
+  right: [100, 0],
+  top: [0, -100],
+  bottom: [0, 100],
+};
+
+/** A transition, as the CSS that would play it. */
+function motionCss(transition: TransitionSpec, name: string): string {
+  const easing = easingCss(transition);
+  const ms = `${transition.duration}ms`;
+  if (transition.type === 'instant') return `/* ${name}: instant — no animation */`;
+  if (transition.type === 'dissolve') {
+    return `@keyframes ${name} { from { opacity: 0 } to { opacity: 1 } }\n.${name} { animation: ${name} ${ms} ${easing} both }`;
+  }
+  if (transition.type === 'smart-animate') {
+    return `.${name} { transition: all ${ms} ${easing} }`;
+  }
+  const [dx, dy] = TRAVEL[transition.direction] ?? TRAVEL.left;
+  // move-out and slide-out animate the frame leaving, so the keyframes run the
+  // other way: from where it sits to off the edge
+  const leaves = transition.type === 'move-out' || transition.type === 'slide-out';
+  const frame = leaves
+    ? `from { transform: none } to { transform: translate(${-dx}%, ${-dy}%) }`
+    : `from { transform: translate(${dx}%, ${dy}%) } to { transform: none }`;
+  return (
+    `@keyframes ${name} { ${frame} }\n` +
+    `.${name} { animation: ${name} ${ms} ${easing} both }`
+  );
+}
+
+server.registerTool(
+  'get_motion_context',
+  {
+    title: 'Get prototype behaviour',
+    description:
+      'What a node does when you use it: its interactions, their triggers and destinations, and the CSS that plays each transition. Call it after get_design_context to build a screen that behaves like the prototype.',
+    inputSchema: {
+      fileId: z.string(),
+      nodeId: z.string(),
+      recursive: z.boolean().default(true).describe('Include everything inside the node.'),
+    },
+  },
+  async ({ fileId, nodeId, recursive }) => {
+    const { store } = await openFile(fileId);
+    const doc = store.getSnapshot();
+    const node = doc[nodeId];
+    if (!node) return text(`No node "${nodeId}" in ${fileId}.`);
+
+    const targets: SceneNode[] = [];
+    const walk = (id: string): void => {
+      const current = doc[id];
+      if (!current) return;
+      if (interactionsOf(current).length || current.flowStart) targets.push(current);
+      if (recursive) for (const child of current.children) walk(child);
+    };
+    walk(nodeId);
+
+    if (!targets.length) return text(`Nothing under "${node.name}" is interactive.`);
+
+    const blocks = targets.map((target) => {
+      const header = target.flowStart
+        ? `${target.type} "${target.name}" (${target.id}) — flow start: ${target.flowStart}`
+        : `${target.type} "${target.name}" (${target.id})`;
+      const rows = interactionsOf(target).map((interaction, index) => {
+        const to = interaction.destination ? ` (${interaction.destination})` : '';
+        return [
+          `  ${describe(interaction, doc)}${to}`,
+          indent(motionCss(interaction.transition, `${cssName(target.name)}-${index + 1}`)),
+        ].join('\n');
+      });
+      return [header, ...rows].join('\n');
+    });
+
+    const flows = flowsOn(doc, pageOf(nodeId, doc));
+    const trailer = flows.length
+      ? `\nFlows on this page: ${flows.map((flow) => `${flow.name} → "${doc[flow.id]?.name ?? '?'}" (${flow.id})`).join(', ')}`
+      : '';
+    return text(blocks.join('\n\n') + trailer);
+  },
+);
+
+/** Which page a node is on — flows are a page-level thing. */
+function pageOf(id: string, doc: Doc): string {
+  let current = doc[id];
+  while (current?.parent && doc[current.parent]) current = doc[current.parent];
+  return current?.id ?? ROOT_ID;
+}
+
+const indent = (value: string) => value.split('\n').map((line) => `  ${line}`).join('\n');
+const cssName = (name: string) =>
+  (name || 'layer').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'layer';
+
+server.registerTool(
+  'list_shader_fills',
+  {
+    title: 'List shader fills',
+    description:
+      'The shader generators a layer can be filled with — they draw pixels from nothing, no input raster. Use the id with get_shader_fill for the source, or set `shader` on a node.',
+    inputSchema: {},
+  },
+  async () =>
+    text(
+      SHADER_CATEGORIES.map((category) =>
+        [
+          category,
+          ...SHADERS.filter((shader) => shader.category === category).map(
+            (shader) =>
+              `  ${shader.id}  "${shader.name}"  params: ${shader.params.map((p) => p.key).join(', ')}`,
+          ),
+        ].join('\n'),
+      ).join('\n\n'),
+    ),
+);
+
+server.registerTool(
+  'get_shader_fill',
+  {
+    title: 'Read a shader fill',
+    description:
+      'A shader fill\'s parameters and its compiled GLSL — the exact program the canvas and the HTML export both run.',
+    inputSchema: { id: z.string().describe('From list_shader_fills.') },
+  },
+  async ({ id }) => {
+    const def = SHADER_BY_ID.get(id);
+    if (!def) return text(`No shader "${id}". Try list_shader_fills.`);
+    const params = def.params
+      .map((param) => `  ${param.key}  ${param.type}  default ${param.value}${param.min !== undefined ? `  [${param.min}…${param.max}]` : ''}  "${param.label}"`)
+      .join('\n');
+    return text(`${def.name}  (${def.category})\n\nparams:\n${params}\n\n${compose(def)}`);
+  },
+);
+
+server.registerTool(
+  'list_shader_effects',
+  {
+    title: 'List effects',
+    description:
+      'What can go in a layer\'s Effects list, and the ready-made stacks. Every entry is valid as `type` in the `effects` array of create_node / update_node.',
+    inputSchema: {},
+  },
+  async () =>
+    text(
+      [
+        'Effect types:',
+        ...EFFECT_MENU.map((entry) => `  ${entry.type}  "${EFFECT_LABEL[entry.type]}"`),
+        '',
+        'Presets (each replaces the layer\'s effects):',
+        ...EFFECT_PRESETS.map((preset) => `  ${preset.name}`),
+        '',
+        'A `shader` effect takes any id from list_shader_fills and composites it over the layer.',
+      ].join('\n'),
+    ),
+);
+
+server.registerTool(
+  'get_shader_effect',
+  {
+    title: 'Read an effect',
+    description:
+      'The fields one effect type uses and what they default to, or the stack behind a preset — ready to paste into an `effects` array.',
+    inputSchema: { id: z.string().describe('An effect type, or a preset name from list_shader_effects.') },
+  },
+  async ({ id }) => {
+    const preset = EFFECT_PRESETS.find((entry) => entry.name.toLowerCase() === id.toLowerCase());
+    if (preset) return text(JSON.stringify(preset.effects(), null, 2));
+    const known = EFFECT_MENU.some((entry) => entry.type === id);
+    if (!known) return text(`No effect "${id}". Try list_shader_effects.`);
+    return text(
+      `${EFFECT_LABEL[id as EffectType]}\n\n${JSON.stringify(newEffect(id as EffectType), null, 2)}`,
+    );
+  },
+);
+
+server.registerTool(
+  'get_code_connect_map',
+  {
+    title: 'Get the code this design already has',
+    description:
+      'Which nodes are already implemented, and where. Read it before generating anything: a mapped node should be used, not rebuilt.',
+    inputSchema: {
+      fileId: z.string(),
+      nodeId: z.string().optional().describe('Limits the answer to this subtree. Defaults to the whole file.'),
+      label: z.string().optional().describe('Only mappings for this framework, e.g. "React".'),
+    },
+  },
+  async ({ fileId, nodeId, label }) => {
+    const { store } = await openFile(fileId);
+    const doc = store.getSnapshot();
+    const scope = nodeId ? subtreeIds(nodeId, doc) : undefined;
+    const rows = codeConnectFor(fileId, scope).filter((row) => !label || row.label === label);
+    if (!rows.length) return text('No Code Connect mappings yet. Add one with add_code_connect_map.');
+    return text(
+      rows
+        .map(
+          (row) =>
+            `${row.node_id}  "${doc[row.node_id]?.name ?? '(gone)'}"  →  ${row.component_name}  ${row.source}  [${row.label}]`,
+        )
+        .join('\n'),
+    );
+  },
+);
+
+function subtreeIds(rootId: string, doc: Doc): string[] {
+  const out: string[] = [];
+  const walk = (id: string): void => {
+    const node = doc[id];
+    if (!node) return;
+    out.push(id);
+    for (const child of node.children) walk(child);
+  };
+  walk(rootId);
+  return out;
+}
+
+server.registerTool(
+  'whoami',
+  {
+    title: 'Who this server is',
+    description:
+      'The identity the agent edits as, where the document sync and the file index live, and who else is in the workspace. Start here when a file will not open.',
+    inputSchema: {},
+  },
+  async () => {
+    const files = listAllFiles();
+    const people = listAllUsers();
+    return text(
+      [
+        `agent:   mcp-agent (editor)`,
+        `sync:    ${process.env.SYNC_URL ?? 'ws://localhost:1234'}`,
+        `data:    ${process.env.DATA_DIR ?? path.resolve(process.cwd(), '.data')}`,
+        `signing: ${process.env.AUTH_SECRET ? 'AUTH_SECRET is set' : 'AUTH_SECRET missing — no file will open'}`,
+        `files:   ${files.length}`,
+        'people:',
+        ...people.map((person) => `  ${person.name} <${person.email}>  id=${person.id}`),
+      ].join('\n'),
+    );
+  },
+);
+
 // ── Writing ──────────────────────────────────────────────────────────────
 
 const NODE_TYPES = [
   'frame',
+  'section',
   'text',
   'rect',
   'ellipse',
@@ -221,10 +766,55 @@ const PROPS = z
         color: z.string().optional(),
         style: z.enum(['solid', 'dashed', 'dotted']).optional(),
         position: z.enum(['inside', 'center', 'outside']).optional(),
+        dash: z.number().optional().describe('dash length, in px'),
+        gap: z.number().optional().describe('gap between dashes; defaults to the dash'),
+        cap: z.enum(['butt', 'round', 'square']).optional().describe('vector paths only'),
+        join: z.enum(['miter', 'round', 'bevel']).optional().describe('vector paths only'),
+        miterAngle: z
+          .number()
+          .optional()
+          .describe('degrees below which a mitred join bevels instead; Figma defaults to 28.96'),
+        sides: z
+          .array(z.number())
+          .length(4)
+          .nullable()
+          .optional()
+          .describe('individual stroke widths [top, right, bottom, left]; null means all four'),
       })
       .nullable()
       .optional()
       .describe('null removes the border. Partial patches merge.'),
+    link: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        'A hyperlink on the layer — Figma\'s ⌘K. It exports as an <a href> and a click follows it while presenting.',
+      ),
+    scroll: z
+      .enum(['none', 'vertical', 'horizontal', 'both'])
+      .optional()
+      .describe('Frames: how this one scrolls while the prototype plays.'),
+    scrollBehavior: z
+      .enum(['scrolls', 'fixed', 'sticky'])
+      .optional()
+      .describe('A layer inside a scrolling frame: goes with the content, stays put, or sticks.'),
+    exportBackground: z
+      .boolean()
+      .optional()
+      .describe('Figma\'s "Show in exports": false leaves this layer\'s own fill out of an export.'),
+    prototypeDevice: z
+      .enum(['none', 'phone', 'phone-large', 'tablet', 'laptop', 'desktop', 'watch'])
+      .optional()
+      .describe('Pages only: the device the prototype plays inside.'),
+    prototypeBackground: z
+      .string()
+      .optional()
+      .describe('Pages only: the colour behind the prototype while it plays.'),
+    thumbnailOf: z
+      .string()
+      .optional()
+      .describe('Pages only: which frame stands for the file in the browser.'),
     shadow: z
       .object({
         x: z.number().optional(),
@@ -278,6 +868,19 @@ const PROPS = z
       .nullable()
       .optional()
       .describe('The Effects list, in paint order. Replaces whatever the layer had.'),
+    shader: z
+      .object({
+        id: z.string().describe('A fill id from list_shader_fills, e.g. "mesh".'),
+        params: z
+          .record(z.string(), z.union([z.number(), z.string()]))
+          .optional()
+          .describe('Uniform values. Anything left out keeps the fill\'s own default.'),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        'The GPU fill this layer draws. Shader nodes need one — without it the layer paints nothing. Also valid on a frame, where it sits under the paints.',
+      ),
     visible: z.boolean().optional(),
     locked: z.boolean().optional(),
     clip: z.boolean().optional(),
@@ -331,6 +934,15 @@ const DEFAULT_SHADOW = { x: 0, y: 2, blur: 8, spread: 0, color: 'rgba(0,0,0,0.2)
 function withSpecs(props: Record<string, unknown>, node?: SceneNode): Partial<SceneNode> {
   const out = { ...props };
   if (out.font) out.font = { ...(node?.font ?? DEFAULT_FONT), ...(out.font as object) };
+
+  // A shader carries every uniform it has, not just the ones that were named:
+  // an unset uniform reads as 0 in the renderer, which is black, not "default".
+  if (out.shader) {
+    const spec = out.shader as { id: string; params?: Record<string, number | string> };
+    const def = SHADER_BY_ID.get(spec.id);
+    if (!def) throw new Error(`No shader fill "${spec.id}". Try list_shader_fills.`);
+    out.shader = { id: spec.id, params: { ...defaultParams(def), ...(spec.params ?? {}) } };
+  }
   if (out.border) out.border = { ...(node?.border ?? DEFAULT_BORDER), ...(out.border as object) };
   if (out.shadow) out.shadow = { ...(node?.shadow ?? DEFAULT_SHADOW), ...(out.shadow as object) };
 
@@ -433,6 +1045,691 @@ server.registerTool(
   },
 );
 
+// ── Writing: files, assets, the library, and everything the canvas can do ──
+
+server.registerTool(
+  'create_new_file',
+  {
+    title: 'Create a design file',
+    description:
+      'A new, empty file, owned by one of the workspace accounts. Returns the id to pass to every other tool, and the URL to open it at.',
+    inputSchema: {
+      name: z.string().describe('What the file is called.'),
+      ownerEmail: z
+        .string()
+        .optional()
+        .describe('Whose file it is. Defaults to the only account, when there is only one.'),
+    },
+  },
+  async ({ name, ownerEmail }) => {
+    const people = listAllUsers();
+    if (!people.length) return text('No accounts yet — sign up in the app first.');
+    const owner = ownerEmail
+      ? people.find((person) => person.email.toLowerCase() === ownerEmail.toLowerCase())
+      : people.length === 1
+        ? people[0]
+        : undefined;
+    if (!owner) {
+      return text(
+        ownerEmail
+          ? `No account for "${ownerEmail}".`
+          : `Several accounts here — say which one owns it: ${people.map((p) => p.email).join(', ')}`,
+      );
+    }
+
+    const id = newId();
+    createFile(id, name, owner.id);
+    // joining it is what gives the document a page to hang nodes off
+    await openFile(id);
+    await settle();
+    return text(`Created "${name}"  id=${id}  owner=${owner.email}\nOpen at /f/${id}`);
+  },
+);
+
+server.registerTool(
+  'upload_asset',
+  {
+    title: 'Put an image in a file',
+    description:
+      'Reads an image off disk and places it as an image layer, or swaps the picture on one that is already there. A remote URL is kept as a reference instead of being downloaded.',
+    inputSchema: {
+      fileId: z.string(),
+      source: z.string().describe('A local path, an http(s) URL, or a data: URL.'),
+      nodeId: z.string().optional().describe('Replace this layer\'s image instead of adding one.'),
+      parentId: z.string().optional().describe('Where the new layer goes. Defaults to the page.'),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      w: z.number().optional().describe('Defaults to the image\'s own width.'),
+      h: z.number().optional(),
+    },
+  },
+  async ({ fileId, source, nodeId, parentId, x, y, w, h }) => {
+    const { store } = await openFile(fileId);
+    let src = source;
+    let size: { width: number; height: number } | null = null;
+
+    if (!/^(https?|data):/.test(source)) {
+      const file = path.resolve(source);
+      if (!fs.existsSync(file)) return text(`No file at ${file}.`);
+      const bytes = fs.readFileSync(file);
+      const mime = MIME[path.extname(file).toLowerCase()];
+      if (!mime) return text(`${path.extname(file)} is not an image this canvas can show.`);
+      src = `data:${mime};base64,${bytes.toString('base64')}`;
+      size = imageSize(bytes);
+    } else if (source.startsWith('data:')) {
+      const decoded = decodeDataUrl(source);
+      if (decoded) size = imageSize(decoded.data);
+    }
+
+    if (nodeId) {
+      if (!store.getSnapshot()[nodeId]) return text(`No node "${nodeId}".`);
+      store.update(nodeId, { src, ...(w ? { w } : {}), ...(h ? { h } : {}) });
+      await settle();
+      return text(`Replaced the image on ${nodeId}.`);
+    }
+
+    const parent = parentId ?? ROOT_ID;
+    if (!store.getSnapshot()[parent]) return text(`No parent "${parent}".`);
+    const id = store.create('image', parent, {
+      src,
+      name: path.basename(source).slice(0, 60),
+      x: x ?? 0,
+      y: y ?? 0,
+      w: w ?? size?.width ?? 400,
+      h: h ?? size?.height ?? 300,
+    });
+    await settle();
+    return text(`Created image ${id}${size ? ` at ${size.width}×${size.height}` : ''} in ${parent}.`);
+  },
+);
+
+const MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.avif': 'image/avif',
+};
+
+/**
+ * How big a picture is, from its header.
+ *
+ * Enough of each format to read the dimensions, because an image dropped in at
+ * the wrong aspect ratio is worse than one dropped in at a default size.
+ */
+function imageSize(bytes: Buffer): { width: number; height: number } | null {
+  if (bytes.length > 24 && bytes.toString('ascii', 1, 4) === 'PNG') {
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+  if (bytes.length > 10 && bytes.toString('ascii', 0, 3) === 'GIF') {
+    return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
+  }
+  if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let at = 2;
+    while (at + 9 < bytes.length) {
+      if (bytes[at] !== 0xff) return null;
+      const marker = bytes[at + 1];
+      const length = bytes.readUInt16BE(at + 2);
+      // SOF0…SOF15, minus the four that are not frame headers
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { height: bytes.readUInt16BE(at + 5), width: bytes.readUInt16BE(at + 7) };
+      }
+      at += 2 + length;
+    }
+  }
+  return null;
+}
+
+server.registerTool(
+  'publish_component',
+  {
+    title: 'Publish a component to the library',
+    description:
+      'Shares a main component with every file in the workspace. Re-publishing bumps its version, and files that imported it are told there is a newer one.',
+    inputSchema: {
+      fileId: z.string(),
+      nodeId: z.string().describe('A main component — make one with edit_design create_component.'),
+      name: z.string().optional().describe('Defaults to the layer\'s name.'),
+    },
+  },
+  async ({ fileId, nodeId, name }) => {
+    const { store } = await openFile(fileId);
+    const node = store.getSnapshot()[nodeId];
+    if (!node) return text(`No node "${nodeId}".`);
+    if (!node.isComponent) return text(`"${node.name}" is not a main component yet.`);
+    const { id, version } = publishComponent(fileId, nodeId, name ?? node.name, store.serialize([nodeId]));
+    return text(`Published "${name ?? node.name}"  library=${id}  v${version}`);
+  },
+);
+
+server.registerTool(
+  'import_component',
+  {
+    title: 'Import a published component',
+    description:
+      'Brings a library component into a file as a main component that keeps following the original. Instance it with edit_design create_instance.',
+    inputSchema: {
+      fileId: z.string(),
+      libraryId: z.string().describe('From get_libraries or search_design_system.'),
+      parentId: z.string().optional().describe('Defaults to the page.'),
+      x: z.number().optional(),
+      y: z.number().optional(),
+    },
+  },
+  async ({ fileId, libraryId, parentId, x, y }) => {
+    const entry = getLibraryComponent(libraryId);
+    if (!entry) return text(`No library component "${libraryId}".`);
+    const { store } = await openFile(fileId);
+    const parent = parentId ?? ROOT_ID;
+    if (!store.getSnapshot()[parent]) return text(`No parent "${parent}".`);
+    const id = store.importComponent(
+      entry.payload,
+      parent,
+      { id: entry.id, version: entry.version },
+      { x: x ?? 0, y: y ?? 0 },
+    );
+    await settle();
+    return id ? text(`Imported "${entry.name}" as ${id}.`) : text('That payload had nothing in it.');
+  },
+);
+
+server.registerTool(
+  'add_code_connect_map',
+  {
+    title: 'Point a node at its component',
+    description:
+      'Records that this node is already built, and where. get_design_context and get_code_connect_map both surface it afterwards, so the next agent reuses the component instead of writing a second one.',
+    inputSchema: {
+      fileId: z.string(),
+      nodeId: z.string(),
+      componentName: z.string().describe('What the component is called in the code.'),
+      source: z.string().describe('Where it lives — a path or a URL.'),
+      label: z
+        .string()
+        .default('React')
+        .describe('The framework this mapping is for: React, Vue, Svelte, SwiftUI, …'),
+      remove: z.boolean().default(false).describe('Delete the mapping instead of adding it.'),
+    },
+  },
+  async ({ fileId, nodeId, componentName, source, label, remove }) => {
+    const { store } = await openFile(fileId);
+    const node = store.getSnapshot()[nodeId];
+    if (!node) return text(`No node "${nodeId}" in ${fileId}.`);
+    if (remove) {
+      const gone = unmapCodeConnect(fileId, nodeId, label);
+      return text(gone ? `Unmapped ${nodeId} [${label}].` : `Nothing mapped for ${nodeId} [${label}].`);
+    }
+    mapCodeConnect({
+      file_id: fileId,
+      node_id: nodeId,
+      label,
+      component_name: componentName,
+      source,
+    });
+    return text(`"${node.name}" (${nodeId}) → ${componentName} at ${source}  [${label}]`);
+  },
+);
+
+// ── Editing: the canvas's own verbs ──────────────────────────────────────
+
+const OPS = [
+  'create',
+  'update',
+  'delete',
+  'reparent',
+  'reorder',
+  'duplicate',
+  'group',
+  'ungroup',
+  'section',
+  'mask',
+  'boolean',
+  'flatten',
+  'outline_stroke',
+  'align',
+  'distribute',
+  'tidy',
+  'resize_to_fit',
+  'auto_layout',
+  'scale',
+  'create_component',
+  'create_instance',
+  'swap_instance',
+  'detach_instance',
+  'reset_instance',
+  'add_component_prop',
+  'set_prop_value',
+  'combine_variants',
+  'add_interaction',
+  'set_flow_start',
+  'create_style',
+  'apply_style',
+  'add_page',
+] as const;
+
+const OP = z.object({
+  op: z.enum(OPS),
+  nodeId: z.string().optional().describe('The one node the op acts on.'),
+  nodeIds: z.array(z.string()).optional().describe('The several nodes the op acts on.'),
+  parentId: z.string().optional(),
+  index: z.number().int().optional().describe('reparent: where among its new siblings.'),
+  type: z.enum(NODE_TYPES).optional().describe('create'),
+  props: PROPS.optional().describe('create / update'),
+  name: z.string().optional().describe('add_page · create_style · set_flow_start · add_component_prop'),
+  where: z.enum(['front', 'back']).optional().describe('reorder'),
+  edge: z
+    .enum(['left', 'hcenter', 'right', 'top', 'vcenter', 'bottom'])
+    .optional()
+    .describe('align'),
+  axis: z.enum(['horizontal', 'vertical']).optional().describe('distribute'),
+  boolean: z.enum(['union', 'subtract', 'intersect', 'exclude']).optional().describe('boolean'),
+  on: z.boolean().optional().describe('auto_layout: on or off'),
+  factor: z.number().optional().describe('scale'),
+  offset: z.number().optional().describe('duplicate: how far the copy sits from the original'),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  mainId: z.string().optional().describe('create_instance · swap_instance'),
+  instanceId: z.string().optional().describe('set_prop_value'),
+  propId: z.string().optional().describe('set_prop_value'),
+  propType: z.enum(['boolean', 'text', 'instance', 'variant']).optional().describe('add_component_prop'),
+  options: z.array(z.string()).optional().describe('add_component_prop: the variant values'),
+  value: z.string().optional().describe('add_component_prop default · set_prop_value'),
+  trigger: z
+    .enum([
+      'none',
+      'click',
+      'drag',
+      'hover',
+      'press',
+      'key',
+      'mouse-enter',
+      'mouse-leave',
+      'mouse-down',
+      'mouse-up',
+      'delay',
+    ])
+    .optional()
+    .describe('add_interaction'),
+  action: z
+    .enum([
+      'navigate',
+      'change-to',
+      'back',
+      'url',
+      'open-overlay',
+      'close-overlay',
+      'swap-overlay',
+      'scroll-to',
+      'set-variable',
+      'set-mode',
+      'none',
+    ])
+    .optional()
+    .describe('add_interaction'),
+  destination: z.string().optional().describe('add_interaction: the frame to go to'),
+  branches: z
+    .array(
+      z.object({
+        condition: z
+          .string()
+          .optional()
+          .describe('omit on the last branch to make it the else'),
+        actions: z.array(
+          z.object({
+            action: z.string(),
+            destination: z.string().optional(),
+            url: z.string().optional(),
+            variable: z.string().optional(),
+            value: z.string().optional(),
+          }),
+        ),
+      }),
+    )
+    .optional()
+    .describe('add_interaction: the branches of a conditional, in order'),
+  animation: z
+    .string()
+    .optional()
+    .describe('add_interaction: the layer whose video play-pause / set-playhead acts on'),
+  behavior: z
+    .enum(['toggle', 'play', 'pause'])
+    .optional()
+    .describe('add_interaction: what play-pause does'),
+  timestamp: z
+    .number()
+    .optional()
+    .describe('add_interaction: seconds, for set-playhead'),
+  resetVideo: z
+    .boolean()
+    .optional()
+    .describe('add_interaction: arrive with the destination\'s videos back at the start'),
+  resetScroll: z
+    .boolean()
+    .optional()
+    .describe('add_interaction: arrive at the top rather than where you had scrolled to'),
+  resetComponentState: z
+    .boolean()
+    .optional()
+    .describe('add_interaction: arrive with the destination\'s instances back on their design-time variant'),
+  url: z.string().optional().describe('add_interaction: the address to open'),
+  transition: z
+    .object({
+      type: z
+        .enum([
+          'instant',
+          'dissolve',
+          'smart-animate',
+          'move',
+          'move-out',
+          'push',
+          'slide',
+          'slide-out',
+        ])
+        .optional(),
+      direction: z.enum(['left', 'right', 'top', 'bottom']).optional(),
+      duration: z.number().optional().describe('ms'),
+      easing: z
+        .enum([
+          'linear',
+          'ease-in',
+          'ease-out',
+          'ease-in-out',
+          'ease-in-back',
+          'ease-out-back',
+          'ease-in-out-back',
+          'custom-bezier',
+          'gentle',
+          'quick',
+          'bouncy',
+          'slow',
+          'custom-spring',
+        ])
+        .optional(),
+      bezier: z
+        .tuple([z.number(), z.number(), z.number(), z.number()])
+        .optional()
+        .describe('control points, when easing is custom-bezier'),
+      spring: z
+        .object({ stiffness: z.number(), damping: z.number(), mass: z.number() })
+        .optional()
+        .describe('parameters, when easing is custom-spring'),
+    })
+    .optional()
+    .describe('add_interaction'),
+  slot: z.enum(['fill', 'stroke', 'text', 'effect']).optional().describe('create_style · apply_style'),
+  styleId: z.string().optional().describe('apply_style'),
+  flex: z
+    .object({
+      direction: z.enum(['row', 'column']).optional(),
+      gap: z.number().optional(),
+      padding: z.array(z.number()).length(4).optional(),
+      align: z.enum(['start', 'center', 'end', 'stretch']).optional(),
+      justify: z.enum(['start', 'center', 'end', 'between']).optional(),
+      wrap: z.boolean().optional(),
+    })
+    .optional()
+    .describe('auto_layout: what to start the layout at'),
+});
+
+server.registerTool(
+  'edit_design',
+  {
+    title: 'Edit the design',
+    description: [
+      'Everything the canvas can do to a document, as a list of operations run in order.',
+      'Each op names the nodes it acts on and carries only the fields it needs:',
+      '',
+      '  create           type, parentId, props        ungroup          nodeIds',
+      '  update           nodeId, props                section          nodeIds',
+      '  delete           nodeIds                      mask             nodeIds',
+      '  reparent         nodeId, parentId, index      boolean          nodeIds, boolean',
+      '  reorder          nodeIds, where               flatten          nodeIds',
+      '  duplicate        nodeIds, offset              outline_stroke   nodeIds',
+      '  group            nodeIds                      scale            nodeIds, factor',
+      '  align            nodeIds, edge                tidy             nodeIds',
+      '  distribute       nodeIds, axis                resize_to_fit    nodeIds',
+      '  auto_layout      nodeId, on, flex             add_page         name',
+      '',
+      '  create_component nodeId                       add_component_prop mainId, name, propType, value, options',
+      '  create_instance  mainId, parentId, x, y       set_prop_value     instanceId, propId, value',
+      '  swap_instance    nodeId, mainId               combine_variants   nodeIds',
+      '  detach_instance  nodeId                       create_style       nodeId, slot, name',
+      '  reset_instance   nodeId                       apply_style        nodeIds, styleId, slot',
+      '',
+      '  add_interaction  nodeId, trigger, action, destination, url, transition',
+      '  set_flow_start   nodeId, name (null clears it)',
+      '',
+      'Every change lands on the live document, so open canvases show it immediately.',
+    ].join('\n'),
+    inputSchema: { fileId: z.string(), ops: z.array(OP).min(1) },
+  },
+  async ({ fileId, ops }) => {
+    const { store } = await openFile(fileId);
+    const log: string[] = [];
+    const has = (id?: string) => Boolean(id && store.getSnapshot()[id]);
+
+    for (const [index, op] of ops.entries()) {
+      const step = `${index + 1}. ${op.op}`;
+      const many = op.nodeIds ?? (op.nodeId ? [op.nodeId] : []);
+      const missing = many.filter((id) => !has(id));
+      if (missing.length) {
+        log.push(`${step}: no node ${missing.join(', ')} — skipped`);
+        continue;
+      }
+
+      switch (op.op) {
+        case 'create': {
+          const parent = op.parentId ?? ROOT_ID;
+          if (!has(parent)) { log.push(`${step}: no parent "${parent}" — skipped`); break; }
+          const id = store.create((op.type ?? 'frame') as NodeType, parent, withSpecs(op.props ?? {}));
+          log.push(`${step}: created ${op.type ?? 'frame'} ${id}`);
+          break;
+        }
+        case 'update': {
+          if (!op.nodeId || !op.props) { log.push(`${step}: needs nodeId and props`); break; }
+          store.update(op.nodeId, withSpecs(op.props, store.getSnapshot()[op.nodeId]));
+          log.push(`${step}: updated ${op.nodeId}`);
+          break;
+        }
+        case 'delete':
+          store.remove(many.filter((id) => id !== ROOT_ID));
+          log.push(`${step}: removed ${many.length} layer(s)`);
+          break;
+        case 'reparent': {
+          if (!op.nodeId || !has(op.parentId)) { log.push(`${step}: needs nodeId and a real parentId`); break; }
+          store.reparent(op.nodeId, op.parentId!, op.index);
+          log.push(`${step}: moved ${op.nodeId} into ${op.parentId}`);
+          break;
+        }
+        case 'reorder':
+          store.reorder(many, op.where ?? 'front');
+          log.push(`${step}: brought ${many.length} to ${op.where ?? 'front'}`);
+          break;
+        case 'duplicate': {
+          const made = store.duplicate(many, op.offset ?? 20);
+          log.push(`${step}: ${made.join(', ') || 'nothing to copy'}`);
+          break;
+        }
+        case 'group': {
+          const id = store.group(many);
+          log.push(`${step}: ${id ?? 'needs two or more layers with the same parent'}`);
+          break;
+        }
+        case 'ungroup': {
+          const freed = store.ungroup(many);
+          log.push(`${step}: released ${freed.length} layer(s)`);
+          break;
+        }
+        case 'section': {
+          const id = store.wrapInSection(many);
+          log.push(`${step}: ${id ?? 'nothing to wrap'}`);
+          break;
+        }
+        case 'mask':
+          store.toggleMask(many);
+          log.push(`${step}: toggled the mask on ${many[0]}`);
+          break;
+        case 'boolean': {
+          const id = store.booleanGroup(many, (op.boolean ?? 'union') as BooleanOp);
+          log.push(`${step}: ${id ?? 'needs two or more shapes'}`);
+          break;
+        }
+        case 'flatten': {
+          const id = store.flatten(many);
+          log.push(`${step}: ${id ?? 'nothing to flatten'}`);
+          break;
+        }
+        case 'outline_stroke': {
+          const made = store.outlineStroke(many);
+          log.push(`${step}: ${made.length} outline(s)`);
+          break;
+        }
+        case 'align':
+          store.align(many, op.edge ?? 'left');
+          log.push(`${step}: ${op.edge ?? 'left'}`);
+          break;
+        case 'distribute':
+          store.distribute(many, op.axis ?? 'horizontal');
+          log.push(`${step}: ${op.axis ?? 'horizontal'}`);
+          break;
+        case 'tidy':
+          store.tidyUp(many);
+          log.push(`${step}: tidied ${many.length}`);
+          break;
+        case 'resize_to_fit':
+          store.resizeToFit(many);
+          log.push(`${step}: resized ${many.length} to fit`);
+          break;
+        case 'auto_layout': {
+          if (!op.nodeId) { log.push(`${step}: needs nodeId`); break; }
+          store.setAutoLayout(op.nodeId, op.on ?? true, { seed: op.flex as Partial<FlexSpec> });
+          log.push(`${step}: ${op.on === false ? 'off' : 'on'} for ${op.nodeId}`);
+          break;
+        }
+        case 'scale':
+          store.scaleNodes(many, op.factor ?? 1);
+          log.push(`${step}: ×${op.factor ?? 1}`);
+          break;
+        case 'create_component': {
+          if (!op.nodeId) { log.push(`${step}: needs nodeId`); break; }
+          log.push(`${step}: ${store.createComponent(op.nodeId) ? `${op.nodeId} is now a main component` : 'that layer cannot be a component'}`);
+          break;
+        }
+        case 'create_instance': {
+          if (!has(op.mainId)) { log.push(`${step}: no main component "${op.mainId}"`); break; }
+          const parent = op.parentId ?? ROOT_ID;
+          const id = store.createInstance(op.mainId!, parent, { x: op.x ?? 0, y: op.y ?? 0 });
+          log.push(`${step}: ${id ?? 'that node is not a main component'}`);
+          break;
+        }
+        case 'swap_instance': {
+          if (!op.nodeId || !has(op.mainId)) { log.push(`${step}: needs nodeId and mainId`); break; }
+          log.push(`${step}: ${store.swapInstance(op.nodeId, op.mainId!) ?? 'could not swap'}`);
+          break;
+        }
+        case 'detach_instance':
+          store.detachInstance(op.nodeId!);
+          log.push(`${step}: detached ${op.nodeId}`);
+          break;
+        case 'reset_instance':
+          store.resetInstance(op.nodeId!);
+          log.push(`${step}: reset ${op.nodeId}`);
+          break;
+        case 'add_component_prop': {
+          if (!has(op.mainId) || !op.name) { log.push(`${step}: needs mainId and name`); break; }
+          const id = store.addComponentProp(op.mainId!, {
+            name: op.name,
+            type: (op.propType ?? 'text') as PropType,
+            value: op.value ?? '',
+            ...(op.options ? { options: op.options } : {}),
+          });
+          log.push(`${step}: ${id ? `prop ${id}` : 'that node is not a component'}`);
+          break;
+        }
+        case 'set_prop_value': {
+          if (!has(op.instanceId) || !op.propId) { log.push(`${step}: needs instanceId and propId`); break; }
+          const id = store.setPropValue(op.instanceId!, op.propId, op.value ?? '');
+          log.push(`${step}: ${id ?? 'nothing changed'}`);
+          break;
+        }
+        case 'combine_variants': {
+          const id = store.combineAsVariants(many);
+          log.push(`${step}: ${id ?? 'needs two or more components'}`);
+          break;
+        }
+        case 'add_interaction': {
+          if (!op.nodeId) { log.push(`${step}: needs nodeId`); break; }
+          const id = store.addInteraction(op.nodeId, {
+            ...(op.trigger ? { trigger: op.trigger } : {}),
+            ...(op.action ? { action: op.action } : {}),
+            ...(op.destination ? { destination: op.destination } : {}),
+            ...(op.url ? { url: op.url } : {}),
+            ...(op.transition
+              ? { transition: { ...DEFAULT_TRANSITION, ...op.transition } }
+              : {}),
+            ...(op.branches
+              ? {
+                  branches: op.branches.map((branch) => ({
+                    id: newId(),
+                    ...(branch.condition !== undefined ? { condition: branch.condition } : {}),
+                    actions: branch.actions.map((step) =>
+                      newInteraction({
+                        trigger: 'none',
+                        action: step.action as InteractionAction,
+                        ...(step.destination ? { destination: step.destination } : {}),
+                        ...(step.url ? { url: step.url } : {}),
+                        ...(step.variable ? { variable: step.variable } : {}),
+                        ...(step.value !== undefined ? { value: step.value } : {}),
+                      }),
+                    ),
+                  })),
+                }
+              : {}),
+            ...(op.animation ? { animation: op.animation } : {}),
+            ...(op.behavior ? { behavior: op.behavior } : {}),
+            ...(op.timestamp !== undefined ? { timestamp: op.timestamp } : {}),
+            ...(op.resetVideo !== undefined ? { resetVideo: op.resetVideo } : {}),
+            ...(op.resetScroll !== undefined ? { resetScroll: op.resetScroll } : {}),
+            ...(op.resetComponentState !== undefined
+              ? { resetComponentState: op.resetComponentState }
+              : {}),
+          });
+          log.push(`${step}: ${id ?? 'no such layer'}`);
+          break;
+        }
+        case 'set_flow_start':
+          store.setFlowStart(op.nodeId!, op.name ?? null);
+          log.push(`${step}: ${op.name ? `"${op.name}"` : 'cleared'}`);
+          break;
+        case 'create_style': {
+          if (!op.nodeId || !op.name) { log.push(`${step}: needs nodeId, slot and name`); break; }
+          const id = store.createStyleFrom(op.nodeId, (op.slot ?? 'fill') as StyleSlot, op.name);
+          log.push(`${step}: ${id ?? 'that layer has nothing in that slot'}`);
+          break;
+        }
+        case 'apply_style': {
+          if (!op.styleId) { log.push(`${step}: needs styleId`); break; }
+          store.applyStyle(many, op.styleId, op.slot as StyleSlot | undefined);
+          log.push(`${step}: applied to ${many.length}`);
+          break;
+        }
+        case 'add_page': {
+          const id = store.addPage(op.name);
+          log.push(`${step}: page ${id}`);
+          break;
+        }
+        default:
+          log.push(`${step}: not a known operation`);
+      }
+    }
+
+    await settle();
+    return text(log.join('\n'));
+  },
+);
+
 /** Gives the CRDT a moment to flush to the sync server before we reply. */
 function settle(ms = 120): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -441,7 +1738,7 @@ function settle(ms = 120): Promise<void> {
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     closeAll();
-    process.exit(0);
+    void closeRenderer().finally(() => process.exit(0));
   });
 }
 

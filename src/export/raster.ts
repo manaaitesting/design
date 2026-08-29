@@ -116,6 +116,10 @@ export function nodeToSvg(
     clone.style.border = 'none';
     clone.style.boxShadow = 'none';
     clone.style.borderRadius = '0';
+  } else if (source.dataset.exportBackground === 'off') {
+    // "Show in exports" turned off: the fill goes, the frame itself stays —
+    // its stroke, its radius and its shadow are still part of the picture.
+    clone.style.background = 'none';
   }
 
   const declarations = Object.entries(vars)
@@ -126,6 +130,50 @@ export function nodeToSvg(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
     `<foreignObject x="0" y="0" width="${width}" height="${height}">` +
     `<div xmlns="http://www.w3.org/1999/xhtml" style="${declarations}">` +
+    new XMLSerializer().serializeToString(clone) +
+    `</div></foreignObject></svg>`;
+
+  return { svg, width, height };
+}
+
+/**
+ * The whole page, serialised at world scale.
+ *
+ * Pixel preview needs the design as it *rasterises*, not as the browser draws
+ * it at the current zoom — so the stage is lifted out of its transform and
+ * measured in world units, exactly as an export would.
+ */
+export function stageToSvg(
+  bounds: { x: number; y: number; w: number; h: number },
+  vars: Record<string, string> = {},
+): Serialised | null {
+  const stage = document.querySelector<HTMLElement>('[data-canvas-root] > div');
+  if (!stage) return null;
+
+  const width = Math.max(1, Math.round(bounds.w));
+  const height = Math.max(1, Math.round(bounds.h));
+
+  const clone = stage.cloneNode(true) as HTMLElement;
+  freezeCanvases(stage, clone);
+  inlineInherited(stage, clone);
+  // the stage carries the viewport; the raster is in world coordinates, so the
+  // transform becomes a plain shift that puts the content's corner at 0,0
+  clone.style.position = 'absolute';
+  clone.style.inset = '0';
+  clone.style.transform = `translate(${-bounds.x}px, ${-bounds.y}px)`;
+  clone.style.transformOrigin = '0 0';
+  // the live stage is hidden while its raster stands in for it, and a clone
+  // taken then inherits that — which is a picture of nothing
+  clone.style.visibility = 'visible';
+
+  const declarations = Object.entries(vars)
+    .map(([name, value]) => `${name}:${value}`)
+    .join(';');
+
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<foreignObject x="0" y="0" width="${width}" height="${height}">` +
+    `<div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${width}px;height:${height}px;${declarations}">` +
     new XMLSerializer().serializeToString(clone) +
     `</div></foreignObject></svg>`;
 

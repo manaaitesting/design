@@ -75,6 +75,8 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const doc = useDoc();
   const store = useStore();
   const selection = useUI((s) => s.selection);
+  const page = useUI((s) => s.page);
+  const labels = useUI((s) => s.view.labels);
   const hover = useUI((s) => s.hover);
   const viewport = useUI((s) => s.viewport);
   const editing = useUI((s) => s.editing);
@@ -104,6 +106,9 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     ...remoteIds,
     ...sections,
     ...slices,
+    // "Additional labels" writes a size under every frame, so every frame has
+    // to be measured — not only the ones the pointer is on
+    ...(labels ? (doc[page]?.children ?? []) : []),
   ])];
   const rects = useRects(tracked, containerRef);
 
@@ -459,6 +464,20 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           </button>
         );
       })}
+
+      {/* Figma's "Additional labels": every frame's size, not only the one you
+          are holding — the fastest way to see that a set of boards disagree */}
+      {labels &&
+        (doc[page]?.children ?? []).map((id) => {
+          const rect = rects[id];
+          const node = doc[id];
+          if (!rect || !node || !node.visible || selection.includes(id)) return null;
+          return (
+            <span key={`size-${id}`} className="fig-size-label" style={{ left: rect.x, top: rect.y + rect.h + 4 }}>
+              {Math.round(rect.w / viewport.zoom)} × {Math.round(rect.h / viewport.zoom)}
+            </span>
+          );
+        })}
 
       {/* selection */}
       {selection.map((id) => {

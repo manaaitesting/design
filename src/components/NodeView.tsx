@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useRef } from 'react';
+import { createContext, memo, useContext, useEffect, useRef } from 'react';
 import { nodeStyle, shaderSurface } from '../document/css';
 import { effectLayers, effectsOf } from '../document/effects';
 import { ShaderSurface } from './ShaderSurface';
@@ -9,11 +9,20 @@ import { BooleanShape, PathShape } from './Shape';
 import { PaintLayers } from './PaintLayers';
 import { useDefaultModes, useDoc, useStore, useTokens, useVarNames } from './Session';
 import { useUI } from '../state/ui';
+
+/**
+ * Instances a running prototype has swapped — Figma's "Change to".
+ *
+ * The document is not touched: a run is a rehearsal. So the substitution lives
+ * here, and the instance keeps its own box while drawing the other variant's
+ * content, which is what changing a variant looks like.
+ */
+export const SwapContext = createContext<Record<string, string>>({});
 import { paintsWithPath } from '../document/geometry';
 import { maskStyles } from '../document/mask';
 import { modeVars } from '../document/variables';
 import { ensureFont } from '../lib/fonts';
-import { isPlain, plainText, runLines, runStyle, runsOf, type TextRun } from '../document/text';
+import { isPlain, listBoxStyle, plainText, runLines, runStyle, runsOf, type TextRun } from '../document/text';
 import { TextEditor } from './TextEditor';
 import type { CSSProperties } from 'react';
 import type { SceneNode } from '../document/types';
@@ -87,7 +96,7 @@ function TextBody({ node }: { node: SceneNode }) {
 
   const Tag = list === 'number' ? 'ol' : 'ul';
   return (
-    <Tag style={{ margin: 0, paddingLeft: '1.4em' }}>
+    <Tag style={listBoxStyle(font)}>
       {lines.map((line, index) => (
         <li key={index} style={index ? { marginTop: spacing } : undefined}>
           {body(line)}
@@ -110,6 +119,10 @@ export const NodeView = memo(function NodeView({
   const varNames = useVarNames();
   const tokens = useTokens();
   const baseModes = useDefaultModes();
+  const swaps = useContext(SwapContext);
+  // while a prototype is playing, this instance may be standing in for another
+  // variant; its own box stays, the other's content is drawn inside it
+  const swappedTo = swaps[id] ? doc[swaps[id]] : null;
   const editing = useUI((s) => s.editing);
   const setEditing = useUI((s) => s.setEditing);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -225,6 +238,9 @@ export const NodeView = memo(function NodeView({
       // on it. The canvas stays a flat board, as Figma's does.
       data-scroll={node.scroll && node.scroll !== 'none' ? node.scroll : undefined}
       data-fix={node.scrollBehavior && node.scrollBehavior !== 'scrolls' ? node.scrollBehavior : undefined}
+      // "Show in exports", read back by the exporter off the element it is
+      // about — the canvas keeps painting the fill either way
+      data-export-background={node.exportBackground === false ? 'off' : undefined}
       style={style}
     >
       {surface && (
@@ -253,7 +269,7 @@ export const NodeView = memo(function NodeView({
           }}
         />
       )}
-      {node.children.map((childId) => (
+      {(swappedTo?.children ?? node.children).map((childId) => (
         <NodeView key={childId} id={childId} mask={masking?.styles[childId]} />
       ))}
       {node.guides && <Guides guides={node.guides} />}

@@ -13,6 +13,8 @@ import {
   type Anchor,
 } from '../document/geometry';
 import { withAlpha } from '../document/css';
+import { Annotations } from './Annotations';
+import { PixelPreview } from './PixelPreview';
 import { CommentComposer, Comments } from './Comments';
 import { CursorChat } from './CursorChat';
 import { FollowLayer } from './Follow';
@@ -105,6 +107,7 @@ export function Canvas() {
   const setEntered = useUI((s) => s.setEntered);
   const setGuides = useUI((s) => s.setGuides);
   const rulers = useUI((s) => s.rulers);
+  const pixelPreview = useUI((s) => s.view.pixelPreview);
   const vectorEdit = useUI((s) => s.vectorEdit);
   const setVectorEdit = useUI((s) => s.setVectorEdit);
   const cropping = useUI((s) => s.cropping);
@@ -232,8 +235,10 @@ export function Canvas() {
   // Tracked on the window rather than on pointer events: the readout has to
   // appear the moment the key goes down, not on the next mouse move.
   useEffect(() => {
-    const sync = (event: KeyboardEvent) => useUI.getState().setMeasuring(event.altKey);
-    const clear = () => useUI.getState().setMeasuring(false);
+    // the Measure tool is the same readout, latched on — Figma offers both
+    const sync = (event: KeyboardEvent) =>
+      useUI.getState().setMeasuring(event.altKey || useUI.getState().tool === 'measure');
+    const clear = () => useUI.getState().setMeasuring(useUI.getState().tool === 'measure');
     window.addEventListener('keydown', sync);
     window.addEventListener('keyup', sync);
     window.addEventListener('blur', clear);
@@ -356,6 +361,25 @@ export function Canvas() {
 
     if (tool === 'comment') {
       setComposing({ x: Math.round(start.x), y: Math.round(start.y) });
+      return;
+    }
+
+    // the Annotate tool: click a layer to pin a note to it, then write the note
+    // in Inspect, which is where the notes are read
+    if (tool === 'annotate') {
+      const hit = hitStack(event.clientX, event.clientY, doc)[0];
+      if (hit) {
+        const node = doc[hit];
+        store.update(hit, {
+          annotations: [
+            ...(node?.annotations ?? []),
+            { id: Math.random().toString(36).slice(2, 8), note: '' },
+          ],
+        });
+        select([hit]);
+        useUI.getState().setInspectorTab('inspect');
+      }
+      setTool('move');
       return;
     }
 
@@ -677,9 +701,14 @@ export function Canvas() {
           setGuides(snapped.guides);
         }
 
+        // "Snap to pixel grid" is what makes a drag land on whole numbers;
+        // with it off a layer can sit between pixels, as Figma allows
+        const place = useUI.getState().view.snapToPixel
+          ? Math.round
+          : (value: number) => Math.round(value * 100) / 100;
         store.updateMany(movers, (n) => {
           const origin = origins.get(n.id)!;
-          return { x: Math.round(origin.x + dx), y: Math.round(origin.y + dy) };
+          return { x: place(origin.x + dx), y: place(origin.y + dy) };
         });
       },
       () => setGuides([]),
@@ -804,6 +833,9 @@ export function Canvas() {
           inset: 0,
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
           transformOrigin: '0 0',
+          // pixel preview shows a raster of this instead; the stage stays in
+          // the tree because every overlay measures against its elements
+          visibility: pixelPreview === 'off' ? undefined : 'hidden',
           // theme tokens are CSS custom properties, so they cascade into every node
           ...(tokenVars as React.CSSProperties),
         }}
@@ -925,17 +957,51 @@ export function Canvas() {
         </div>
       )}
 
+      <PixelPreview />
+      <PixelGrid />
       {rulers && <Rulers containerRef={rootRef} />}
       <Overlay containerRef={rootRef} />
       <Measure containerRef={rootRef} />
       {vectorEdit && <VectorEdit containerRef={rootRef} />}
       {prototyping && <Connections containerRef={rootRef} />}
+      <Annotations containerRef={rootRef} />
       <Comments />
       {composing && <CommentComposer at={composing} onDone={() => setComposing(null)} />}
       <Cursors containerRef={rootRef} />
       <FollowLayer containerRef={rootRef} />
       <CursorChat />
     </div>
+  );
+}
+
+/**
+ * Figma's pixel grid: the 1px lattice, drawn only once a pixel is big enough
+ * to be worth seeing.
+ *
+ * Below 4× it would be a grey wash rather than a grid, which is why Figma
+ * doesn't draw it there either — the threshold is the feature, not a fallback.
+ */
+function PixelGrid() {
+  const shown = useUI((state) => state.view.pixelGrid);
+  const viewport = useUI((state) => state.viewport);
+  if (!shown || viewport.zoom < 4) return null;
+
+  const step = viewport.zoom;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'absolute',
+        inset: 0,
+        pointerEvents: 'none',
+        zIndex: 1,
+        backgroundImage:
+          'linear-gradient(to right, rgba(0,0,0,0.06) 1px, transparent 1px),' +
+          'linear-gradient(to bottom, rgba(0,0,0,0.06) 1px, transparent 1px)',
+        backgroundSize: `${step}px ${step}px`,
+        backgroundPosition: `${viewport.x % step}px ${viewport.y % step}px`,
+      }}
+    />
   );
 }
 

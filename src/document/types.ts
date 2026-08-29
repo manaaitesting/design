@@ -156,6 +156,14 @@ export interface BorderSpec {
   /** how a vector's open ends and corners are finished */
   cap?: 'butt' | 'round' | 'square';
   join?: 'miter' | 'round' | 'bevel';
+  /**
+   * Figma's miter angle, in degrees.
+   *
+   * Below it a mitred join gives up and bevels instead, which is what stops a
+   * sharp corner growing a spike. SVG spells the same rule as a ratio, so the
+   * angle is converted on the way out.
+   */
+  miterAngle?: number;
 }
 
 /** CSS `outline` — sits outside the box, unlike a border. */
@@ -186,13 +194,17 @@ export interface FilterSpec {
  * touched, so a button carries its own behaviour wherever it is copied to.
  */
 export type Trigger =
+  /** an interaction that is wired but deliberately inert */
+  | 'none'
   | 'click'
+  | 'drag'
   | 'hover'
+  | 'press'
+  | 'key'
   | 'mouse-enter'
   | 'mouse-leave'
-  | 'press'
-  | 'drag'
-  | 'key'
+  | 'mouse-down'
+  | 'mouse-up'
   | 'delay';
 export type InteractionAction =
   | 'navigate'
@@ -203,16 +215,57 @@ export type InteractionAction =
   | 'swap-overlay'
   | 'scroll-to'
   | 'set-variable'
+  /** swap an instance to another variant of its set — Figma's "Change to" */
+  | 'change-to'
+  /** put a collection into one of its modes while the prototype plays */
+  | 'set-mode'
+  /** run one branch of an if / else-if / else, depending on the variables */
+  | 'conditional'
+  /** play, pause or toggle a video on the frame */
+  | 'play-pause'
+  /** move a video's playhead to a timestamp */
+  | 'set-playhead'
   | 'none';
 export type TransitionType =
   | 'instant'
   | 'dissolve'
+  | 'smart-animate'
+  /** the incoming frame travels in over the one it replaces */
   | 'move'
+  /** the outgoing frame travels off, uncovering the one beneath */
+  | 'move-out'
   | 'push'
   | 'slide'
-  | 'smart-animate';
+  | 'slide-out';
 export type TransitionDirection = 'left' | 'right' | 'top' | 'bottom';
-export type Easing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
+/**
+ * Figma's easing menu: a straight line, seven curves, and five springs.
+ *
+ * The curves are cubic beziers and go straight into CSS. The springs are a
+ * simulation rather than a curve, so they are sampled into a `linear()` easing
+ * — see `easingCss`.
+ */
+export type Easing =
+  | 'linear'
+  | 'ease-in'
+  | 'ease-out'
+  | 'ease-in-out'
+  | 'ease-in-back'
+  | 'ease-out-back'
+  | 'ease-in-out-back'
+  | 'custom-bezier'
+  | 'gentle'
+  | 'quick'
+  | 'bouncy'
+  | 'slow'
+  | 'custom-spring';
+
+/** The three numbers a spring is made of. */
+export interface SpringSpec {
+  stiffness: number;
+  damping: number;
+  mass: number;
+}
 
 export interface TransitionSpec {
   type: TransitionType;
@@ -221,6 +274,10 @@ export interface TransitionSpec {
   /** ms */
   duration: number;
   easing: Easing;
+  /** control points, when the easing is a custom bezier */
+  bezier?: [number, number, number, number];
+  /** parameters, when the easing is a custom spring */
+  spring?: SpringSpec;
 }
 
 /**
@@ -246,11 +303,80 @@ export interface OverlaySpec {
   closeOnOutside: boolean;
 }
 
+/**
+ * The devices a prototype can be framed in.
+ *
+ * The sizes are the real ones, because the point of the setting is to see the
+ * design at the size it will be used at — a phone frame that is not a phone's
+ * size is decoration.
+ */
+export type PrototypeDevice =
+  | 'none'
+  | 'phone'
+  | 'phone-large'
+  | 'tablet'
+  | 'laptop'
+  | 'desktop'
+  | 'watch';
+
+export interface DeviceSpec {
+  id: PrototypeDevice;
+  label: string;
+  /** the screen, in CSS pixels */
+  w: number;
+  h: number;
+  /** bezel thickness and corner radius of the shell drawn around it */
+  bezel: number;
+  radius: number;
+}
+
+export const DEVICES: DeviceSpec[] = [
+  { id: 'none', label: 'No device', w: 0, h: 0, bezel: 0, radius: 0 },
+  { id: 'phone', label: 'Phone — 390 × 844', w: 390, h: 844, bezel: 12, radius: 44 },
+  { id: 'phone-large', label: 'Phone L — 430 × 932', w: 430, h: 932, bezel: 12, radius: 48 },
+  { id: 'tablet', label: 'Tablet — 834 × 1194', w: 834, h: 1194, bezel: 16, radius: 26 },
+  { id: 'laptop', label: 'Laptop — 1440 × 900', w: 1440, h: 900, bezel: 14, radius: 12 },
+  { id: 'desktop', label: 'Desktop — 1920 × 1080', w: 1920, h: 1080, bezel: 16, radius: 8 },
+  { id: 'watch', label: 'Watch — 184 × 224', w: 184, h: 224, bezel: 10, radius: 40 },
+];
+
+/** One arm of a conditional: when to take it, and what to do if you do. */
+export interface ConditionBranch {
+  id: string;
+  /** the expression, as Figma writes it; the trailing `else` branch has none */
+  condition?: string;
+  /** what running this branch does — Figma allows a list, and so does this */
+  actions: Interaction[];
+}
+
 export interface Interaction {
   id: string;
   trigger: Trigger;
   /** ms the `delay` trigger waits after the frame appears */
   delay: number;
+  /**
+   * Figma's "State" section: what to forget on the way in.
+   *
+   * A prototype normally remembers where you had scrolled a frame to and which
+   * variant its instances were swapped to, so coming back looks like coming
+   * back. These say to arrive fresh instead.
+   */
+  resetScroll?: boolean;
+  resetComponentState?: boolean;
+  resetVideo?: boolean;
+  /** the layer whose video `play-pause` and `set-playhead` act on */
+  animation?: string;
+  /** what `play-pause` does when it fires */
+  behavior?: 'toggle' | 'play' | 'pause';
+  /** where `set-playhead` moves the playhead to, in seconds */
+  timestamp?: number;
+  /**
+   * The branches of a `conditional`, in order.
+   *
+   * The first whose condition holds is the one that runs, and a branch with no
+   * condition is the `else` — which is why it can only be last.
+   */
+  branches?: ConditionBranch[];
   action: InteractionAction;
   /** the frame `navigate` goes to */
   destination: string | null;
@@ -263,6 +389,9 @@ export interface Interaction {
   /** set-variable: which variable, and what to set it to while playing */
   variable?: string;
   value?: string;
+  /** set-mode: which collection, and which of its modes */
+  collection?: string;
+  mode?: string;
   transition: TransitionSpec;
 }
 
@@ -453,7 +582,7 @@ export interface PropBinding {
  * fill, an entire type spec, a stack of effects. Layers subscribe rather than
  * copy, so editing the style moves everything wearing it.
  */
-export type StyleKind = 'paint' | 'text' | 'effect';
+export type StyleKind = 'paint' | 'text' | 'effect' | 'grid';
 
 /**
  * A design variable.
@@ -486,10 +615,40 @@ export interface Token {
 }
 
 /** Which part of a layer a style is worn on. */
-export type StyleSlot = 'fill' | 'stroke' | 'text' | 'effect';
+export type StyleSlot = 'fill' | 'stroke' | 'text' | 'effect' | 'grid';
 
 /** The numeric fields a number variable can drive. */
-export type NumericField = 'x' | 'y' | 'w' | 'h' | 'radius' | 'opacity';
+export type NumericField =
+  | 'x'
+  | 'y'
+  | 'w'
+  | 'h'
+  | 'radius'
+  | 'opacity'
+  /**
+   * The type fields live inside `font` rather than on the node, but they bind
+   * the same way and for the same reason: a design system that says "body is
+   * 16/24" wants to say it once. `bindVariable` knows to write through to the
+   * font spec for these four.
+   */
+  | 'fontSize'
+  | 'fontWeight'
+  | 'lineHeight'
+  | 'letterSpacing';
+
+/** The bound fields that are a property of `font` rather than of the node. */
+export const FONT_FIELDS = {
+  fontSize: 'size',
+  fontWeight: 'weight',
+  lineHeight: 'lineHeight',
+  letterSpacing: 'letterSpacing',
+} as const;
+
+export type FontField = keyof typeof FONT_FIELDS;
+
+export function isFontField(field: NumericField): field is FontField {
+  return field in FONT_FIELDS;
+}
 
 /** A GPU shader bound to a node, with its uniform values. */
 export interface ShaderSpec {
@@ -503,10 +662,10 @@ export interface FontSpec {
   weight: number;
   lineHeight: number;
   letterSpacing: number;
-  align: 'left' | 'center' | 'right';
+  align: 'left' | 'center' | 'right' | 'justify';
   color: string;
-  /** Figma's Text case */
-  case?: 'none' | 'upper' | 'lower' | 'title';
+  /** Figma's Text case — `small` is small caps, which is a glyph swap not a transform */
+  case?: 'none' | 'upper' | 'lower' | 'title' | 'small';
   /** Figma's "Truncate text" — 0 keeps every line */
   maxLines?: number;
   /** px of space between paragraphs — a paragraph is a line of the text */
@@ -522,6 +681,64 @@ export interface FontSpec {
    */
   numeric?: 'normal' | 'tabular' | 'oldstyle';
   features?: string[];
+
+  /** the italic half of Figma's style menu — Bold and Bold Italic are one family */
+  italic?: boolean;
+
+  /**
+   * Vertical trim.
+   *
+   * Figma's "Vertical trim" drops the half-leading above the cap and below the
+   * baseline, so a heading's box is the letters rather than the line box. CSS
+   * spells it `text-box`, which is exactly this and nothing else.
+   */
+  verticalTrim?: 'standard' | 'cap';
+
+  /** Figma's "Wrap style" — how a line break is chosen, not whether it happens */
+  wrap?: 'auto' | 'balance' | 'pretty';
+
+  /**
+   * Indentation, from the Details tab.
+   *
+   * Hanging punctuation pulls an opening quote into the margin, and a hanging
+   * list pulls the bullet out of the text column; both are the typographic
+   * detail that makes a left edge read as straight when it is not.
+   */
+  hangingPunctuation?: boolean;
+  hangingList?: boolean;
+  paragraphIndent?: number;
+
+  /**
+   * Letter case, from the Details tab.
+   *
+   * `case` above changes which letters are shown; these change which *glyphs*
+   * are used for them — case-sensitive forms lift brackets and dashes to suit
+   * capitals, capital spacing opens the tracking that all-caps needs.
+   */
+  caseSensitive?: boolean;
+  capitalSpacing?: boolean;
+
+  /**
+   * Numbers, from the Details tab.
+   *
+   * `numeric` above is the figures style; these are the rest of what OpenType
+   * offers for them, each one a checkbox in Figma and a `font-variant-numeric`
+   * keyword here.
+   */
+  slashedZero?: boolean;
+  fractions?: boolean;
+  ordinals?: boolean;
+  numberPosition?: 'normal' | 'super' | 'sub';
+
+  /**
+   * Variable-font axis values, by tag.
+   *
+   * A variable family is one file that interpolates — `wght` between 100 and
+   * 900, `slnt` between -10 and 0 — so the sliders in the Variable tab write
+   * here rather than picking one of nine named cuts. `wght` is kept in step
+   * with `weight`, because they are the same property said two ways.
+   */
+  variations?: Record<string, number>;
 }
 
 export interface SceneNode {
@@ -631,12 +848,13 @@ export interface SceneNode {
   imageScale?: number;
   imageOffset?: [number, number];
   /**
-   * Page nodes: whether the page's background is painted into an export.
+   * Whether this layer's own fill is painted into an export.
    *
-   * Figma's "Show in exports". A slice cropped out of a page comes out on the
-   * page colour when this is on, and transparent when it is off. Undefined
-   * means on, so a document written before the control existed keeps the
-   * background it was exporting with.
+   * Figma's "Show in exports", which it offers on a page and on any frame: a
+   * slice cropped out of a page comes out on the page colour when this is on
+   * and transparent when it is off, and a frame exported with it off gives you
+   * its contents on nothing. Undefined means on, so a document written before
+   * the control existed keeps the background it was exporting with.
    */
   exportBackground?: boolean;
 
@@ -671,6 +889,15 @@ export interface SceneNode {
   scroll?: 'none' | 'vertical' | 'horizontal' | 'both';
   scrollBehavior?: 'scrolls' | 'fixed' | 'sticky';
 
+  /**
+   * A hyperlink on the layer — Figma's ⌘K.
+   *
+   * It is a property of the layer rather than of a run of characters, which is
+   * the common case and the one that survives an export: the text comes out
+   * inside an `<a href>`, and a click in the prototype opens it.
+   */
+  link?: string | null;
+
   /** what this layer does when a viewer touches it in the prototype */
   interactions?: Interaction[];
   /**
@@ -678,6 +905,25 @@ export interface SceneNode {
    * artboard, and where Present begins.
    */
   flowStart?: string | null;
+
+  /**
+   * Prototype settings, carried by the page.
+   *
+   * Figma keeps these with the document rather than with whoever is playing it:
+   * the device a prototype is meant to be seen on, and the colour behind it,
+   * are decisions about the design, so they travel with the file and everybody
+   * plays back the same thing.
+   */
+  prototypeDevice?: PrototypeDevice;
+  prototypeBackground?: string;
+
+  /**
+   * Page nodes: which frame stands for the file in the browser.
+   *
+   * Figma's "Set as thumbnail". Without one the first frame on the page is
+   * used, which is right until the day the first frame is a scratch board.
+   */
+  thumbnailOf?: string;
 
   /** this node is a main component — instances mirror it */
   isComponent?: boolean;

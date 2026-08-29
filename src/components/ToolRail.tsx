@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './ui/Icons';
-import { useReadOnly } from './Session';
+import { FigIcon } from './ui/FigIcon';
+import { useReadOnly, useStore } from './Session';
+import type { DocStore } from '../document/store';
 import { useUI, type Tool } from '../state/ui';
 
 interface Entry {
@@ -45,6 +47,8 @@ const GROUPS: Entry[][] = [
     { tool: 'slice', label: 'Slice', shortcut: 'S', icon: <Icon.Slice /> },
     { tool: 'text', label: 'Text', shortcut: 'T', icon: <Icon.Text /> },
     { tool: 'comment', label: 'Comment', shortcut: 'C', icon: <Icon.Comment /> },
+    { tool: 'measure', label: 'Measure', shortcut: '⇧E', icon: <Icon.Measure /> },
+    { tool: 'annotate', label: 'Annotate', icon: <Icon.Annotate /> },
   ],
   [
     { tool: 'image', label: 'Create image', icon: <Icon.ImageAi /> },
@@ -58,6 +62,7 @@ const VIEWER_TOOLS = new Set<Tool>(['move', 'pan', 'comment']);
 
 export function ToolRail() {
   const readOnly = useReadOnly();
+  const store = useStore();
   const tool = useUI((s) => s.tool);
   const spacePan = useUI((s) => s.spacePan);
   const setTool = useUI((s) => s.setTool);
@@ -164,6 +169,59 @@ export function ToolRail() {
           ))}
         </div>
       ))}
+
+      {!readOnly && (
+        <div style={{ width: '100%' }}>
+          <div className="fig-rail-divider" />
+          {/* Figma keeps these two beside the drawing tools: one samples a
+              colour from anywhere on screen, the other is the command menu. */}
+          <button
+            type="button"
+            className="fig-tool"
+            title="Copy colors  I"
+            aria-label="Copy colors"
+            onClick={(event) => {
+              event.currentTarget.blur();
+              void sampleColor(store, useUI.getState().selection);
+            }}
+          >
+            <FigIcon name="Copy colors" size={16} />
+          </button>
+          <button
+            type="button"
+            className="fig-tool"
+            title="Actions  ⌘/"
+            aria-label="Actions"
+            onClick={(event) => {
+              event.currentTarget.blur();
+              useUI.getState().setPaletteOpen(true);
+            }}
+          >
+            <FigIcon name="Actions" size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+/**
+ * Figma's "Copy colors": sample a colour from anywhere on screen and paint the
+ * selection with it.
+ *
+ * The browser's own eyedropper does the sampling, which is the only way to read
+ * a pixel outside the page — and is exactly what the colour picker already
+ * uses, so the two behave the same.
+ */
+export async function sampleColor(store: DocStore, selection: string[]): Promise<void> {
+  if (!selection.length || !('EyeDropper' in window)) return;
+  try {
+    const picker = new (window as unknown as {
+      EyeDropper: new () => { open(): Promise<{ sRGBHex: string }> };
+    }).EyeDropper();
+    const { sRGBHex } = await picker.open();
+    store.updateMany(selection, { fills: undefined, fill: sRGBHex, fillVisible: true });
+  } catch {
+    // dismissing the eyedropper is a cancel, not an error
+  }
 }

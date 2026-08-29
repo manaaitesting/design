@@ -19,7 +19,7 @@ import type { CSSProperties } from 'react';
 import type { Doc, SceneNode, ShaderSpec } from '../document/types';
 import { DEFAULT_COLLECTION, type Collection } from '../document/variables';
 import { fontFaceCss, googleHref, webFontsIn, type CustomFont } from '../lib/fonts';
-import { isPlain, plainText, runLines, runStyle, runsOf } from '../document/text';
+import { isPlain, listBoxStyle, plainText, runLines, runStyle, runsOf } from '../document/text';
 import { compose, defaultParams, SHADER_BY_ID } from '../webgl/shaders';
 import type { Token } from '../document/store';
 
@@ -96,7 +96,7 @@ function textMarkup(
 
   const tag = list === 'number' ? 'ol' : 'ul';
   const items = lines.map((line, i) => `<li${gap(i)}>${body(line)}</li>`).join('');
-  return `<${tag} ${inlineStyle({ margin: 0, paddingLeft: '1.4em' })}>${items}</${tag}>`;
+  return `<${tag} ${inlineStyle(listBoxStyle(font) as Record<string, string | number>)}>${items}</${tag}>`;
 }
 
 /** A number variable is published unitless; everything else passes through. */
@@ -122,6 +122,33 @@ function jsxStyle(declarations: Record<string, string | number>): string {
 }
 
 /** `style="margin-top: 8px"` — HTML takes a declaration block. */
+/**
+ * A style attribute, quoted safely.
+ *
+ * A font family is the reason this exists: `font-family: "Space Grotesk"` in a
+ * `style="…"` attribute closes the attribute on its first quote, and the
+ * browser silently drops every declaration after it — the layer keeps its
+ * position and loses its type. Ten of the thirteen families here are quoted.
+ */
+function inlineStyle(css: string): string {
+  return `style="${css.replace(/"/g, '&quot;')}"`;
+}
+
+/**
+ * Wraps a layer's markup in its hyperlink, if it has one.
+ *
+ * A link that only worked on the canvas would be a note to the developer
+ * rather than a link, so the export writes the anchor — the layer's box stays
+ * exactly where it was, because the anchor takes `display: contents`.
+ */
+function linked(node: SceneNode, markup: string, mode: 'jsx' | 'html'): string {
+  if (!node.link) return markup;
+  const href = node.link.replace(/"/g, '&quot;');
+  const rel = mode === 'jsx' ? 'rel="noreferrer noopener"' : 'rel="noreferrer noopener"';
+  const style = mode === 'jsx' ? 'style={{ display: \'contents\' }}' : 'style="display: contents"';
+  return `<a href="${href}" target="_blank" ${rel} ${style}>${markup}</a>`;
+}
+
 function htmlStyle(declarations: Record<string, string | number>): string {
   const body = Object.entries(declarations)
     .map(([key, value]) => {
@@ -129,7 +156,7 @@ function htmlStyle(declarations: Record<string, string | number>): string {
       return `${name}: ${typeof value === 'number' && value !== 0 ? `${value}px` : value}`;
     })
     .join('; ');
-  return `style="${body}"`;
+  return inlineStyle(body);
 }
 
 
@@ -350,7 +377,7 @@ function attrName(name: string, mode: 'jsx' | 'html'): string {
 
 function styleAttr(style: CSSProperties, mode: 'jsx' | 'html'): string {
   if (mode === 'html') {
-    return `style="${styleToCss(style, '').replace(/\n/g, ' ').trim()}"`;
+    return inlineStyle(styleToCss(style, '').replace(/\n/g, ' ').trim());
   }
   const body = Object.entries(style)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -394,9 +421,16 @@ function strokeSvg(
     `<path d="${d}" fill="none" stroke="${stroke.color}" ${attrName('strokeWidth', mode)}="${drawWidth}" ` +
     (stroke.dash ? `${attrName('strokeDasharray', mode)}="${stroke.dash}" ` : '') +
     `${attrName('strokeLinecap', mode)}="${stroke.cap}" ${attrName('strokeLinejoin', mode)}="${stroke.join}" ` +
+    (stroke.join === 'miter' && stroke.miterLimit
+      ? `${attrName('strokeMiterlimit', mode)}="${stroke.miterLimit.toFixed(2)}" `
+      : '') +
     `${attrName('vectorEffect', mode)}="non-scaling-stroke"${bind}/></svg>`
   );
 }
+
+/** The reset the canvas itself lays out under, scoped to one export. */
+const BORDER_BOX = (root: string) =>
+  `.${root},\n.${root} * {\n  box-sizing: border-box;\n}`;
 
 export function toReact(
   rootId: string,
@@ -451,7 +485,7 @@ export function toReact(
       .join('\n');
 
     if (node.type === 'text') {
-      const text = textMarkup(node, escapeText, jsxStyle);
+      const text = linked(node, textMarkup(node, escapeText, jsxStyle), 'jsx');
       if (!overlays) return `${pad}<div className="${className}">${text}</div>`;
       return `${pad}<div className="${className}">\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
     }
@@ -492,6 +526,12 @@ export function toReact(
 
   const body = walk(rootId, 0);
   const name = pascal(doc[rootId]?.name ?? 'Component');
+
+  // The canvas lays out under a border-box reset, so a layer's width is the
+  // width you see whatever padding it carries. Exported CSS lands in someone
+  // else's page, which may not do that — without this every padded frame comes
+  // out wider than it was designed.
+  rules.unshift(BORDER_BOX(slug(doc[rootId]?.name ?? 'component', rootId)));
 
   const shaderRuntime = usedShaders.size ? emitShaderRuntime([...usedShaders]) : '';
   // a web face the design uses has to come with it, or the export renders in a
@@ -804,39 +844,39 @@ export function toHtml(
       delete style.left;
       delete style.top;
     }
-    const inline = styleToCss(style, '').replace(/\n/g, ' ').trim();
+    const inline = inlineStyle(styleToCss(style, '').replace(/\n/g, ' ').trim());
     const overlays = effectLayers(effectsOf(node), node.clip)
       .map((layer) => {
         if (layer.shader) usedShaders.add(layer.shader.id);
         const body = layer.shader ? shaderMarkup(layer.shader, 'html') : '';
-        return `${pad}  <div style="${styleToCss(layer.style, '').replace(/\n/g, ' ').trim()}">${body}</div>`;
+        return `${pad}  <div ${inlineStyle(styleToCss(layer.style, '').replace(/\n/g, ' ').trim())}>${body}</div>`;
       })
       .join('\n');
 
     if (node.type === 'text') {
-      const text = textMarkup(node, (value) => value, htmlStyle);
-      if (!overlays) return `${pad}<div style="${inline}">${text}</div>`;
-      return `${pad}<div style="${inline}">\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
+      const text = linked(node, textMarkup(node, (value) => value, htmlStyle), 'html');
+      if (!overlays) return `${pad}<div ${inline}>${text}</div>`;
+      return `${pad}<div ${inline}>\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
     }
     if (node.type === 'shader' && node.shader) {
       usedShaders.add(node.shader.id);
       const surface = `${pad}  ${shaderMarkup(node.shader, 'html')}`;
-      return `${pad}<div style="${inline}">\n${[surface, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      return `${pad}<div ${inline}>\n${[surface, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (paintsWithPath(node)) {
       const shape = shapeMarkup(node, pad, 'html', usedShaders);
-      return `${pad}<div style="${inline}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      return `${pad}<div ${inline}>\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (node.type === 'boolean') {
       const shape = booleanMarkup(node, doc, pad, 'html', usedShaders);
-      return `${pad}<div style="${inline}">\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      return `${pad}<div ${inline}>\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     // a shader fill sits at the bottom of the stack, under the image paints
     const surface = surfaceMarkup(node, pad, 'html', usedShaders);
     const paints = paintMarkup(node, pad, 'html');
     if (node.children.length === 0) {
       const inner = [surface, paints, overlays].filter(Boolean).join('\n');
-      return `${pad}<div style="${inline}">${inner ? `\n${inner}\n${pad}` : ''}</div>`;
+      return `${pad}<div ${inline}>${inner ? `\n${inner}\n${pad}` : ''}</div>`;
     }
     const children = [
       surface,
@@ -849,7 +889,7 @@ export function toHtml(
     ]
       .filter(Boolean)
       .join('\n');
-    return `${pad}<div style="${inline}">\n${children}\n${pad}</div>`;
+    return `${pad}<div ${inline}>\n${children}\n${pad}</div>`;
   };
 
   const body = walk(rootId, 0);
@@ -876,7 +916,8 @@ export function toHtml(
 
   return `<!doctype html>
 <html>
-  <head>${links}${faceCss}${style}
+  <head>
+    <style>*, *::before, *::after { box-sizing: border-box }</style>${links}${faceCss}${style}
   </head>
   <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#EEEEEE">
 ${body}${runtime}

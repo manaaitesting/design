@@ -257,6 +257,22 @@ export function runStyle(run: TextRun, font?: FontSpec): CSSProperties {
   return style;
 }
 
+/**
+ * How a bulleted or numbered block is indented.
+ *
+ * Figma's "Hanging lists" is whether the marker sits out in the indent with the
+ * text column straight beside it, or inline with the first line so a wrapped
+ * line runs back under the bullet. Hanging is the default because it is what
+ * reads as a list; the flush version is here because sometimes a list is really
+ * a paragraph that happens to be numbered.
+ */
+export function listBoxStyle(font?: FontSpec): CSSProperties {
+  const hanging = font?.hangingList !== false;
+  return hanging
+    ? { margin: 0, paddingLeft: '1.4em', listStylePosition: 'outside' }
+    : { margin: 0, paddingLeft: 0, listStylePosition: 'inside' };
+}
+
 /** Splits runs into one list per line, so paragraphs and lists still work. */
 export function runLines(runs: TextRun[]): TextRun[][] {
   const lines: TextRun[][] = [[]];

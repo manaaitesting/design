@@ -118,13 +118,23 @@ function bound(
   node: SceneNode,
   field: NumericField,
   tokens: Record<string, string>,
+  /**
+   * What the property being written measures in.
+   *
+   * A number variable is a bare number so it can serve a length, a ratio or a
+   * count, and `calc` is what gives it the unit the property wants. `none` is
+   * for the properties that want the number itself — `font-weight: 600` is not
+   * a length, and wrapping it in `calc(… * 1px)` would break it. `percent` is
+   * letter spacing, which the panel states as a percentage of the size but CSS
+   * only accepts as a length: one percent of the em is `0.01em`.
+   */
+  unit: 'px' | 'none' | 'percent' = 'px',
 ): string | null {
   const id = node.vars?.[field];
   const name = id ? tokens[id] : undefined;
   if (!name) return null;
-  // A number variable is a bare number, so it can serve a length, a ratio or a
-  // count. `calc` is what gives it the unit the property being written wants.
-  return `calc(var(--${name}) * 1px)`;
+  if (unit === 'none') return `var(--${name})`;
+  return `calc(var(--${name}) * ${unit === 'percent' ? '0.01em' : '1px'})`;
 }
 
 export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, string> = {}): CSSProperties {
@@ -339,16 +349,24 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
   if (node.type === 'text' && node.font) {
     const f = node.font;
     style.fontFamily = f.family;
-    style.fontSize = f.size;
-    style.fontWeight = f.weight;
-    style.lineHeight = f.lineHeight;
-    style.letterSpacing = f.letterSpacing ? `${f.letterSpacing}em` : undefined;
+    style.fontSize = bound(node, 'fontSize', varNames) ?? f.size;
+    style.fontWeight = bound(node, 'fontWeight', varNames, 'none') ?? f.weight;
+    // The model keeps line height as a ratio, but the field states it in px and
+    // so does a variable bound to it — a type scale says 16/24, not 16/1.5.
+    style.lineHeight = bound(node, 'lineHeight', varNames) ?? f.lineHeight;
+    style.letterSpacing =
+      bound(node, 'letterSpacing', varNames, 'percent') ??
+      (f.letterSpacing ? `${f.letterSpacing}em` : undefined);
     style.textAlign = f.align;
     style.color = f.color;
     style.whiteSpace = 'pre-wrap';
     style.wordBreak = 'break-word';
 
-    if (f.case && f.case !== 'none') {
+    if (f.case === 'small') {
+      // small caps are the face's own glyphs, so this is a variant rather than
+      // a transform — uppercasing the text would give the wrong letterforms
+      style.fontVariantCaps = 'small-caps';
+    } else if (f.case && f.case !== 'none') {
       style.textTransform =
         f.case === 'upper' ? 'uppercase' : f.case === 'lower' ? 'lowercase' : 'capitalize';
     }
@@ -379,12 +397,48 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
       style.textUnderlineOffset = `${u.offset}px`;
     }
 
-    if (f.numeric && f.numeric !== 'normal') {
-      style.fontVariantNumeric = f.numeric === 'tabular' ? 'tabular-nums' : 'oldstyle-nums';
+    if (f.italic) style.fontStyle = 'italic';
+
+    // `font-variant-numeric` is one property holding several independent
+    // choices, so the checkboxes in the Details tab are collected rather than
+    // written one at a time — the last declaration would otherwise win alone.
+    const numerics: string[] = [];
+    if (f.numeric === 'tabular') numerics.push('tabular-nums');
+    else if (f.numeric === 'oldstyle') numerics.push('oldstyle-nums');
+    if (f.slashedZero) numerics.push('slashed-zero');
+    if (f.fractions) numerics.push('diagonal-fractions');
+    if (f.ordinals) numerics.push('ordinal');
+    if (numerics.length) style.fontVariantNumeric = numerics.join(' ');
+    if (f.numberPosition && f.numberPosition !== 'normal') {
+      style.fontVariantPosition = f.numberPosition;
     }
-    if (f.features?.length) {
-      style.fontFeatureSettings = f.features.map((tag) => `"${tag}"`).join(', ');
+
+    // The two letter-case features are OpenType tags rather than keywords, so
+    // they join whatever the escape hatch already asked for.
+    const features = [...(f.features ?? [])];
+    if (f.caseSensitive) features.push('case');
+    if (f.capitalSpacing) features.push('cpsp');
+    if (features.length) {
+      style.fontFeatureSettings = features.map((tag) => `"${tag}"`).join(', ');
     }
+
+    if (f.variations) {
+      const axes = Object.entries(f.variations).filter(([, value]) => Number.isFinite(value));
+      if (axes.length) {
+        style.fontVariationSettings = axes.map(([tag, value]) => `"${tag}" ${value}`).join(', ');
+      }
+    }
+
+    if (f.verticalTrim === 'cap') {
+      // `text-box` is the shorthand; older engines that do not know it simply
+      // keep the half-leading, which is the same result as trim being off
+      (style as Record<string, unknown>).textBox = 'trim-both cap alphabetic';
+    }
+    if (f.wrap && f.wrap !== 'auto') style.textWrap = f.wrap;
+    if (f.hangingPunctuation) {
+      (style as Record<string, unknown>).hangingPunctuation = 'first last';
+    }
+    if (f.paragraphIndent) style.textIndent = `${f.paragraphIndent}px`;
 
     if (node.textStroke) {
       style.WebkitTextStrokeWidth = `${node.textStroke.width}px`;
@@ -524,6 +578,14 @@ export interface ShapeStroke {
   dash: string | null;
   cap: 'butt' | 'round' | 'square';
   join: 'miter' | 'round' | 'bevel';
+  /**
+   * SVG's miter limit, derived from Figma's miter *angle*.
+   *
+   * They are two spellings of one rule: SVG asks how many times longer than the
+   * stroke the spike may get, Figma asks how sharp the corner may be before it
+   * gives up. `limit = 1 / sin(angle / 2)` converts between them.
+   */
+  miterLimit?: number;
   /** `inside` and `outside` are drawn at double width and clipped to one half */
   align: 'inside' | 'center' | 'outside';
 }

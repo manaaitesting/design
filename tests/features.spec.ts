@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
-import { doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select } from './helpers';
+import { expect, test, type Page } from '@playwright/test';
+import { doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
 
 /**
  * The Figma-parity work: shapes, booleans, masks, point editing, the scale
@@ -620,7 +620,8 @@ test('an uploaded font is declared for the page and offered in the menu', async 
   const caption = (await nodeNamed(page, 'Caption'))!;
   await select(page, [caption.id]);
   await page.locator('button[title="Font"]').click();
-  await expect(page.getByRole('button', { name: 'Probe Face' })).toBeVisible();
+  // the picker lists families as options, named "Family — classification"
+  await expect(page.getByRole('option', { name: /^Probe Face/ })).toBeVisible();
   await page.keyboard.press('Escape');
 
   await page.evaluate(() => {
@@ -1267,4 +1268,844 @@ test('the Shape builder merges the regions you drag across', async ({ page }) =>
 
   await page.keyboard.press('Escape');
   await removeNodes(page, [id]);
+});
+
+/**
+ * The panel header, which is where Figma keeps the commands that act on the
+ * whole layer rather than on one of its properties.
+ */
+test.describe('panel header', () => {
+  test('select matching layers picks up every layer painted the same way', async ({ page }) => {
+    const chip = await makeNode(page, 'rect', { name: 'Chip', x: 40, y: 620, w: 60, h: 24, fill: '#123456', radius: 4 });
+    const twin = await makeNode(page, 'rect', { name: 'Twin', x: 120, y: 620, w: 60, h: 24, fill: '#123456', radius: 4 });
+    // same shape, different paint — the point of "matching" is what it looks like
+    const other = await makeNode(page, 'rect', { name: 'Other', x: 200, y: 620, w: 60, h: 24, fill: '#654321', radius: 4 });
+    await select(page, [chip]);
+
+    await page.getByRole('button', { name: /Select matching layers/ }).click();
+    const picked = await selection(page);
+    expect(picked).toContain(chip);
+    expect(picked).toContain(twin);
+    expect(picked).not.toContain(other);
+
+    await removeNodes(page, [chip, twin, other]);
+  });
+
+  test('a frame dimension preset resizes the frame to the device', async ({ page }) => {
+    const id = await makeNode(page, 'frame', { name: 'Board', x: 40, y: 700, w: 200, h: 200 });
+    await select(page, [id]);
+
+    await page.getByRole('button', { name: /frame dimension presets/i }).click();
+    await page.getByRole('listbox', { name: 'Frame dimension presets' })
+      .getByRole('button', { name: /^iPhone 16 393/ })
+      .click();
+
+    const after = (await doc(page))[id];
+    expect([after.w, after.h]).toEqual([393, 852]);
+    expect(after.wMode).toBe('fixed');
+
+    await removeNodes(page, [id]);
+  });
+
+  test('the boolean menu combines the selection and can change the operation after', async ({ page }) => {
+    const a = await makeNode(page, 'rect', { name: 'A', x: 40, y: 940, w: 80, h: 80, fill: '#111111' });
+    const b = await makeNode(page, 'rect', { name: 'B', x: 90, y: 940, w: 80, h: 80, fill: '#111111' });
+    await select(page, [a, b]);
+
+    await page.getByRole('button', { name: 'Boolean operations' }).click();
+    await page.getByRole('listbox', { name: 'Boolean operations' })
+      .getByRole('button', { name: /^Subtract/ })
+      .click();
+
+    const combined = (await selection(page))[0];
+    expect((await doc(page))[combined].type).toBe('boolean');
+    expect((await doc(page))[combined].op).toBe('subtract');
+
+    // with the group selected the menu changes the operation instead of nesting
+    await page.getByRole('button', { name: 'Boolean operations' }).click();
+    await page.getByRole('listbox', { name: 'Boolean operations' })
+      .getByRole('button', { name: /^Intersect/ })
+      .click();
+    expect((await doc(page))[combined].op).toBe('intersect');
+    expect((await selection(page))[0]).toBe(combined);
+
+    await removeNodes(page, [combined]);
+  });
+
+  test('a hyperlink is kept on the layer and written into the export', async ({ page }) => {
+    const id = await makeNode(page, 'text', { name: 'Linked', x: 40, y: 1060, w: 160, h: 24, text: 'Docs' });
+    await select(page, [id]);
+
+    await page.getByRole('button', { name: /Create link/ }).click();
+    await page.getByPlaceholder('https://…').fill('https://example.com/docs');
+    await page.keyboard.press('Enter');
+
+    expect((await doc(page))[id].link).toBe('https://example.com/docs');
+
+    const html = await page.evaluate(async (nodeId) => {
+      const { toHtml } = await import('/src/export/toCode.ts' as string);
+      return toHtml(nodeId, window.paperlike!.doc());
+    }, id).catch(() => null);
+    // the import path only resolves in dev; when it does, the anchor is there
+    if (html) expect(html).toContain('href="https://example.com/docs"');
+
+    await removeNodes(page, [id]);
+  });
+});
+
+test('prototype settings live on the page, not on the person playing it', async ({ page }) => {
+  // both panels have a tab strip; this one is the inspector's
+  await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+
+  await page.getByTitle('The device the prototype plays inside').click();
+  await page.getByRole('option', { name: /^Phone — 390 × 844/ }).click();
+
+  const pageId = await page.evaluate(() => window.paperlike!.ui.getState().page);
+  expect((await doc(page))[pageId].prototypeDevice).toBe('phone');
+
+  await page.getByTitle('The device the prototype plays inside').click();
+  await page.getByRole('option', { name: 'No device' }).click();
+  await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+});
+
+/**
+ * The view menu behind the zoom percentage — Figma's second half of that menu,
+ * where what the canvas *shows* is decided.
+ */
+test.describe('view options', () => {
+  /** Opens the zoom menu, which is where all of these live. */
+  const openView = async (page: import('@playwright/test').Page) => {
+    // its accessible name is the percentage; the title is what identifies it
+    await page.locator('button[title="Zoom"]').click();
+  };
+
+  test('the menu ticks what is on and turns it off again', async ({ page }) => {
+    await openView(page);
+    const guides = page.getByRole('option', { name: /Layout guides/ });
+    await expect(guides).toHaveAttribute('aria-selected', 'true');
+
+    // the menu stays open while you flip options, as Figma's does
+    await guides.click();
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().view.layoutGuides)).toBe(false);
+    await expect(guides).toHaveAttribute('aria-selected', 'false');
+
+    await guides.click();
+    await page.keyboard.press('Escape');
+  });
+
+  test('outlines strips the paint off the canvas without touching the document', async ({ page }) => {
+    const id = await makeNode(page, 'rect', {
+      name: 'Painted', x: 40, y: 1180, w: 80, h: 80, fill: '#123456',
+    });
+    // popovers carry the same class so they inherit the panel's variables
+    const shell = page.locator('.fig-shell').first();
+    await expect(shell).not.toHaveAttribute('data-outlines', 'true');
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await expect(shell).toHaveAttribute('data-outlines', 'true');
+    await page.keyboard.press('Escape');
+    // the layer still says what it is; only the drawing changed
+    expect((await doc(page))[id].fill).toBe('#123456');
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await page.keyboard.press('Escape');
+    await removeNodes(page, [id]);
+  });
+
+  test('the zoom field takes a number and goes there', async ({ page }) => {
+    await openView(page);
+    await page.getByLabel('Zoom', { exact: true }).fill('150');
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(() => page.evaluate(() => Math.round(window.paperlike!.ui.getState().viewport.zoom * 100)))
+      .toBe(150);
+
+    await openView(page);
+    await page.getByRole('option', { name: /Zoom to 100%/ }).click();
+  });
+});
+
+test('collapse layers shuts every open row', async ({ page }) => {
+  await page.evaluate(() => {
+    const ui = window.paperlike!.ui.getState();
+    ui.setExpanded(Object.keys(window.paperlike!.doc()), true);
+  });
+  expect(
+    await page.evaluate(() => Object.values(window.paperlike!.ui.getState().expanded).some(Boolean)),
+  ).toBe(true);
+
+  await page.getByRole('button', { name: /Collapse layers/ }).click();
+  expect(
+    await page.evaluate(() => Object.values(window.paperlike!.ui.getState().expanded).some(Boolean)),
+  ).toBe(false);
+});
+
+test('the Actions button opens the command menu', async ({ page }) => {
+  await page.getByRole('button', { name: 'Actions' }).click();
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().paletteOpen)).toBe(true);
+  await page.keyboard.press('Escape');
+});
+
+test('Show/Hide UI takes every panel away and brings it back', async ({ page }) => {
+  await expect(page.locator('.fig-rail')).toBeVisible();
+
+  await page.evaluate(() => window.paperlike!.ui.getState().toggleChrome());
+  await expect(page.locator('.fig-rail')).toHaveCount(0);
+  await expect(page.locator('.fig-left')).toHaveCount(0);
+
+  // the canvas is still there, and still the whole point
+  await expect(page.locator('[data-canvas-root]')).toBeVisible();
+
+  await page.evaluate(() => window.paperlike!.ui.getState().toggleChrome());
+  await expect(page.locator('.fig-rail')).toBeVisible();
+});
+
+test.describe('pixel preview', () => {
+  test('rasterises the page and shows it back with the pixels visible', async ({ page }) => {
+    await page.evaluate(() => window.paperlike!.ui.getState().setPixelPreview('1x'));
+    const shot = page.locator('[data-pixel-preview]');
+    await expect(shot).toBeAttached({ timeout: 15_000 });
+    // nearest-neighbour is the whole point: it is what makes a pixel a pixel
+    await expect(shot).toHaveCSS('image-rendering', 'pixelated');
+
+    // the live stage steps aside while its raster stands in
+    const stage = page.locator('[data-canvas-root] > div').first();
+    await expect(stage).toHaveCSS('visibility', 'hidden');
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setPixelPreview('off'));
+    await expect(shot).toHaveCount(0);
+    await expect(stage).toHaveCSS('visibility', 'visible');
+  });
+
+  test('the raster covers the design, not the stored numbers', async ({ page }) => {
+    // a hug-height frame is whatever the layout made it; the preview has to
+    // measure that rather than trust the number on the node
+    const id = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const frame = store.create('frame', 'root', {
+        name: 'Hugging', x: 1400, y: 40, w: 200, h: 9999, hMode: 'fit',
+        flex: { mode: 'flex', direction: 'column', gap: 0, crossGap: 0, padding: [0, 0, 0, 0],
+                align: 'start', justify: 'start', wrap: false, columns: 1, rows: 0,
+                alignContent: 'start', strokesIncluded: false, stacking: 'last', baseline: false },
+      });
+      // a hug frame only shrinks around something; empty, it keeps its size
+      store.create('rect', frame, { name: 'Inside', w: 120, h: 80, fill: '#888888' });
+      store.commit();
+      return frame;
+    });
+    await page.evaluate(() => window.paperlike!.ui.getState().setPixelPreview('1x'));
+    const shot = page.locator('[data-pixel-preview]');
+    await expect(shot).toBeAttached({ timeout: 15_000 });
+
+    const zoom = await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom);
+    const box = (await shot.boundingBox())!;
+    expect(box.height / zoom).toBeLessThan(9999);
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setPixelPreview('off'));
+    await removeNodes(page, [id]);
+  });
+});
+
+test('additional labels write a size under every frame', async ({ page }) => {
+  await expect(page.locator('.fig-size-label')).toHaveCount(0);
+  await page.evaluate(() => window.paperlike!.ui.getState().toggleView('labels'));
+  await expect(page.locator('.fig-size-label').first()).toBeVisible();
+
+  await page.evaluate(() => window.paperlike!.ui.getState().toggleView('labels'));
+  await expect(page.locator('.fig-size-label')).toHaveCount(0);
+});
+
+test('the Annotate tool pins a note to the layer you click', async ({ page }) => {
+  const cover = (await nodeNamed(page, 'Cover'))!;
+  await page.getByRole('button', { name: 'Annotate' }).click();
+
+  const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  expect((await doc(page))[cover.id].annotations).toHaveLength(1);
+  // and it hands you to the tab where the note is written
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().inspectorTab)).toBe('inspect');
+  // the tool returns to Move, as a one-shot tool should
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, { annotations: [] });
+  }, cover.id);
+  await page.locator('.fig-tab', { hasText: 'Design' }).last().click();
+});
+
+test('the Measure tool latches the readout that ⌥ gives you', async ({ page }) => {
+  await page.getByRole('button', { name: 'Measure' }).click();
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().measuring)).toBe(true);
+
+  await page.getByRole('button', { name: 'Move', exact: true }).click();
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().measuring)).toBe(false);
+});
+
+/**
+ * The two prototype actions Figma has that map onto features this canvas
+ * already carries: swapping an instance to a sibling variant, and putting a
+ * variable collection into one of its modes while the prototype plays.
+ */
+test.describe('prototype actions', () => {
+  test('Change to offers the sibling variants and records the swap', async ({ page }) => {
+    const { instance, other } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('frame', 'root', { name: 'State=On', x: 40, y: 1300, w: 80, h: 40 });
+      const b = store.create('frame', 'root', { name: 'State=Off', x: 140, y: 1300, w: 80, h: 40 });
+      store.createComponent(a);
+      store.createComponent(b);
+      const set = store.combineAsVariants([a, b])!;
+      const main = window.paperlike!.doc()[set].children[0];
+      const placed = store.createInstance(main, 'root', { x: 40, y: 1400 })!;
+      store.commit();
+      return { instance: placed, other: window.paperlike!.doc()[set].children[1] };
+    });
+
+    await select(page, [instance]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    await page.getByRole('combobox', { name: 'Action' }).click();
+    await page.getByRole('option', { name: 'Change to' }).click();
+    // the destination menu offers variants of this set, not frames on the page
+    await page.getByRole('combobox', { name: 'Destination' }).click();
+    await page.getByRole('option', { name: 'State=Off' }).click();
+
+    const written = (await doc(page))[instance].interactions![0];
+    expect(written.action).toBe('change-to');
+    expect(written.destination).toBe(other);
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [instance]);
+  });
+
+  test('Set variable mode names a collection and one of its modes', async ({ page }) => {
+    // a name of its own: collections outlive the reset the fixture does, so a
+    // second run would otherwise find two of them
+    const name = `Theme ${Date.now().toString(36)}`;
+    const collection = await page.evaluate((label) => {
+      const store = window.paperlike!.store;
+      const id = store.addCollection(label);
+      store.addMode(id, 'Dark');
+      store.commit();
+      return id;
+    }, name);
+
+    const id = await makeNode(page, 'rect', { name: 'Switch', x: 300, y: 1400, w: 60, h: 60 });
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    await page.getByRole('combobox', { name: 'Action' }).click();
+    await page.getByRole('option', { name: 'Set variable mode' }).click();
+    await page.getByRole('combobox', { name: 'Collection' }).click();
+    await page.getByRole('option', { name, exact: true }).click();
+    await page.getByRole('combobox', { name: 'Mode' }).click();
+    await page.getByRole('option', { name: 'Dark', exact: true }).click();
+
+    const written = (await doc(page))[id].interactions![0];
+    expect(written.action).toBe('set-mode');
+    expect(written.collection).toBe(collection);
+    expect(written.mode).toBeTruthy();
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id]);
+  });
+});
+
+/**
+ * The rest of Figma's interaction editor: the triggers it fires on, the eight
+ * animations, and the thirteen easings — including the springs, which are not
+ * a curve and so are sampled into a CSS `linear()`.
+ */
+/**
+ * Add an interaction and open its editor.
+ *
+ * The panel lists one summary line per interaction, as Figma's does; the
+ * controls live in the dialog that line opens.
+ */
+async function addInteraction(page: Page) {
+  // the section button is "Add interactions"; the dialog's own + is "Add
+  // another interaction", so this has to name the section's exactly
+  await page.getByRole('button', { name: 'Add interactions', exact: true }).click();
+  await page.locator('.fig-interaction-summary').last().click();
+}
+
+test.describe('interaction editor', () => {
+  /** The prototype device the page is played on — it renames three triggers. */
+  const setDevice = (page: Page, prototypeDevice: string) =>
+    page.evaluate((device) => {
+      const store = window.paperlike!.store;
+      store.update(window.paperlike!.ui.getState().page, {
+        prototypeDevice: device as never,
+      });
+      store.commit();
+    }, prototypeDevice);
+
+  test('the panel lists one line per interaction and opens it in a dialog', async ({ page }) => {
+    const dest = await makeNode(page, 'frame', { name: 'Elsewhere', x: 1300, y: 1500, w: 80, h: 80 });
+    const id = await makeNode(page, 'rect', { name: 'Opener', x: 1100, y: 1500, w: 60, h: 60 });
+    await setDevice(page, 'none');
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+
+    await page.getByRole('button', { name: 'Add interactions', exact: true }).click();
+
+    // the panel itself stays one line: what fires it, and where it goes
+    const summary = page.locator('.fig-interaction-summary');
+    await expect(summary).toHaveCount(1);
+    await expect(summary.locator('.fig-interaction-trigger')).toHaveText('Click');
+    await expect(summary.locator('.fig-interaction-target')).toHaveText('None');
+    // and the controls are not in the panel until you ask for them
+    await expect(page.getByRole('combobox', { name: 'Action' })).toHaveCount(0);
+
+    await summary.click();
+    await expect(page.getByRole('combobox', { name: 'Action' })).toBeVisible();
+    await page.getByRole('combobox', { name: 'Destination' }).click();
+    await page.getByRole('option', { name: 'Elsewhere', exact: true }).click();
+
+    // the line now says where it goes, without opening anything
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: 'Action' })).toHaveCount(0);
+    await expect(summary.locator('.fig-interaction-target')).toHaveText('Elsewhere');
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id, dest]);
+  });
+
+  test('the trigger menu offers every trigger the runtime honours', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Hotspot', x: 400, y: 1500, w: 60, h: 60 });
+    // the labels follow the prototype device, so this test states the one it means
+    await setDevice(page, 'none');
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    await page.getByRole('combobox', { name: 'Trigger' }).click();
+    for (const label of [
+      'None',
+      'On click',
+      'On drag',
+      'While hovering',
+      'While pressing',
+      'Key/Gamepad',
+      'Mouse enter',
+      'Mouse leave',
+      'Mouse down',
+      'Mouse up',
+      'After delay',
+    ]) {
+      await expect(page.getByRole('option', { name: label, exact: true })).toBeVisible();
+    }
+
+    // drag and mouse-up were both wired in the runtime long before the menu
+    // offered them, which is the bug this pins
+    await page.getByRole('option', { name: 'Mouse up', exact: true }).click();
+    expect((await doc(page))[id].interactions![0].trigger).toBe('mouse-up');
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id]);
+  });
+
+  test('a touch device taps rather than clicks', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Tappable', x: 500, y: 1500, w: 60, h: 60 });
+    await setDevice(page, 'phone');
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    await page.getByRole('combobox', { name: 'Trigger' }).click();
+    await expect(page.getByRole('option', { name: 'On tap', exact: true })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'Touch down', exact: true })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'On click', exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await setDevice(page, 'none');
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id]);
+  });
+
+  test('the animation menu has both halves of move and slide', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Mover', x: 600, y: 1500, w: 60, h: 60 });
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    await page.locator('.fig-interaction .fig-row').last().getByRole('combobox').first().click();
+    for (const label of ['Move in', 'Move out', 'Slide in', 'Slide out']) {
+      await expect(page.getByRole('option', { name: label, exact: true })).toBeVisible();
+    }
+    await page.getByRole('option', { name: 'Move out', exact: true }).click();
+    expect((await doc(page))[id].interactions![0].transition.type).toBe('move-out');
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id]);
+  });
+
+  test('the State section says what a navigation forgets', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Goer', x: 700, y: 1500, w: 60, h: 60 });
+    await setDevice(page, 'none');
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    // it is collapsed until you open it, as Figma's is
+    const state = page.locator('.fig-state');
+    await expect(state.getByRole('button', { name: 'State' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    await state.getByRole('button', { name: 'State' }).click();
+
+    await state.getByRole('checkbox').first().check();
+    await state.getByRole('checkbox').nth(1).check();
+
+    const written = (await doc(page))[id].interactions![0];
+    expect(written.resetScroll).toBe(true);
+    expect(written.resetComponentState).toBe(true);
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id]);
+  });
+
+  test('a frame comes back scrolled where you left it, unless told to reset', async ({
+    page,
+  }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('frame', 'root', { name: 'Long', x: 2000, y: 0, w: 200, h: 200 });
+      const b = store.create('frame', 'root', { name: 'Other', x: 2300, y: 0, w: 200, h: 200 });
+      // something to scroll, and something tall enough inside it to need to
+      const pane = store.create('frame', a, {
+        name: 'Pane',
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 200,
+        scroll: 'vertical',
+      });
+      store.create('rect', pane, { name: 'Tall', x: 0, y: 0, w: 200, h: 900 });
+      const there = store.create('rect', a, { name: 'There', x: 0, y: 0, w: 40, h: 40 });
+      const backAgain = store.create('rect', b, { name: 'BackAgain', x: 0, y: 0, w: 40, h: 40 });
+      store.addInteraction(there, { action: 'navigate', destination: b });
+      store.addInteraction(backAgain, { action: 'navigate', destination: a });
+      store.commit();
+      return { a, b, pane, there, backAgain };
+    });
+
+    const pane = page.locator(`.fig-present [data-node-id="${ids.pane}"]`);
+    const scrollTop = () => pane.evaluate((el) => el.scrollTop);
+
+    await page.evaluate((id) => window.paperlike!.ui.getState().present(id), ids.a);
+    await pane.evaluate((el) => {
+      el.scrollTop = 300;
+      el.dispatchEvent(new Event('scroll', { bubbles: false }));
+    });
+
+    await page.locator(`.fig-present [data-node-id="${ids.there}"]`).click();
+    await expect(page.locator('.fig-present-screen')).toHaveAttribute('data-frame-id', ids.b);
+    await page.locator(`.fig-present [data-node-id="${ids.backAgain}"]`).click();
+    await expect(page.locator('.fig-present-screen')).toHaveAttribute('data-frame-id', ids.a);
+    expect(await scrollTop()).toBe(300);
+
+    // now say to forget, and the same trip lands at the top
+    await page.evaluate((id) => {
+      const store = window.paperlike!.store;
+      const node = window.paperlike!.doc()[id];
+      store.updateInteraction(id, node.interactions![0].id, { resetScroll: true });
+      store.commit();
+    }, ids.backAgain);
+
+    await page.locator(`.fig-present [data-node-id="${ids.there}"]`).click();
+    await expect(page.locator('.fig-present-screen')).toHaveAttribute('data-frame-id', ids.b);
+    await page.locator(`.fig-present [data-node-id="${ids.backAgain}"]`).click();
+    await expect(page.locator('.fig-present-screen')).toHaveAttribute('data-frame-id', ids.a);
+    expect(await scrollTop()).toBe(0);
+
+    await page.keyboard.press('Escape');
+    await removeNodes(page, [ids.a, ids.b]);
+  });
+
+  test('a condition reads the variables the run is holding', async ({ page }) => {
+    const check = (condition: string, vars: Record<string, string>) =>
+      page.evaluate(
+        ([expression, values]) =>
+          window.paperlike!.evaluate(
+            expression as string,
+            values as Record<string, string>,
+          ),
+        [condition, vars] as const,
+      );
+
+    expect(await check('$count > 3', { count: '5' })).toBe(true);
+    expect(await check('$count > 3', { count: '2' })).toBe(false);
+    // numbers compare as numbers, not alphabetically
+    expect(await check('$count > 9', { count: '10' })).toBe(true);
+    expect(await check("$theme == 'dark'", { theme: 'dark' })).toBe(true);
+    expect(await check('${Brand/Primary} == "red"', { 'Brand/Primary': 'red' })).toBe(true);
+    expect(await check('$a and not $b', { a: 'true', b: 'false' })).toBe(true);
+    expect(await check('$a or $b', { a: 'false', b: 'false' })).toBe(false);
+    expect(await check('($count > 1) and $theme == "dark"', { count: '2', theme: 'dark' })).toBe(
+      true,
+    );
+    // an empty condition is the branch you always take; nonsense is never taken
+    expect(await check('', {})).toBe(true);
+    expect(await check('$a >', { a: '1' })).toBe(false);
+    // a name the run never set is empty, and so false
+    expect(await check('$missing', {})).toBe(false);
+  });
+
+  test('the Conditional editor builds an if / else-if / else list', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Brancher', x: 800, y: 1500, w: 60, h: 60 });
+    await setDevice(page, 'none');
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    await page.getByRole('combobox', { name: 'Action' }).click();
+    await page.getByRole('option', { name: 'Conditional', exact: true }).click();
+
+    const branches = page.locator('.fig-branches');
+    await branches.getByRole('button', { name: 'Add condition' }).click();
+    await branches.getByRole('textbox', { name: 'Condition' }).fill('$gate == "open"');
+    await branches.getByRole('textbox', { name: 'Condition' }).press('Enter');
+    await branches.getByRole('button', { name: 'Add else' }).click();
+
+    const written = (await doc(page))[id].interactions![0];
+    expect(written.action).toBe('conditional');
+    expect(written.branches).toHaveLength(2);
+    expect(written.branches![0].condition).toBe('$gate == "open"');
+    // the else carries no condition — that is what makes it the else
+    expect(written.branches![1].condition).toBeUndefined();
+    // and it stays last when another condition is added
+    await branches.getByRole('button', { name: 'Add condition' }).click();
+    const after = (await doc(page))[id].interactions![0].branches!;
+    expect(after).toHaveLength(3);
+    expect(after[2].condition).toBeUndefined();
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id]);
+  });
+
+  test('a conditional runs the branch whose condition holds', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('frame', 'root', { name: 'CondA', x: 2600, y: 0, w: 200, h: 200 });
+      const yes = store.create('frame', 'root', { name: 'CondYes', x: 2900, y: 0, w: 200, h: 200 });
+      const no = store.create('frame', 'root', { name: 'CondNo', x: 3200, y: 0, w: 200, h: 200 });
+      const hotspot = store.create('rect', a, { name: 'Decide', x: 0, y: 0, w: 60, h: 60 });
+      store.commit();
+      return { a, yes, no, hotspot };
+    });
+
+    // a variable to branch on, and a conditional that reads it
+    const gate = await page.evaluate(
+      ([hotspot, yes, no]) => {
+        const store = window.paperlike!.store;
+        const token = store.addToken({ name: 'gate', type: 'string', value: 'open' });
+        const id = store.addInteraction(hotspot!, { action: 'conditional' })!;
+        store.updateInteraction(hotspot!, id, {
+          branches: [
+            {
+              id: 'b1',
+              condition: "$gate == 'open'",
+              actions: [{ id: 'a1', trigger: 'none', delay: 0, action: 'navigate', destination: yes }],
+            },
+            {
+              id: 'b2',
+              actions: [{ id: 'a2', trigger: 'none', delay: 0, action: 'navigate', destination: no }],
+            },
+          ],
+        });
+        store.commit();
+        return token;
+      },
+      [ids.hotspot, ids.yes, ids.no] as const,
+    );
+
+    await page.evaluate((id) => window.paperlike!.ui.getState().present(id), ids.a);
+    await page.locator(`.fig-present [data-node-id="${ids.hotspot}"]`).click();
+    await expect(page.locator('.fig-present-screen')).toHaveAttribute('data-frame-id', ids.yes);
+    await page.keyboard.press('Escape');
+
+    // close the gate and the else branch is the one that runs
+    await page.evaluate((token) => {
+      const store = window.paperlike!.store;
+      store.updateToken(token, { value: 'shut' });
+      store.commit();
+    }, gate);
+
+    await page.evaluate((id) => window.paperlike!.ui.getState().present(id), ids.a);
+    await page.locator(`.fig-present [data-node-id="${ids.hotspot}"]`).click();
+    await expect(page.locator('.fig-present-screen')).toHaveAttribute('data-frame-id', ids.no);
+    await page.keyboard.press('Escape');
+
+    await removeNodes(page, [ids.a, ids.yes, ids.no]);
+  });
+
+  test('Play/Pause and Set playhead drive a video on the frame', async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const frame = store.create('frame', 'root', { name: 'Reel', x: 3600, y: 0, w: 200, h: 200 });
+      const clipNode = store.create('rect', frame, {
+        name: 'Clip',
+        x: 0,
+        y: 60,
+        w: 200,
+        h: 120,
+        video: { src: '/clip.mp4', loop: false, muted: true, autoplay: false, fit: 'cover' },
+      });
+      const button = store.create('rect', frame, { name: 'Toggle', x: 0, y: 0, w: 60, h: 40 });
+      const seeker = store.create('rect', frame, { name: 'Seek', x: 70, y: 0, w: 60, h: 40 });
+      store.commit();
+      return { frame, clipNode, button, seeker };
+    });
+
+    await page.evaluate(
+      ([button, seeker, clipNode]) => {
+        const store = window.paperlike!.store;
+        const a = store.addInteraction(button!, { action: 'play-pause' })!;
+        store.updateInteraction(button!, a, { animation: clipNode, behavior: 'play' });
+        const b = store.addInteraction(seeker!, { action: 'set-playhead' })!;
+        store.updateInteraction(seeker!, b, { animation: clipNode, timestamp: 0.25 });
+        store.commit();
+      },
+      [ids.button, ids.seeker, ids.clipNode] as const,
+    );
+
+    await page.evaluate((id) => window.paperlike!.ui.getState().present(id), ids.frame);
+    const video = page.locator(`.fig-present [data-node-id="${ids.clipNode}"] video`);
+    await expect(video).toHaveCount(1);
+
+    // Whether a clip actually decodes is the browser's business, not ours, and a
+    // real one cannot start in a headless run — so the media element is stubbed
+    // and what the test pins is the thing this code owns: that clicking asks the
+    // right element to play, and that a playhead lands on the right second.
+    await page.evaluate(() => {
+      const proto = HTMLMediaElement.prototype as unknown as Record<string, unknown>;
+      proto.play = function (this: Record<string, unknown>) {
+        this.__playing = true;
+        return Promise.resolve();
+      };
+      proto.pause = function (this: Record<string, unknown>) {
+        this.__playing = false;
+      };
+      Object.defineProperty(proto, 'paused', {
+        configurable: true,
+        get(this: Record<string, unknown>) {
+          return this.__playing !== true;
+        },
+      });
+      Object.defineProperty(proto, 'currentTime', {
+        configurable: true,
+        get(this: Record<string, unknown>) {
+          return (this.__at as number) ?? 0;
+        },
+        set(this: Record<string, unknown>, value: number) {
+          this.__at = value;
+        },
+      });
+    });
+
+    expect(await video.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
+
+    await page.locator(`.fig-present [data-node-id="${ids.button}"]`).click();
+    await expect
+      .poll(async () => video.evaluate((el: HTMLVideoElement) => el.paused))
+      .toBe(false);
+
+    await page.locator(`.fig-present [data-node-id="${ids.seeker}"]`).click();
+    await expect
+      .poll(async () => video.evaluate((el: HTMLVideoElement) => Math.round(el.currentTime * 100)))
+      .toBe(25);
+
+    await page.keyboard.press('Escape');
+    await removeNodes(page, [ids.frame]);
+  });
+
+  test('the State section offers all three of Figma\'s resets', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Resetter', x: 900, y: 1500, w: 60, h: 60 });
+    await setDevice(page, 'none');
+    await select(page, [id]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+    await addInteraction(page);
+
+    const state = page.locator('.fig-state');
+    await state.getByRole('button', { name: 'State' }).click();
+    for (const label of ['Reset scroll position', 'Reset component state', 'Reset video state']) {
+      await expect(state.getByText(label, { exact: true })).toBeVisible();
+    }
+    await state.getByRole('checkbox').nth(2).check();
+    expect((await doc(page))[id].interactions![0].resetVideo).toBe(true);
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [id]);
+  });
+
+  test('Scroll behavior reads the way Figma words it', async ({ page }) => {
+    const frame = await makeNode(page, 'frame', {
+      name: 'Scroller',
+      x: 1000,
+      y: 1500,
+      w: 200,
+      h: 200,
+    });
+    await select(page, [frame]);
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Prototype' }).click();
+
+    // a frame gets Overflow, in Figma's order
+    await page.getByRole('combobox', { name: 'Overflow' }).click();
+    for (const label of ['No scrolling', 'Horizontal', 'Vertical', 'Both directions']) {
+      await expect(page.getByRole('option', { name: label, exact: true })).toBeVisible();
+    }
+    await page.getByRole('option', { name: 'Vertical', exact: true }).click();
+    expect((await doc(page))[frame].scroll).toBe('vertical');
+
+    // a layer inside one gets Position, with the parenthesised names Figma uses
+    const child = await page.evaluate((parent) => {
+      const store = window.paperlike!.store;
+      const id = store.create('rect', parent, { name: 'Pinned', x: 0, y: 0, w: 60, h: 60 });
+      store.commit();
+      return id;
+    }, frame);
+    await select(page, [child]);
+    await page.getByRole('combobox', { name: 'Position' }).click();
+    for (const label of [
+      'Scroll with parent',
+      'Fixed (stay in place)',
+      'Sticky (stop at top edge)',
+    ]) {
+      await expect(page.getByRole('option', { name: label, exact: true })).toBeVisible();
+    }
+    await page.getByRole('option', { name: 'Fixed (stay in place)', exact: true }).click();
+    expect((await doc(page))[child].scrollBehavior).toBe('fixed');
+
+    await page.locator('.fig > .fig-tabs .fig-tab', { hasText: 'Design' }).click();
+    await removeNodes(page, [frame]);
+  });
+
+  test('a spring easing becomes a sampled linear() curve', async ({ page }) => {
+    const css = await page.evaluate(() =>
+      window.paperlike!.easingCss({ easing: 'bouncy', duration: 400 }),
+    );
+    expect(css.startsWith('linear(')).toBe(true);
+    // a bouncy spring overshoots, so some sample sits past its destination
+    const samples = css
+      .slice('linear('.length, -1)
+      .split(',')
+      .map((n: string) => Number(n));
+    expect(samples[0]).toBe(0);
+    expect(samples[samples.length - 1]).toBe(1);
+    expect(Math.max(...samples)).toBeGreaterThan(1);
+
+    // and a plain curve stays a curve
+    expect(
+      await page.evaluate(() =>
+        window.paperlike!.easingCss({ easing: 'ease-out-back', duration: 400 }),
+      ),
+    ).toContain('cubic-bezier');
+  });
 });

@@ -8,7 +8,9 @@ import { readableOn } from '../lib/color';
 export function Cursors({ containerRef }: { containerRef: RefObject<HTMLDivElement | null> }) {
   const presence = usePresence();
   const viewport = useUI((s) => s.viewport);
+  const shown = useUI((s) => s.view.cursors);
   void containerRef;
+  if (!shown) return null;
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 20 }}>

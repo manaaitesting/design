@@ -11,6 +11,8 @@ import {
 } from 'react';
 import { getSession, type Presence, type Session } from '../collab/session';
 import { useUI as useUIStore } from '../state/ui';
+import { easingCss } from '../document/prototype';
+import { evaluate } from '../document/condition';
 import type { Identity } from '../collab/identity';
 import type { Doc, SceneNode, StyleKind } from '../document/types';
 import type { Comment, DocStore, Style, Token } from '../document/store';
@@ -48,6 +50,9 @@ export function SessionProvider({
         store: session.store,
         doc: () => session.store.getSnapshot(),
         ui: useUIStore,
+        easingCss,
+        evaluate: (condition: string, vars: Record<string, string>) =>
+          evaluate(condition, (name) => vars[name]),
       };
     }
   }, [session]);

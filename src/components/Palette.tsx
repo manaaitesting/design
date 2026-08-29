@@ -195,7 +195,7 @@ function commands(doc: Doc, store: ReturnType<typeof useStore>): Entry[] {
     make('union', 'Union selection', () => runBoolean(store, 'union'), '⌥⌘U'),
     make('subtract', 'Subtract selection', () => runBoolean(store, 'subtract'), '⌥⌘S'),
     make('intersect', 'Intersect selection', () => runBoolean(store, 'intersect'), '⌥⌘I'),
-    make('exclude', 'Exclude selection', () => runBoolean(store, 'exclude'), '⌥⌘X'),
+    make('exclude', 'Exclude selection', () => runBoolean(store, 'exclude'), '⌥⌘E'),
     make('mask', 'Use as mask', () => store.toggleMask(selection()), '⌃⌘M'),
     make('flatten', 'Flatten', () => {
       const flattened = store.flatten(selection());

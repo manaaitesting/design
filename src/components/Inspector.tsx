@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './ui/Icons';
 import { FigIcon } from './ui/FigIcon';
 import {
@@ -10,7 +10,10 @@ import {
   FigGroup,
   FigGroupSet,
   FigLabel,
+  FigMenuItem,
   FigPaintRow,
+  PaintProvider,
+  type PaintEnvironment,
   FigPopover,
   FigSection,
   FigSelect,
@@ -39,6 +42,7 @@ import { useUI } from '../state/ui';
 import {
   alignAnchors,
   applyMirror,
+  canEditPoints,
   cloneAnchor,
   clonePaths,
   editablePaths,
@@ -53,11 +57,16 @@ import { measureChildren } from '../lib/measure';
 import {
   customFamilies,
   ensureFont,
-  FONTS,
+  FONT_SIZES,
+  fontFor,
+  nearestStyle,
   readFontFile,
-  WEIGHT_LABEL,
-  weightsFor,
+  styleLabel,
+  stylesOf,
+  type FontFace,
 } from '../lib/fonts';
+import { FontPicker } from './FontPicker';
+import { TypeSettings } from './TypeSettings';
 import { ADJUST_LABEL, isNeutral, NO_ADJUST, type ImageAdjust } from '../document/adjust';
 import { DEFAULT_FONT, DEFAULT_GUIDES, TYPE_LABEL } from '../document/defaults';
 import { nodeToSvg } from '../export/raster';
@@ -67,7 +76,9 @@ import {
   descendants,
   isCanvasRoot,
   ROOT_ID,
+  type ConditionBranch,
   type Easing,
+  type TransitionSpec,
   type Interaction,
   type InteractionAction,
   type TransitionDirection,
@@ -87,16 +98,32 @@ import {
   type SceneNode,
   type SizeMode,
   type ExportSetting,
+  type Token,
+  DEVICES,
+  type BooleanOp,
+  type PrototypeDevice,
 } from '../document/types';
+import { FRAME_PRESETS } from '../document/presets';
 import type { PaintType } from './ui/PaintPicker';
+import { conditionError } from '../document/condition';
+import { newId } from '../lib/id';
 import {
+  ACTION_LABEL,
+  DEFAULT_BEZIER,
   DEFAULT_OVERLAY,
+  DEFAULT_SPRING,
+  describe,
   destinationsOn,
+  easingCss,
   flowsOn,
   frameOf,
   interactionsOf,
+  isTouch,
   needsDestination,
+  newInteraction,
   nextFlowName,
+  shortTrigger,
+  triggerLabel,
 } from '../document/prototype';
 
 type Setter = (patch: Partial<SceneNode>) => void;
@@ -148,12 +175,28 @@ export function Inspector() {
   const tab = useUI((s) => s.inspectorTab);
   const setTab = useUI((s) => s.setInspectorTab);
   const vectorEdit = useUI((s) => s.vectorEdit);
+  const page = useUI((s) => s.page);
 
   const nodes = selection.map((id) => doc[id]).filter(Boolean) as SceneNode[];
   const node = nodes[0];
   const set: Setter = (patch) => store.updateMany(selection, patch);
 
+  // One paint environment for the whole panel: in Figma every swatch opens the
+  // same picker, with the document's colours and the file's variables in it.
+  const allTokens = store.listTokens();
+  const paintEnvironment = useMemo<PaintEnvironment>(
+    () => ({
+      pageColors: pageColors(doc, page, allTokens),
+      tokens: allTokens,
+      onCreateToken: (hex: string) => {
+        store.addToken({ name: `color-${allTokens.length + 1}`, type: 'color', value: hex });
+      },
+    }),
+    [doc, page, allTokens, store],
+  );
+
   return (
+    <PaintProvider value={paintEnvironment}>
     <div className="fig" style={{ ...(tokenVars as React.CSSProperties), width }}>
       <Presence />
 
@@ -235,60 +278,256 @@ export function Inspector() {
         </div>
       )}
     </div>
+    </PaintProvider>
   );
 }
 
 // ── Layer header ─────────────────────────────────────────────────────────
 
+/**
+ * Figma's hyperlink button — ⌘K on a text layer.
+ *
+ * The link belongs to the layer, so it survives everything the layer does:
+ * the export writes it as an `<a href>`, and a click in the prototype follows
+ * it. Clearing the field removes the link, which is how Figma's does it too.
+ */
+function LinkButton({ node }: { node: SceneNode }) {
+  const store = useStore();
+  const linkEditor = useUI((s) => s.linkEditor);
+  const setLinkEditor = useUI((s) => s.setLinkEditor);
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
+
+  // ⌘K asks for this popover from the canvas, where the button is not
+  useEffect(() => {
+    if (linkEditor === node.id) {
+      setOpen(true);
+      setLinkEditor(null);
+    }
+  }, [linkEditor, node.id, setLinkEditor]);
+
+  return (
+    <span ref={setAnchor} style={{ display: 'inline-flex' }}>
+      <FigButton
+        title={node.link ? `Link: ${node.link}` : 'Create link  ⌘K'}
+        on={open || !!node.link}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon.Link />
+      </FigButton>
+      {open && (
+        <FigPopover anchor={anchor} width={244} onClose={() => setOpen(false)}>
+          <div style={{ padding: '4px 6px 8px' }}>
+            <FigLabel>Link</FigLabel>
+            <div className="fig-row" style={{ marginTop: 0 }}>
+              <FigText
+                value={node.link ?? ''}
+                placeholder="https://…"
+                onChange={(value) => store.update(node.id, { link: value.trim() || null })}
+              />
+            </div>
+            {node.link && (
+              <FigButton
+                style={{ width: '100%', justifyContent: 'flex-start', marginTop: 4 }}
+                onClick={() => {
+                  store.update(node.id, { link: null });
+                  setOpen(false);
+                }}
+              >
+                <FigIcon name="Remove" />
+                <span>Remove link</span>
+              </FigButton>
+            )}
+          </div>
+        </FigPopover>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The layer type, with Figma's dimension presets behind it.
+ *
+ * Figma writes the *type* at the head of the panel — "Frame", "Text" — and
+ * hangs the device sizes off it, which is where people look for them. The name
+ * is edited beside it here rather than only in the layers panel, so both are
+ * one click away.
+ */
+function TypeMenu({ node }: { node: SceneNode }) {
+  const store = useStore();
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
+  const sizeable = node.type === 'frame' || node.type === 'section';
+
+  return (
+    <span ref={setAnchor} style={{ display: 'inline-flex' }}>
+      <button
+        type="button"
+        className="fig-node-type"
+        title={sizeable ? 'Frame dimension presets' : TYPE_LABEL[node.type] ?? node.type}
+        aria-label={
+          sizeable ? `${TYPE_LABEL[node.type] ?? node.type}, frame dimension presets` : undefined
+        }
+        disabled={!sizeable}
+        onClick={() => sizeable && setOpen((v) => !v)}
+      >
+        <span>{TYPE_LABEL[node.type] ?? node.type}</span>
+        {sizeable && (
+          <span className="fig-caret">
+            <Icon.Caret />
+          </span>
+        )}
+      </button>
+      {open && (
+        <FigPopover
+          anchor={anchor}
+          width={262}
+          align="left"
+          variant="dark"
+          maxHeight={440}
+          onClose={() => setOpen(false)}
+        >
+          <ul
+            role="listbox"
+            aria-label="Frame dimension presets"
+            style={{ margin: 0, padding: 0, listStyle: 'none', overflowX: 'hidden' }}
+          >
+            {FRAME_PRESETS.map((preset) => (
+              <li key={preset.name}>
+                <button
+                  type="button"
+                  className="fig-menu-item"
+                  data-divider={preset.divider ? 'true' : undefined}
+                  style={preset.divider ? { marginTop: 5 } : undefined}
+                  onClick={() => {
+                    setOpen(false);
+                    store.update(node.id, {
+                      w: preset.w,
+                      h: preset.h,
+                      wMode: 'fixed',
+                      hMode: 'fixed',
+                    });
+                  }}
+                >
+                  <span className="fig-menu-mark">
+                    {node.w === preset.w && node.h === preset.h ? '✓' : ''}
+                  </span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {preset.name}
+                  </span>
+                  <span style={{ color: 'rgba(255,255,255,0.45)', flex: 'none' }}>
+                    {preset.w} × {preset.h}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </FigPopover>
+      )}
+    </span>
+  );
+}
+
+
+/**
+ * Figma keeps the boolean operations in the panel header, not only on a
+ * shortcut: the button applies Union and its caret offers the other three, and
+ * on a boolean group it changes the operation rather than nesting a new one.
+ */
+function BooleanMenu({ selection, node }: { selection: string[]; node: SceneNode }) {
+  const store = useStore();
+  const select = useUI((s) => s.select);
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const isBoolean = node.type === 'boolean';
+  // Figma offers the operations on anything with an outline to combine, one
+  // layer included — a boolean group of one is a legal, and editable, result.
+  // Text is the exception: it has no path until it is outlined.
+  if (node.type === 'text' || node.type === 'page') return null;
+
+  const apply = (op: BooleanOp) => {
+    setOpen(false);
+    if (isBoolean && selection.length === 1) {
+      store.setBooleanOp(node.id, op);
+      return;
+    }
+    const combined = store.booleanGroup(selection, op);
+    if (combined) select([combined]);
+  };
+
+  return (
+    <>
+      <FigButton
+        title={isBoolean ? 'Boolean operation' : 'Union selection  ⌥⌘U'}
+        onClick={() => apply(isBoolean ? (node.op ?? 'union') : 'union')}
+      >
+        <FigIcon name="Union" />
+      </FigButton>
+      <span ref={setAnchor} style={{ display: 'inline-flex' }}>
+        <FigButton title="Boolean operations" on={open} onClick={() => setOpen((v) => !v)}>
+          <FigIcon name="Boolean operations" />
+        </FigButton>
+      </span>
+      {open && (
+        <FigPopover anchor={anchor} width={210} variant="dark" onClose={() => setOpen(false)}>
+          <ul role="listbox" aria-label="Boolean operations" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            {BOOLEAN_OPS.map((op) => (
+              <li key={op.value}>
+                <button type="button" className="fig-menu-item" onClick={() => apply(op.value)}>
+                  <span className="fig-menu-mark">{isBoolean && node.op === op.value ? '✓' : ''}</span>
+                  <span style={{ flex: 1 }}>{op.label}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.45)' }}>{op.shortcut}</span>
+                </button>
+              </li>
+            ))}
+            {/* Figma keeps Flatten at the foot of this menu: it is the same
+                gesture, applied once and for all rather than kept live. */}
+            <li>
+              <button
+                type="button"
+                className="fig-menu-item"
+                onClick={() => {
+                  setOpen(false);
+                  const flattened = store.flatten(selection);
+                  if (flattened) select([flattened]);
+                }}
+              >
+                <span className="fig-menu-mark" />
+                <span style={{ flex: 1 }}>Flatten</span>
+                <span style={{ color: 'rgba(255,255,255,0.45)' }}>⌘E</span>
+              </button>
+            </li>
+          </ul>
+        </FigPopover>
+      )}
+    </>
+  );
+}
+
+const BOOLEAN_OPS: { value: BooleanOp; label: string; shortcut: string }[] = [
+  { value: 'union', label: 'Union', shortcut: '⌥⌘U' },
+  { value: 'subtract', label: 'Subtract', shortcut: '⌥⌘S' },
+  { value: 'intersect', label: 'Intersect', shortcut: '⌥⌘I' },
+  { value: 'exclude', label: 'Exclude', shortcut: '⌥⌘E' },
+];
+
+
 function LayerHeader({ node }: { node: SceneNode }) {
   const store = useStore();
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
+  const page = useUI((s) => s.page);
+  const setVectorEdit = useUI((s) => s.setVectorEdit);
   const setContextMenu = useUI((s) => s.setContextMenu);
-  const doc = useDoc();
-  const [draft, setDraft] = useState<string | null>(null);
-  // Figma names the count, not the first layer — a name field showing one of
-  // several is an invitation to rename the wrong thing
   const many = selection.length > 1;
-  const selectedNames = selection
-    .map((id) => doc[id]?.name)
-    .filter(Boolean)
-    .join(', ');
 
   return (
     <div className="fig-section" style={{ paddingBottom: 8 }}>
       <div className="fig-row" style={{ marginTop: 8 }}>
-        <input
-          value={draft ?? (many ? `${selection.length} layers` : node.name)}
-          spellCheck={false}
-          disabled={many}
-          title={many ? selectedNames : node.name}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={(e) => {
-            setDraft(null);
-            const value = e.target.value.trim();
-            if (value) store.update(node.id, { name: value });
-          }}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') {
-              setDraft(null);
-              e.currentTarget.blur();
-            }
-          }}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            height: 24,
-            border: 0,
-            outline: 'none',
-            background: 'transparent',
-            fontSize: 13,
-            fontWeight: 550,
-            color: 'var(--fig-ink)',
-          }}
-        />
+        {!many && <TypeMenu node={node} />}
+        {/* the layer name lives in the layers panel — the header keeps only
+            the actions, so the spacer holds them at the right edge */}
+        <div style={{ flex: 1, minWidth: 0 }} />
         {node.instanceOf ? (
           <FigButton
             title="Detach instance"
@@ -307,31 +546,25 @@ function LayerHeader({ node }: { node: SceneNode }) {
             <Icon.Component solid={node.isComponent} />
           </FigButton>
         )}
+        {node.type === 'text' && <LinkButton node={node} />}
+        {canEditPoints(node.type) && (
+          <FigButton
+            title="Edit object  ⏎"
+            onClick={() => setVectorEdit(node.id)}
+          >
+            <FigIcon name="Edit object" />
+          </FigButton>
+        )}
         <FigButton
-          title="Group selection"
+          title="Select matching layers  ⌥⌘A"
           onClick={() => {
-            const id = store.group(selection);
-            if (id) select([id]);
+            const matches = store.selectMatching(node.id, page);
+            if (matches.length) select(matches);
           }}
         >
-          <Icon.Frame />
+          <FigIcon name="Select matching layers" />
         </FigButton>
-        <FigButton
-          title="Ungroup"
-          disabled={!node.children.length}
-          onClick={() => {
-            const freed = store.ungroup(selection);
-            if (freed.length) select(freed);
-          }}
-        >
-          <FigIcon name="Individual strokes" />
-        </FigButton>
-        <FigButton
-          title="Duplicate"
-          onClick={() => select(store.duplicate(selection))}
-        >
-          <Icon.Copy />
-        </FigButton>
+        <BooleanMenu selection={selection} node={node} />
         <FigButton
           title="More actions"
           onClick={() => {
@@ -500,6 +733,7 @@ function PageStylesSection() {
     { kind: 'text', label: 'Text styles' },
     { kind: 'paint', label: 'Color styles' },
     { kind: 'effect', label: 'Effect styles' },
+    { kind: 'grid', label: 'Layout grid styles' },
   ];
 
   /** "28/34" — the size and line height a text style sets, as Figma lists it. */
@@ -668,23 +902,6 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
     <div className="scroll" style={{ flex: 1 }}>
       {node ? (
         <>
-          <FigSection
-            title="Interactions"
-            empty={interactions.length === 0}
-            onAdd={() => store.addInteraction(node.id)}
-          >
-            {interactions.map((interaction) => (
-              <InteractionRow
-                key={interaction.id}
-                node={node}
-                interaction={interaction}
-                frames={frames}
-              />
-            ))}
-          </FigSection>
-
-          <ScrollSection node={node} />
-
           {isFrame && (
             <FigSection
               title="Flow starting point"
@@ -703,6 +920,23 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
               </div>
             </FigSection>
           )}
+
+          <FigSection
+            title="Interactions"
+            empty={interactions.length === 0}
+            onAdd={() => store.addInteraction(node.id)}
+          >
+            {interactions.map((interaction) => (
+              <InteractionRow
+                key={interaction.id}
+                node={node}
+                interaction={interaction}
+                frames={frames}
+              />
+            ))}
+          </FigSection>
+
+          <ScrollSection node={node} />
         </>
       ) : null}
 
@@ -723,6 +957,8 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
         ))}
       </FigSection>
 
+      <PrototypeSettings pageId={pageId} />
+
       {!node && flows.length === 0 && (
         <div style={{ padding: '4px 16px 12px', color: 'var(--fig-dim)', lineHeight: 1.5 }}>
           Select a layer to give it an interaction, or drag the blue handle on a
@@ -730,6 +966,41 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Figma's Prototype settings: the device the prototype is meant to be seen on,
+ * and the colour behind it. They belong to the page rather than to the person
+ * playing it, so everyone opening the file plays back the same thing.
+ */
+function PrototypeSettings({ pageId }: { pageId: string }) {
+  const doc = useDoc();
+  const store = useStore();
+  const page = doc[pageId];
+  if (!page) return null;
+
+  const device = page.prototypeDevice ?? 'none';
+  const background = page.prototypeBackground ?? '#0E0E0E';
+
+  return (
+    <FigSection title="Prototype settings">
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigSelect
+          value={device}
+          options={DEVICES.map((entry) => ({ value: entry.id, label: entry.label }))}
+          title="The device the prototype plays inside"
+          onChange={(prototypeDevice) =>
+            store.update(pageId, { prototypeDevice: prototypeDevice as PrototypeDevice })
+          }
+        />
+      </div>
+      <FigPaintRow
+        color={background}
+        alpha={1}
+        onColor={(prototypeBackground) => store.update(pageId, { prototypeBackground })}
+      />
+    </FigSection>
   );
 }
 
@@ -749,7 +1020,7 @@ function ScrollSection({ node }: { node: SceneNode }) {
   if (!container && !inFrame) return null;
 
   return (
-    <FigSection title="Scroll behaviour">
+    <FigSection title="Scroll behavior">
       {container && (
         <>
           <FigLabel>Overflow</FigLabel>
@@ -758,11 +1029,11 @@ function ScrollSection({ node }: { node: SceneNode }) {
               value={node.scroll ?? 'none'}
               options={[
                 { value: 'none', label: 'No scrolling' },
-                { value: 'vertical', label: 'Vertical' },
                 { value: 'horizontal', label: 'Horizontal' },
-                { value: 'both', label: 'Both' },
+                { value: 'vertical', label: 'Vertical' },
+                { value: 'both', label: 'Both directions' },
               ]}
-              title="How this frame scrolls when it is played"
+              title="Overflow"
               onChange={(scroll) => store.update(node.id, { scroll })}
             />
           </div>
@@ -770,16 +1041,17 @@ function ScrollSection({ node }: { node: SceneNode }) {
       )}
       {inFrame && (
         <>
-          <FigLabel>Position when scrolling</FigLabel>
+          <FigLabel>Position</FigLabel>
           <div className="fig-row" style={{ marginTop: 0 }}>
-            <FigGroup
+            <FigSelect
               value={node.scrollBehavior ?? 'scrolls'}
-              onChange={(scrollBehavior) => store.update(node.id, { scrollBehavior })}
               options={[
-                { value: 'scrolls', label: 'Scrolls', title: 'Moves with the content' },
-                { value: 'fixed', label: 'Fixed', title: 'Stays where it is' },
-                { value: 'sticky', label: 'Sticky', title: 'Sticks when it reaches the edge' },
+                { value: 'scrolls', label: 'Scroll with parent' },
+                { value: 'fixed', label: 'Fixed (stay in place)' },
+                { value: 'sticky', label: 'Sticky (stop at top edge)' },
               ]}
+              title="Position"
+              onChange={(scrollBehavior) => store.update(node.id, { scrollBehavior })}
             />
           </div>
         </>
@@ -788,32 +1060,106 @@ function ScrollSection({ node }: { node: SceneNode }) {
   );
 }
 
-const TRIGGERS: FigOption<Trigger>[] = [
-  { value: 'click', label: 'On click' },
-  { value: 'hover', label: 'While hovering' },
-  { value: 'mouse-enter', label: 'Mouse enter' },
-  { value: 'mouse-leave', label: 'Mouse leave' },
-  { value: 'press', label: 'While pressing' },
-  { value: 'delay', label: 'After delay' },
-];
+/**
+ * Figma's trigger menu, in Figma's order and grouping.
+ *
+ * Three of the labels depend on the prototype device: a touch screen taps
+ * rather than clicks, and has no mouse to press.
+ */
+function triggerOptions(touch: boolean): FigOption<Trigger>[] {
+  const label = (trigger: Trigger) => triggerLabel(trigger, touch);
+  return [
+    { value: 'none', label: label('none') },
+    { value: 'click', label: label('click'), divider: true },
+    { value: 'drag', label: label('drag') },
+    { value: 'hover', label: label('hover') },
+    { value: 'press', label: label('press') },
+    { value: 'key', label: label('key') },
+    { value: 'mouse-enter', label: label('mouse-enter'), divider: true },
+    { value: 'mouse-leave', label: label('mouse-leave') },
+    { value: 'mouse-down', label: label('mouse-down') },
+    { value: 'mouse-up', label: label('mouse-up') },
+    { value: 'delay', label: label('delay'), divider: true },
+  ];
+}
+
+/** Figma's action menu, in Figma's order and grouping. */
+/**
+ * Figma's "Set variable mode": put a collection into one of its modes while the
+ * prototype plays. It is how a theme switch is prototyped without duplicating a
+ * single frame — the same collections the Theme tab defines.
+ */
+function ModeAction({
+  interaction,
+  set,
+}: {
+  interaction: Interaction;
+  set: (patch: Partial<Interaction>) => void;
+}) {
+  const collections = useCollections();
+  const chosen = collections.find((entry) => entry.id === interaction.collection);
+
+  return (
+    <>
+      <FigLabel>Collection</FigLabel>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigSelect
+          value={interaction.collection ?? ''}
+          options={[
+            { value: '', label: 'Pick a collection' },
+            ...collections.map((entry) => ({ value: entry.id, label: entry.name })),
+          ]}
+          title="Collection"
+          onChange={(collection) => set({ collection: collection || undefined, mode: undefined })}
+        />
+      </div>
+      {chosen && (
+        <>
+          <FigLabel>Mode</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigSelect
+              value={interaction.mode ?? chosen.defaultMode}
+              options={chosen.modes.map((mode) => ({ value: mode.id, label: mode.name }))}
+              title="Mode"
+              onChange={(mode) => set({ mode })}
+            />
+          </div>
+        </>
+      )}
+      <div className="fig-note">
+        Held for the run, like a variable: the document keeps the mode you
+        designed in.
+      </div>
+    </>
+  );
+}
 
 const ACTIONS: FigOption<InteractionAction>[] = [
-  { value: 'navigate', label: 'Navigate to' },
-  { value: 'back', label: 'Back' },
-  { value: 'open-overlay', label: 'Open overlay', divider: true },
-  { value: 'close-overlay', label: 'Close overlay' },
-  { value: 'scroll-to', label: 'Scroll to' },
-  { value: 'url', label: 'Open link', divider: true },
   { value: 'none', label: 'None' },
+  { value: 'navigate', label: 'Navigate to' },
+  { value: 'change-to', label: 'Change to' },
+  { value: 'back', label: 'Back' },
+  { value: 'scroll-to', label: 'Scroll to' },
+  { value: 'url', label: 'Open link' },
+  { value: 'set-variable', label: 'Set variable', divider: true },
+  { value: 'set-mode', label: 'Set variable mode' },
+  { value: 'conditional', label: 'Conditional' },
+  { value: 'open-overlay', label: 'Open overlay', divider: true },
+  { value: 'swap-overlay', label: 'Swap overlay' },
+  { value: 'close-overlay', label: 'Close overlay' },
+  { value: 'play-pause', label: 'Play/Pause animation', divider: true },
+  { value: 'set-playhead', label: 'Set playhead' },
 ];
 
 const TRANSITIONS: FigOption<TransitionType>[] = [
   { value: 'instant', label: 'Instant' },
   { value: 'dissolve', label: 'Dissolve' },
   { value: 'smart-animate', label: 'Smart animate' },
-  { value: 'move', label: 'Move in' },
+  { value: 'move', label: 'Move in', divider: true },
+  { value: 'move-out', label: 'Move out' },
   { value: 'push', label: 'Push' },
   { value: 'slide', label: 'Slide in' },
+  { value: 'slide-out', label: 'Slide out' },
 ];
 
 const OVERLAY_POSITIONS: FigOption<NonNullable<Interaction['overlay']>['position']>[] = [
@@ -833,93 +1179,174 @@ const DIRECTIONS: FigOption<TransitionDirection>[] = [
   { value: 'bottom', label: 'Bottom' },
 ];
 
+/**
+ * The four control points of a custom bezier.
+ *
+ * Figma draws a curve you can drag the handles of; the numbers underneath are
+ * the same four, and they are what the easing actually is.
+ */
+function CustomBezier({
+  transition,
+  set,
+}: {
+  transition: TransitionSpec;
+  set: (patch: Partial<Interaction>) => void;
+}) {
+  const points = transition.bezier ?? DEFAULT_BEZIER;
+  const at = (index: number, value: number) => {
+    const next = [...points] as [number, number, number, number];
+    next[index] = value;
+    set({ transition: { ...transition, bezier: next } });
+  };
+  const labels = ['X1', 'Y1', 'X2', 'Y2'];
+
+  return (
+    <>
+      <div className="fig-cols">
+        <FigLabel>{labels[0]}</FigLabel>
+        <FigLabel>{labels[1]}</FigLabel>
+      </div>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigField value={points[0]} step={0.01} title={labels[0]} onChange={(v) => at(0, v)} />
+        <FigField value={points[1]} step={0.01} title={labels[1]} onChange={(v) => at(1, v)} />
+      </div>
+      <div className="fig-cols">
+        <FigLabel>{labels[2]}</FigLabel>
+        <FigLabel>{labels[3]}</FigLabel>
+      </div>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigField value={points[2]} step={0.01} title={labels[2]} onChange={(v) => at(2, v)} />
+        <FigField value={points[3]} step={0.01} title={labels[3]} onChange={(v) => at(3, v)} />
+      </div>
+      <BezierPreview easing={easingCss(transition)} />
+    </>
+  );
+}
+
+/** Stiffness, damping and mass — the three numbers a spring is made of. */
+function CustomSpring({
+  transition,
+  set,
+}: {
+  transition: TransitionSpec;
+  set: (patch: Partial<Interaction>) => void;
+}) {
+  const spring = transition.spring ?? DEFAULT_SPRING;
+  const at = (key: keyof typeof spring, value: number) =>
+    set({ transition: { ...transition, spring: { ...spring, [key]: value } } });
+
+  return (
+    <>
+      <div className="fig-cols">
+        <FigLabel>Stiffness</FigLabel>
+        <FigLabel>Damping</FigLabel>
+      </div>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigField
+          value={spring.stiffness}
+          min={1}
+          max={1000}
+          step={10}
+          title="Stiffness"
+          onChange={(v) => at('stiffness', v)}
+        />
+        <FigField
+          value={spring.damping}
+          min={1}
+          max={100}
+          step={1}
+          title="Damping"
+          onChange={(v) => at('damping', v)}
+        />
+      </div>
+      <FigLabel>Mass</FigLabel>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigField
+          value={spring.mass}
+          min={0.1}
+          max={20}
+          step={0.1}
+          title="Mass"
+          onChange={(v) => at('mass', v)}
+        />
+      </div>
+      <BezierPreview easing={easingCss(transition)} />
+    </>
+  );
+}
+
+/**
+ * A dot that runs the easing on a loop, the way Figma previews one.
+ *
+ * The curve is whatever CSS the easing resolves to, so a spring's overshoot
+ * shows up here exactly as it will when the prototype plays.
+ */
+function BezierPreview({ easing }: { easing: string }) {
+  return (
+    <div className="fig-easing-preview" title="Preview">
+      <span style={{ animationTimingFunction: easing }} />
+    </div>
+  );
+}
+
+/** Figma's easing menu: a straight line, then the curves, then the springs. */
 const EASINGS: FigOption<Easing>[] = [
   { value: 'linear', label: 'Linear' },
-  { value: 'ease-in', label: 'Ease in' },
+  { value: 'ease-in', label: 'Ease in', divider: true },
   { value: 'ease-out', label: 'Ease out' },
   { value: 'ease-in-out', label: 'Ease in and out' },
+  { value: 'ease-in-back', label: 'Ease in back' },
+  { value: 'ease-out-back', label: 'Ease out back' },
+  { value: 'ease-in-out-back', label: 'Ease in and out back' },
+  { value: 'custom-bezier', label: 'Custom bezier' },
+  { value: 'gentle', label: 'Gentle', divider: true },
+  { value: 'quick', label: 'Quick' },
+  { value: 'bouncy', label: 'Bouncy' },
+  { value: 'slow', label: 'Slow' },
+  { value: 'custom-spring', label: 'Custom spring' },
 ];
 
-function InteractionRow({
-  node,
+/**
+ * Everything an action needs said about it, below the trigger.
+ *
+ * The same editor serves a top-level interaction and each action inside a
+ * conditional branch, so a branch can do anything an interaction can.
+ */
+function ActionBody({
   interaction,
+  set,
   frames,
+  variants,
+  scrollTargets,
+  videoTargets,
+  variables,
+  nested,
 }: {
-  node: SceneNode;
   interaction: Interaction;
+  set: (patch: Partial<Interaction>) => void;
   frames: SceneNode[];
+  variants: SceneNode[];
+  scrollTargets: SceneNode[];
+  videoTargets: SceneNode[];
+  variables: Token[];
+  /** true inside a conditional branch, where nesting another one is not offered */
+  nested?: boolean;
 }) {
-  const store = useStore();
-  const doc = useDoc();
-  const variables = useTokens();
-  // Scroll-to points at a layer rather than a frame, so it offers the layers of
-  // the artboard this interaction lives on.
-  const scrollTargets = (() => {
-    const frame = frameOf(node.id, doc);
-    if (!frame) return [];
-    return descendants(frame, doc)
-      .map((id) => doc[id])
-      .filter((entry): entry is SceneNode => !!entry && entry.id !== node.id);
-  })();
-  const set = (patch: Partial<Interaction>) =>
-    store.updateInteraction(node.id, interaction.id, patch);
-  const moves =
-    interaction.transition.type !== 'instant' &&
-    interaction.transition.type !== 'dissolve' &&
-    interaction.transition.type !== 'smart-animate';
   const overlay = interaction.overlay ?? DEFAULT_OVERLAY;
 
   return (
-    <div className="fig-interaction">
-      <div className="fig-row">
-        <FigSelect
-          value={interaction.trigger}
-          options={TRIGGERS}
-          onChange={(trigger) => set({ trigger })}
-        />
-        <FigButton
-          title="Remove interaction"
-          onClick={() => store.removeInteraction(node.id, interaction.id)}
-        >
-          <Icon.Minus />
-        </FigButton>
-      </div>
-
-      {interaction.trigger === 'key' && (
-        <>
-          <FigLabel>Key</FigLabel>
-          <div className="fig-row" style={{ marginTop: 0 }}>
-            <FigText
-              value={interaction.key ?? ''}
-              placeholder="Press a key…"
-              onChange={(key) => set({ key })}
-            />
-          </div>
-        </>
-      )}
-
-      {interaction.trigger === 'delay' && (
-        <>
-          <FigLabel>Delay</FigLabel>
-          <div className="fig-row" style={{ marginTop: 0 }}>
-            <FigField
-              value={interaction.delay}
-              min={0}
-              max={60_000}
-              step={100}
-              suffix="ms"
-              title="Delay"
-              onChange={(delay) => set({ delay })}
-            />
-          </div>
-        </>
-      )}
-
+    <>
       <FigLabel>Action</FigLabel>
       <div className="fig-row" style={{ marginTop: 0 }}>
         <FigSelect
           value={interaction.action}
-          options={ACTIONS}
+          options={ACTIONS.filter((option) => nested !== true || option.value !== 'conditional').map(
+            (option) =>
+              option.value === 'change-to' && !variants.length
+                ? { ...option, disabled: true }
+                : option,
+          )}
+          title="Action"
           onChange={(action) => set({ action })}
         />
       </div>
@@ -931,12 +1358,26 @@ function InteractionRow({
             <FigSelect
               value={interaction.destination ?? ''}
               options={[
-                { value: '', label: interaction.action === 'scroll-to' ? 'Pick a layer' : 'Pick a frame' },
-                ...(interaction.action === 'scroll-to' ? scrollTargets : frames).map((entry) => ({
+                {
+                  value: '',
+                  label:
+                    interaction.action === 'scroll-to'
+                      ? 'Pick a layer'
+                      : interaction.action === 'change-to'
+                        ? 'Pick a variant'
+                        : 'Pick a frame',
+                },
+                ...(interaction.action === 'scroll-to'
+                  ? scrollTargets
+                  : interaction.action === 'change-to'
+                    ? variants
+                    : frames
+                ).map((entry) => ({
                   value: entry.id,
                   label: entry.name,
                 })),
               ]}
+              title={interaction.action === 'scroll-to' ? 'Layer' : 'Destination'}
               onChange={(destination) => set({ destination: destination || null })}
             />
           </div>
@@ -1013,6 +1454,413 @@ function InteractionRow({
         </>
       )}
 
+      {interaction.action === 'set-mode' && <ModeAction interaction={interaction} set={set} />}
+
+      {(interaction.action === 'play-pause' || interaction.action === 'set-playhead') && (
+        <>
+          <FigLabel>Animation</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigSelect
+              value={interaction.animation ?? ''}
+              options={[
+                { value: '', label: 'Pick a video' },
+                ...videoTargets.map((entry) => ({ value: entry.id, label: entry.name })),
+              ]}
+              title="Animation"
+              onChange={(animation) => set({ animation: animation || undefined })}
+            />
+          </div>
+          {interaction.action === 'play-pause' ? (
+            <>
+              <FigLabel>Behavior</FigLabel>
+              <div className="fig-row" style={{ marginTop: 0 }}>
+                <FigSelect
+                  value={interaction.behavior ?? 'toggle'}
+                  options={BEHAVIORS}
+                  title="Behavior"
+                  onChange={(behavior) => set({ behavior })}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <FigLabel>Timestamp</FigLabel>
+              <div className="fig-row" style={{ marginTop: 0 }}>
+                <FigField
+                  value={interaction.timestamp ?? 0}
+                  min={0}
+                  step={0.1}
+                  suffix="s"
+                  title="Timestamp"
+                  onChange={(timestamp) => set({ timestamp })}
+                />
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+const BEHAVIORS: FigOption<NonNullable<Interaction['behavior']>>[] = [
+  { value: 'toggle', label: 'Toggle' },
+  { value: 'play', label: 'Play only' },
+  { value: 'pause', label: 'Pause only' },
+];
+
+/**
+ * The branches of a conditional: Figma's `if` / `else if` / `else` list.
+ *
+ * The last branch carries no condition — that is what makes it the `else` — and
+ * every branch holds a list of actions, so one condition can do several things.
+ */
+function Branches({
+  interaction,
+  set,
+  node,
+  frames,
+}: {
+  interaction: Interaction;
+  set: (patch: Partial<Interaction>) => void;
+  node: SceneNode;
+  frames: SceneNode[];
+}) {
+  const doc = useDoc();
+  const variables = useTokens();
+  const branches = interaction.branches ?? [];
+
+  const write = (next: ConditionBranch[]) => set({ branches: next });
+  const patch = (index: number, change: Partial<ConditionBranch>) =>
+    write(branches.map((entry, i) => (i === index ? { ...entry, ...change } : entry)));
+
+  const scrollTargets = (() => {
+    const frame = frameOf(node.id, doc);
+    if (!frame) return [];
+    return descendants(frame, doc)
+      .map((entry) => doc[entry])
+      .filter((entry): entry is SceneNode => !!entry && entry.id !== node.id);
+  })();
+  const videoTargets = scrollTargets.filter((entry) => entry.video?.src);
+
+  return (
+    <div className="fig-branches">
+      {branches.map((branch, index) => {
+        const isElse = branch.condition === undefined;
+        const error = branch.condition ? conditionError(branch.condition) : null;
+
+        return (
+          <div key={branch.id} className="fig-branch">
+            <div className="fig-row" style={{ alignItems: 'center' }}>
+              <span className="fig-branch-word">
+                {isElse ? 'else' : index === 0 ? 'if' : 'else if'}
+              </span>
+              {!isElse && (
+                <FigText
+                  value={branch.condition ?? ''}
+                  placeholder="Write condition"
+                  title={index === 0 ? 'Condition' : `Condition ${index + 1}`}
+                  onChange={(condition) => patch(index, { condition })}
+                />
+              )}
+              <FigButton
+                title="Remove branch"
+                onClick={() => write(branches.filter((_, i) => i !== index))}
+              >
+                <Icon.Minus />
+              </FigButton>
+            </div>
+
+            {!isElse && error && <div className="fig-note fig-bad">{error}</div>}
+
+            {branch.actions.map((step, stepIndex) => (
+              <div key={step.id} className="fig-branch-action">
+                <ActionBody
+                  interaction={step}
+                  nested
+                  frames={frames}
+                  variants={[]}
+                  scrollTargets={scrollTargets}
+                  videoTargets={videoTargets}
+                  variables={variables}
+                  set={(change) =>
+                    patch(index, {
+                      actions: branch.actions.map((entry, i) =>
+                        i === stepIndex ? { ...entry, ...change } : entry,
+                      ),
+                    })
+                  }
+                />
+                <FigButton
+                  title="Remove action"
+                  onClick={() =>
+                    patch(index, {
+                      actions: branch.actions.filter((_, i) => i !== stepIndex),
+                    })
+                  }
+                >
+                  <Icon.Minus />
+                </FigButton>
+              </div>
+            ))}
+
+            <button
+              type="button"
+              className="fig-btn"
+              data-text="true"
+              onClick={() =>
+                patch(index, { actions: [...branch.actions, newInteraction({ trigger: 'none' })] })
+              }
+            >
+              Add action
+            </button>
+          </div>
+        );
+      })}
+
+      <button
+        type="button"
+        className="fig-btn"
+        data-text="true"
+        onClick={() => {
+          // a new condition goes above the else, so the else stays last
+          const next = [...branches];
+          const at = next.length && next[next.length - 1].condition === undefined
+            ? next.length - 1
+            : next.length;
+          next.splice(at, 0, { id: newId(), condition: '', actions: [] });
+          write(next);
+        }}
+      >
+        Add condition
+      </button>
+      {!branches.some((entry) => entry.condition === undefined) && (
+        <button
+          type="button"
+          className="fig-btn"
+          data-text="true"
+          onClick={() => write([...branches, { id: newId(), actions: [] }])}
+        >
+          Add else
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Figma's Interactions list: one summary line per interaction.
+ *
+ * The line says what fires it and where it goes; clicking it opens the editor
+ * in a dialog beside the panel. Keeping the panel to one line each is the point
+ * — a layer with four interactions would otherwise push everything below it off
+ * the bottom of the screen.
+ */
+function InteractionRow({
+  node,
+  interaction,
+  frames,
+}: {
+  node: SceneNode;
+  interaction: Interaction;
+  frames: SceneNode[];
+}) {
+  const store = useStore();
+  const doc = useDoc();
+  const pageId = useUI((state) => state.page);
+  const touch = isTouch(doc[pageId]?.prototypeDevice);
+  const [row, setRow] = useState<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const destination = interaction.destination ? doc[interaction.destination]?.name : null;
+  // the third column is where it goes, falling back to what it does when the
+  // action has nowhere to go — Figma shows "None" on a fresh interaction
+  const target = needsDestination(interaction.action)
+    ? (destination ?? 'None')
+    : interaction.action === 'url'
+      ? interaction.url || 'None'
+      : ACTION_LABEL[interaction.action];
+
+  return (
+    <>
+      <div className="fig-row fig-interaction-row">
+        <button
+          ref={setRow}
+          type="button"
+          className="fig-interaction-summary"
+          title={describe(interaction, doc)}
+          onClick={() => setOpen((was) => !was)}
+        >
+          <span className="fig-interaction-trigger">{shortTrigger(interaction.trigger, touch)}</span>
+          <span className="fig-interaction-icon" aria-hidden>
+            {ACTION_ICON[interaction.action]}
+          </span>
+          <span className="fig-interaction-target">{target}</span>
+        </button>
+        <FigButton
+          title="Remove interaction"
+          onClick={() => store.removeInteraction(node.id, interaction.id)}
+        >
+          <Icon.Minus />
+        </FigButton>
+      </div>
+      {open && (
+        <FigPopover
+          anchor={row}
+          width={232}
+          variant="card"
+          placement="beside"
+          maxHeight={620}
+          onClose={() => setOpen(false)}
+        >
+          <div className="fig-card">
+            <header className="fig-card-head">
+              <span className="fig-card-title">Interaction</span>
+              <FigButton
+                title="Add another interaction"
+                onClick={() => store.addInteraction(node.id)}
+              >
+                <Icon.Plus />
+              </FigButton>
+              <FigButton title="Close" onClick={() => setOpen(false)}>
+                <Icon.Close />
+              </FigButton>
+            </header>
+            <InteractionEditor node={node} interaction={interaction} frames={frames} />
+          </div>
+        </FigPopover>
+      )}
+    </>
+  );
+}
+
+/** The closest glyph we have for each action, for the summary line. */
+const ACTION_ICON: Record<InteractionAction, React.ReactNode> = {
+  none: <Icon.Close />,
+  navigate: <Icon.ArrowRight />,
+  'change-to': <Icon.Component />,
+  back: <Icon.Reset />,
+  'scroll-to': <Icon.Anchor />,
+  url: <Icon.Link />,
+  'set-variable': <Icon.Variable />,
+  'set-mode': <Icon.Tokens />,
+  conditional: <Icon.GridFlow />,
+  'open-overlay': <Icon.Frame />,
+  'swap-overlay': <Icon.Frame />,
+  'close-overlay': <Icon.Frame />,
+  'play-pause': <Icon.Play />,
+  'set-playhead': <Icon.Ruler />,
+};
+
+function InteractionEditor({
+  node,
+  interaction,
+  frames,
+}: {
+  node: SceneNode;
+  interaction: Interaction;
+  frames: SceneNode[];
+}) {
+  const store = useStore();
+  const doc = useDoc();
+  const variables = useTokens();
+  const pageId = useUI((state) => state.page);
+  const touch = isTouch(doc[pageId]?.prototypeDevice);
+  // Scroll-to points at a layer rather than a frame, so it offers the layers of
+  // the artboard this interaction lives on.
+  /**
+   * "Change to" swaps an instance for a sibling variant, so the choices are the
+   * other variants of the set this layer belongs to — anything else would be a
+   * swap the component system cannot honour.
+   */
+  const variants = (() => {
+    const main = node.instanceOf ? doc[node.instanceOf] : node.isComponent ? node : null;
+    const set = main?.parent ? doc[main.parent] : null;
+    if (!set?.isComponentSet) return [];
+    return set.children
+      .map((id) => doc[id])
+      .filter((entry): entry is SceneNode => !!entry && entry.id !== main?.id);
+  })();
+
+  const scrollTargets = (() => {
+    const frame = frameOf(node.id, doc);
+    if (!frame) return [];
+    return descendants(frame, doc)
+      .map((id) => doc[id])
+      .filter((entry): entry is SceneNode => !!entry && entry.id !== node.id);
+  })();
+  // "Play/Pause animation" and "Set playhead" act on a video, so those are the
+  // only layers worth offering
+  const videoTargets = scrollTargets.filter((entry) => entry.video?.src);
+  const set = (patch: Partial<Interaction>) =>
+    store.updateInteraction(node.id, interaction.id, patch);
+  const moves =
+    interaction.transition.type !== 'instant' &&
+    interaction.transition.type !== 'dissolve' &&
+    interaction.transition.type !== 'smart-animate';
+  return (
+    <div className="fig-interaction">
+      <FigLabel>Trigger</FigLabel>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigSelect
+          value={interaction.trigger}
+          options={triggerOptions(touch)}
+          title="Trigger"
+          onChange={(trigger) => set({ trigger })}
+        />
+        <FigButton
+          title="Remove interaction"
+          onClick={() => store.removeInteraction(node.id, interaction.id)}
+        >
+          <Icon.Minus />
+        </FigButton>
+      </div>
+
+      {interaction.trigger === 'key' && (
+        <>
+          <FigLabel>Key</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigText
+              value={interaction.key ?? ''}
+              placeholder="Press a key…"
+              onChange={(key) => set({ key })}
+            />
+          </div>
+        </>
+      )}
+
+      {interaction.trigger === 'delay' && (
+        <>
+          <FigLabel>Delay</FigLabel>
+          <div className="fig-row" style={{ marginTop: 0 }}>
+            <FigField
+              value={interaction.delay}
+              min={0}
+              max={60_000}
+              step={100}
+              suffix="ms"
+              title="Delay"
+              onChange={(delay) => set({ delay })}
+            />
+          </div>
+        </>
+      )}
+
+      <ActionBody
+        interaction={interaction}
+        set={set}
+        frames={frames}
+        variants={variants}
+        scrollTargets={scrollTargets}
+        videoTargets={videoTargets}
+        variables={variables}
+      />
+
+      {interaction.action === 'conditional' && (
+        <Branches interaction={interaction} set={set} node={node} frames={frames} />
+      )}
+
+
       {interaction.action !== 'none' && (
         <>
           <FigLabel>Animation</FigLabel>
@@ -1035,10 +1883,16 @@ function InteractionRow({
             </div>
           )}
           {interaction.transition.type !== 'instant' && (
-            <div className="fig-row">
+            <>
+            <div className="fig-cols">
+              <FigLabel>Easing</FigLabel>
+              <FigLabel>Duration</FigLabel>
+            </div>
+            <div className="fig-row" style={{ marginTop: 0 }}>
               <FigSelect
                 value={interaction.transition.easing}
                 options={EASINGS}
+                title="Easing"
                 onChange={(easing) => set({ transition: { ...interaction.transition, easing } })}
               />
               <FigField
@@ -1051,10 +1905,102 @@ function InteractionRow({
                 onChange={(duration) => set({ transition: { ...interaction.transition, duration } })}
               />
             </div>
+            </>
+          )}
+          {interaction.transition.easing === 'custom-bezier' && (
+            <CustomBezier transition={interaction.transition} set={set} />
+          )}
+          {interaction.transition.easing === 'custom-spring' && (
+            <CustomSpring transition={interaction.transition} set={set} />
           )}
         </>
       )}
+
+      {arrives(interaction.action) && <StateSection interaction={interaction} set={set} />}
     </div>
+  );
+}
+
+/** Actions that land you somewhere, and so can arrive with a clean slate. */
+function arrives(action: Interaction['action']): boolean {
+  return action === 'navigate' || action === 'back';
+}
+
+/**
+ * Figma's "State" disclosure: what a navigation forgets on the way in.
+ *
+ * All three are remembered by default — that is what makes a prototype feel
+ * like an app rather than a slideshow — so the checkboxes say to forget, not to
+ * keep.
+ */
+function StateSection({
+  interaction,
+  set,
+}: {
+  interaction: Interaction;
+  set: (patch: Partial<Interaction>) => void;
+}) {
+  const [open, setOpen] = useState(
+    !!interaction.resetScroll || !!interaction.resetComponentState || !!interaction.resetVideo,
+  );
+
+  return (
+    <div className="fig-state">
+      <button
+        type="button"
+        className="fig-btn"
+        data-text="true"
+        aria-expanded={open}
+        style={{ width: '100%', justifyContent: 'flex-start', gap: 4 }}
+        onClick={() => setOpen((was) => !was)}
+      >
+        <span style={{ display: 'inline-flex', width: 10 }}>{open ? '⌄' : '›'}</span>
+        State
+      </button>
+      {open && (
+        <div style={{ padding: '2px 0 2px 14px' }}>
+          <StateBox
+            label="Reset scroll position"
+            checked={!!interaction.resetScroll}
+            onChange={(resetScroll) => set({ resetScroll })}
+          />
+          <StateBox
+            label="Reset component state"
+            checked={!!interaction.resetComponentState}
+            onChange={(resetComponentState) => set({ resetComponentState })}
+          />
+          <StateBox
+            label="Reset video state"
+            checked={!!interaction.resetVideo}
+            onChange={(resetVideo) => set({ resetVideo })}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StateBox({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label
+      style={{ display: 'flex', alignItems: 'center', gap: 8, height: 24, cursor: 'default' }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ width: 12, height: 12, accentColor: 'var(--fig-blue)' }}
+      />
+      <span>{label}</span>
+    </label>
   );
 }
 
@@ -1322,15 +2268,16 @@ function PositionSection({
               }}
               style={{ width: '100%', justifyContent: 'flex-start' }}
             >
-              Tidy up
+              <span style={{ flex: 1, textAlign: 'left' }}>Tidy up</span>
+              <span style={{ color: 'var(--fig-dim)' }}>⌃⌥T</span>
             </FigButton>
             <div style={{ height: 1, background: 'var(--fig-line)', margin: '4px 6px' }} />
             {(
               [
-                ['horizontal', 'Distribute horizontal spacing'],
-                ['vertical', 'Distribute vertical spacing'],
+                ['vertical', 'Distribute vertical spacing', '⌃⌥V'],
+                ['horizontal', 'Distribute horizontal spacing', '⌃⌥H'],
               ] as const
-            ).map(([axis, label]) => (
+            ).map(([axis, label, shortcut]) => (
               <FigButton
                 key={axis}
                 disabled={selection.length < 3}
@@ -1340,7 +2287,8 @@ function PositionSection({
                 }}
                 style={{ width: '100%', justifyContent: 'flex-start' }}
               >
-                {label}
+                <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+                <span style={{ color: 'var(--fig-dim)' }}>{shortcut}</span>
               </FigButton>
             ))}
           </FigPopover>
@@ -1434,7 +2382,10 @@ function VarField({
   suffix?: string;
   min?: number;
   max?: number;
+  step?: number;
   title?: string;
+  /** a control at the field's trailing edge — the size field's preset caret */
+  trailing?: React.ReactNode;
   onChange: (value: number) => void;
 }) {
   const names = useVarNames();
@@ -2512,6 +3463,21 @@ function AdvancedStroke({
                     onChange={(join) => patch({ join })}
                   />
                 </div>
+                {(stroke.join ?? 'round') === 'miter' && (
+                  <div className="fig-row">
+                    <FigField
+                      value={Math.round(stroke.miterAngle ?? 28.96)}
+                      glyph={<Icon.Angle />}
+                      min={1}
+                      max={180}
+                      suffix="°"
+                      title="Miter angle — below this a mitre bevels instead"
+                      onChange={(miterAngle) => patch({ miterAngle })}
+                    />
+                    <span style={{ flex: '1 1 0' }} />
+                    <span style={{ width: 24, flex: 'none' }} />
+                  </div>
+                )}
               </>
             ) : (
               <div style={{ padding: '6px 2px 0', color: 'var(--fig-dim)' }}>
@@ -2782,48 +3748,224 @@ function ShapeSection({
   );
 }
 
+/**
+ * The style menu: every cut the family ships, roman then italic.
+ *
+ * Figma keeps weight and slope in one control because that is what a family
+ * actually offers — "Bold Italic" is a font file, not two independent switches —
+ * and the menu ends with a way into the variable axes for the families that
+ * interpolate between the cuts instead of shipping them.
+ */
+function FontStyleMenu({
+  node,
+  font,
+  face,
+  onChange,
+  onAxes,
+}: {
+  node: SceneNode;
+  font: FontSpec;
+  face: FontFace | undefined;
+  onChange: (weight: number, italic: boolean) => void;
+  onAxes: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [variables, setVariables] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const names = useVarNames();
+  const styles = stylesOf(face);
+  const romanCount = face?.weights.length ?? styles.length;
+  // a bound weight is the variable's to change, so the trigger says whose it is
+  const boundTo = variableLabel(node, 'fontWeight', names);
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="fig-input"
+        title="Style"
+        data-on={open ? 'true' : undefined}
+        style={{ flex: '1 1 0', cursor: 'default' }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          event.preventDefault();
+          setOpen((v) => !v);
+        }}
+      >
+        <span className="fig-value" data-variable={boundTo ? 'true' : undefined}>
+          {boundTo ?? styleLabel(font.weight, font.italic)}
+        </span>
+        <span className="fig-caret">
+          <Icon.Caret />
+        </span>
+      </button>
+      {open && (
+        <FigPopover
+          anchor={anchor.current}
+          width={210}
+          variant="dark"
+          placement="beside"
+          onClose={() => setOpen(false)}
+        >
+          <ul role="listbox" aria-label="Font style" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            {styles.map((style, index) => (
+              <li key={`${style.weight}${style.italic ? 'i' : ''}`}>
+                <FigMenuItem
+                  label={styleLabel(style.weight, style.italic)}
+                  selected={style.weight === font.weight && !!font.italic === style.italic}
+                  // the italics start their own group, as they do in Figma
+                  divider={index === romanCount && romanCount > 0}
+                  onSelect={() => {
+                    onChange(style.weight, style.italic);
+                    setOpen(false);
+                  }}
+                />
+              </li>
+            ))}
+            {!!face?.axes.length && (
+              <li>
+                <FigMenuItem
+                  label="Variable font axes…"
+                  divider
+                  onSelect={() => {
+                    setOpen(false);
+                    onAxes();
+                  }}
+                />
+              </li>
+            )}
+            <li>
+              {/* Figma's own last entry: the weight can come from a number
+                  variable, so a type scale is stated once and worn everywhere */}
+              <FigMenuItem
+                label={boundTo ? `Weight: ${boundTo}` : 'Apply variable…'}
+                divider={!face?.axes.length}
+                selected={!!boundTo}
+                onSelect={() => {
+                  setOpen(false);
+                  setVariables(true);
+                }}
+              />
+            </li>
+          </ul>
+        </FigPopover>
+      )}
+      {variables && (
+        <VariableMenu node={node} field="fontWeight" onClose={() => setVariables(false)} />
+      )}
+    </>
+  );
+}
+
+/**
+ * The size field, with Figma's preset menu behind its caret.
+ *
+ * Typing and scrubbing both still work — the menu is the shortcut, not the only
+ * way in — and whatever the size currently is sits at the top of the list even
+ * when it is nothing like a preset, so the menu always says what is set.
+ */
+function FontSizeField({
+  node,
+  value,
+  onChange,
+}: {
+  node: SceneNode;
+  value: number;
+  onChange: (size: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
+
+  return (
+    <>
+      <VarField
+        node={node}
+        field="fontSize"
+        value={value}
+        glyph={<Icon.FontSize />}
+        min={1}
+        max={2000}
+        title="Size"
+        onChange={onChange}
+        trailing={
+          <span ref={setAnchor} style={{ display: 'inline-flex' }}>
+            <button
+              type="button"
+              className="fig-caret-btn"
+              title="Font sizes"
+              aria-label="Font sizes"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                setOpen((v) => !v);
+              }}
+            >
+              <Icon.Caret />
+            </button>
+          </span>
+        }
+      />
+      {open && (
+        <FigPopover
+          anchor={anchor}
+          width={110}
+          variant="dark"
+          placement="beside"
+          onClose={() => setOpen(false)}
+        >
+          <ul role="listbox" aria-label="Font size" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            <li>
+              <button type="button" className="fig-menu-item" data-current="true" onClick={() => setOpen(false)}>
+                <span className="fig-menu-mark">✓</span>
+                {value}
+              </button>
+            </li>
+            {FONT_SIZES.map((size, index) => (
+              <li key={size}>
+                <FigMenuItem
+                  label={String(size)}
+                  divider={index === 0}
+                  onSelect={() => {
+                    onChange(size);
+                    setOpen(false);
+                  }}
+                />
+              </li>
+            ))}
+          </ul>
+        </FigPopover>
+      )}
+    </>
+  );
+}
+
 function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
   const store = useStore();
   const custom = useCustomFonts();
+  const uploaded = useMemo(() => customFamilies(custom), [custom]);
   const font = node.font ?? DEFAULT_FONT;
   const patch = (delta: Partial<typeof font>) => set({ font: { ...font, ...delta } });
-  const [more, setMore] = useState(false);
+  const [settings, setSettings] = useState(false);
   const [fontError, setFontError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  // the built-in list plus whatever has been uploaded into this document
-  const families = [...FONTS, ...customFamilies(custom)];
-  const weightsIn = (stack: string) =>
-    families.find((entry) => entry.stack === stack)?.weights ?? weightsFor(stack);
-  const nearest = (stack: string, weight: number) => {
-    const list = weightsIn(stack);
-    return list.reduce((best, entry) =>
-      Math.abs(entry - weight) < Math.abs(best - weight) ? entry : best,
-    );
-  };
+  const [settingsAnchor, setSettingsAnchor] = useState<HTMLSpanElement | null>(null);
+  const face = fontFor(font.family, uploaded);
 
   return (
     <FigSection
       title="Typography"
-      actions={
-        <>
-          <StylePicker slot="text" node={node} />
-          <FigButton title="Type details" on={more} onClick={() => setMore((v) => !v)}>
-            <Icon.Sliders />
-          </FigButton>
-        </>
-      }
+      actions={<StylePicker slot="text" node={node} />}
     >
       <StyleBadge node={node} slot="text" />
       <div className="fig-row">
-        <FigSelect
+        <FontPicker
           value={font.family}
-          options={families.map((entry) => ({ value: entry.stack, label: entry.name }))}
-          title="Font"
+          onUpload={() => fileRef.current?.click()}
           onChange={(family) => {
-            ensureFont(family);
-            // a family that has no 500 must not be left claiming one
-            patch({ family, weight: nearest(family, font.weight) });
+            ensureFont(family, uploaded);
+            // a family that has no 500, or no italic, must not be left claiming one
+            const style = nearestStyle(family, font.weight, !!font.italic, uploaded);
+            patch({ family, weight: style.weight, italic: style.italic, variations: undefined });
           }}
         />
         <FigButton title="Upload a font file" onClick={() => fileRef.current?.click()}>
@@ -2852,33 +3994,36 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
       </div>
       {fontError && <div className="fig-note">{fontError}</div>}
       <div className="fig-row">
-        <FigSelect
-          value={String(font.weight)}
-          // only the weights this family actually ships
-          options={weightsIn(font.family).map((weight) => ({
-            value: String(weight),
-            label: WEIGHT_LABEL[weight] ?? String(weight),
-          }))}
-          title="Weight"
-          onChange={(weight) => patch({ weight: Number(weight) })}
+        <FontStyleMenu
+          node={node}
+          font={font}
+          face={face}
+          onAxes={() => setSettings(true)}
+          onChange={(weight, italic) =>
+            patch({
+              weight,
+              italic,
+              // a named cut and a wght axis are the same property said twice, so
+              // picking Bold has to move the axis with it
+              variations: font.variations ? { ...font.variations, wght: weight } : undefined,
+            })
+          }
         />
-        <FigField
-          value={font.size}
-          glyph={<Icon.FontSize />}
-          min={1}
-          title="Size"
-          onChange={(size) => patch({ size })}
-        />
+        <FontSizeField node={node} value={font.size} onChange={(size) => patch({ size })} />
       </div>
       <div className="fig-row">
-        <FigField
+        <VarField
+          node={node}
+          field="lineHeight"
           value={Math.round(font.lineHeight * font.size)}
           glyph={<Icon.LineHeight />}
           min={0}
           title="Line height"
           onChange={(px) => patch({ lineHeight: px / Math.max(font.size, 1) })}
         />
-        <FigField
+        <VarField
+          node={node}
+          field="letterSpacing"
           value={Math.round(font.letterSpacing * 100)}
           glyph={<Icon.Letter />}
           suffix="%"
@@ -2894,6 +4039,7 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
             { value: 'left', label: <Icon.AlignH at="left" />, title: 'Align left' },
             { value: 'center', label: <Icon.AlignH at="center" />, title: 'Align center' },
             { value: 'right', label: <Icon.AlignH at="right" />, title: 'Align right' },
+            { value: 'justify', label: <Icon.AlignH at="justify" />, title: 'Justify' },
           ]}
         />
         <FigGroup
@@ -2905,140 +4051,33 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
             { value: 'bottom', label: <Icon.AlignV at="bottom" />, title: 'Align bottom' },
           ]}
         />
+        {/* the rest of type — case, trim, numbers, the family's own axes —
+            lives in a dialog beside the panel rather than in eight more rows */}
+        <span ref={setSettingsAnchor} style={{ display: 'inline-flex' }}>
+          <FigButton title="Type settings" on={settings} onClick={() => setSettings((v) => !v)}>
+            <Icon.Sliders />
+          </FigButton>
+        </span>
       </div>
-
-      <div className="fig-row">
-        <FigGroup
-          value={font.case ?? 'none'}
-          onChange={(value) => patch({ case: value })}
-          options={[
-            { value: 'none', label: <Icon.TextCase at="none" />, title: 'As typed' },
-            { value: 'upper', label: <Icon.TextCase at="upper" />, title: 'Uppercase' },
-            { value: 'lower', label: <Icon.TextCase at="lower" />, title: 'Lowercase' },
-            { value: 'title', label: <Icon.TextCase at="title" />, title: 'Title case' },
-          ]}
-        />
-        <FigField
-          value={font.maxLines ?? 0}
-          glyph={<Icon.Truncate />}
-          min={0}
-          max={99}
-          title="Truncate after this many lines — 0 keeps them all"
-          onChange={(maxLines) => patch({ maxLines })}
-        />
-      </div>
-
-      {more && (
-        <>
-          <div className="fig-row">
-            <FigText value={node.text ?? ''} onChange={(text) => set({ text })} placeholder="Content" />
-          </div>
-          <div className="fig-row">
-            <FigSelect
-              value={font.numeric ?? 'normal'}
-              options={[
-                { value: 'normal', label: 'Default figures' },
-                { value: 'tabular', label: 'Tabular figures' },
-                { value: 'oldstyle', label: 'Old-style figures' },
-              ]}
-              title="How numbers are set — tabular figures line up in a column"
-              onChange={(numeric) => patch({ numeric })}
-            />
-          </div>
-          <div className="fig-row">
-            <FigText
-              value={(font.features ?? []).join(', ')}
-              placeholder="OpenType tags: ss01, dlig…"
-              onChange={(value) =>
-                patch({
-                  features: value
-                    .split(/[,\s]+/)
-                    .map((tag) => tag.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </div>
-          <div className="fig-row">
-            <FigField
-              value={font.paragraphSpacing ?? 0}
-              glyph={<Icon.LineHeight />}
-              min={0}
-              title="Paragraph spacing"
-              onChange={(paragraphSpacing) => patch({ paragraphSpacing })}
-            />
-            <FigSelect
-              value={font.list ?? 'none'}
-              options={[
-                { value: 'none', label: 'No list' },
-                { value: 'bullet', label: 'Bulleted' },
-                { value: 'number', label: 'Numbered' },
-              ]}
-              title="List style"
-              onChange={(list) => patch({ list })}
-            />
-          </div>
-          <div className="fig-row">
-            <FigSelect
-              value={
-                !node.underline
-                  ? 'none'
-                  : node.underline.line === 'strikethrough'
-                    ? 'strike'
-                    : node.underline.style
-              }
-              options={[
-                { value: 'none', label: 'No decoration' },
-                { value: 'solid', label: 'Underline' },
-                { value: 'double', label: 'Double' },
-                { value: 'dashed', label: 'Dashed' },
-                { value: 'dotted', label: 'Dotted' },
-                { value: 'wavy', label: 'Wavy' },
-                { value: 'strike', label: 'Strikethrough', divider: true },
-              ]}
-              title="Decoration"
-              onChange={(value) =>
-                set({
-                  underline:
-                    value === 'none'
-                      ? null
-                      : {
-                          line: value === 'strike' ? 'strikethrough' : 'underline',
-                          style:
-                            value === 'strike'
-                              ? 'solid'
-                              : (value as NonNullable<SceneNode['underline']>['style']),
-                          color: node.underline?.color ?? font.color,
-                          thickness: node.underline?.thickness ?? 1,
-                          offset: node.underline?.offset ?? 2,
-                        },
-                })
-              }
-            />
-          </div>
-          <div className="fig-row">
-            <FigField
-              value={node.textStroke?.width ?? 0}
-              glyph={<Icon.Square />}
-              min={0}
-              step={0.5}
-              title="Text stroke width"
-              onChange={(width) =>
-                set({
-                  textStroke: width
-                    ? { width, color: node.textStroke?.color ?? '#000000' }
-                    : null,
-                })
-              }
-            />
-            {node.textStroke && (
-              <FigText
-                value={node.textStroke.color}
-                onChange={(color) => set({ textStroke: { ...node.textStroke!, color } })}
-              />
-            )}
-          </div>
-        </>
+      {settings && (
+        <FigPopover
+          anchor={settingsAnchor}
+          width={252}
+          variant="card"
+          placement="beside"
+          // tall enough for the Basics tab whole; Details still scrolls, which
+          // is what a tab of fine print is for
+          maxHeight={560}
+          onClose={() => setSettings(false)}
+        >
+          <TypeSettings
+            node={node}
+            font={font}
+            patch={patch}
+            set={set}
+            onClose={() => setSettings(false)}
+          />
+        </FigPopover>
       )}
 
       <FigPaintRow color={font.color} alpha={1} onColor={(color) => patch({ color })} />
@@ -3066,18 +4105,67 @@ const PAINT_DEFAULTS: Record<Exclude<PaintType, 'video' | 'shader'>, string> = {
   image: 'url(https://placehold.co/600x400)',
 };
 
-/** Every solid colour already used on the page, newest first — Figma's "On this page". */
-function pageColors(doc: Doc, page: string): string[] {
+/**
+ * Every colour already used on the page — Figma's "On this page".
+ *
+ * Figma means every colour you can see, so this has to look everywhere a colour
+ * can hide: fills, strokes, text, effects, text strokes and grids. It also has
+ * to accept the forms a colour actually takes in this document — `rgba()`,
+ * three-digit hex, eight-digit hex and `var(--token)` — because a panel that
+ * only recognises `#RRGGBB` reports an empty swatch row on a document made
+ * entirely of variables, which is what it did.
+ */
+function pageColors(doc: Doc, page: string, tokens: Token[] = []): string[] {
+  const byName = new Map(tokens.map((token) => [token.name, token.value]));
   const seen = new Set<string>();
+
+  const add = (value: string | null | undefined): void => {
+    if (!value) return;
+    const raw = value.trim();
+    if (!raw || raw === 'none' || raw === 'transparent') return;
+    // a variable is worth a swatch as the colour it resolves to
+    const reference = /^var\(--([a-zA-Z0-9_-]+)\)$/.exec(raw);
+    if (reference) return add(byName.get(reference[1]));
+    // gradients and images name colours inside themselves
+    if (/gradient\(/i.test(raw)) {
+      for (const stop of raw.match(/#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)/g) ?? []) add(stop);
+      return;
+    }
+    if (/^url\(/i.test(raw)) return;
+    const hex = /^#([0-9a-fA-F]{3,8})$/.exec(raw);
+    if (hex) {
+      const digits = hex[1];
+      const full =
+        digits.length === 3
+          ? digits.split('').map((c) => c + c).join('')
+          : digits.slice(0, 6);
+      seen.add(`#${full.toUpperCase()}`);
+      return;
+    }
+    if (/^rgba?\(/i.test(raw)) {
+      const parts = raw.match(/-?\d*\.?\d+/g);
+      if (!parts || parts.length < 3) return;
+      const channels = parts.slice(0, 3).map((part) => Math.max(0, Math.min(255, Math.round(Number(part)))));
+      seen.add(`#${channels.map((c) => c.toString(16).padStart(2, '0')).join('').toUpperCase()}`);
+    }
+  };
+
   for (const id of descendants(page, doc)) {
     const node = doc[id];
-    for (const paint of node?.fills ?? (node?.fill ? [{ value: node.fill }] : [])) {
-      const value = (paint as { value: string }).value;
-      if (/^#[0-9a-fA-F]{6}$/.test(value)) seen.add(value.toUpperCase());
+    if (!node) continue;
+    if (node.fills?.length) for (const paint of node.fills) add(paint.value);
+    else add(node.fill);
+    add(node.border?.color);
+    add(node.outline?.color);
+    add(node.font?.color);
+    add(node.textStroke?.color);
+    add(node.shadow?.color);
+    add(node.innerShadow?.color);
+    for (const effect of node.effects ?? []) {
+      add(effect.color);
+      add(effect.color2);
     }
-    if (node?.border?.color && /^#[0-9a-fA-F]{6}$/.test(node.border.color)) {
-      seen.add(node.border.color.toUpperCase());
-    }
+    add(node.guides?.color);
   }
   return [...seen].slice(0, 40);
 }
@@ -3157,16 +4245,25 @@ function FillSection({
         ])
       }
       actions={
-        paints.length ? (
-          <StylePicker
-            slot="fill"
-            node={node}
-            onPickVariable={(reference) => patch(paints[0].id, { value: reference })}
-          />
-        ) : undefined
+        // Figma keeps this button in the header whether or not the layer has a
+        // fill: applying a style is how you *give* it one.
+        <StylePicker
+          slot="fill"
+          node={node}
+          onPickVariable={(reference) =>
+            paints.length
+              ? patch(paints[0].id, { value: reference })
+              : set({ fills: undefined, fill: reference, fillVisible: true })
+          }
+        />
       }
     >
       <StyleBadge node={node} slot="fill" />
+      {mixed && (
+        <div style={{ color: 'var(--fig-dim)', padding: '0 2px 4px' }}>
+          Click + to replace mixed content
+        </div>
+      )}
       {mixed ? (
         <FigPaintRow
           color={paints[0]?.value ?? '#D9D9D9'}
@@ -3289,6 +4386,26 @@ function FillSection({
           </div>
         );
       })
+      )}
+
+      {/* Figma offers this on any frame, not only on the page — but only once
+          the frame has an export setting, which is the only time the answer
+          matters. A frame exported with it off gives you its contents on
+          nothing. */}
+      {(node.type === 'frame' || node.type === 'section') &&
+        paints.length > 0 &&
+        (node.exports?.length ?? 0) > 0 && (
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, cursor: 'default' }}
+        >
+          <input
+            type="checkbox"
+            checked={node.exportBackground !== false}
+            onChange={(event) => set({ exportBackground: event.target.checked })}
+            style={{ width: 12, height: 12, accentColor: 'var(--fig-blue)' }}
+          />
+          <span>Show in exports</span>
+        </label>
       )}
     </FigSection>
   );
@@ -3618,16 +4735,22 @@ function GuidesSection({ node, set }: { node: SceneNode; set: Setter }) {
       onAdd={() => set({ guides: { ...DEFAULT_GUIDES } })}
       onRemove={() => set({ guides: null })}
       actions={
-        guides ? (
-          <FigButton
-            title={guides.visible ? 'Hide grid' : 'Show grid'}
-            onClick={() => set({ guides: { ...guides, visible: !guides.visible } })}
-          >
-            <Icon.Eye off={!guides.visible} />
-          </FigButton>
-        ) : undefined
+        <>
+          {/* Figma keeps this one in the header whether or not the frame has a
+              guide: applying a style is how you give it one. */}
+          <StylePicker slot="grid" node={node} />
+          {guides && (
+            <FigButton
+              title={guides.visible ? 'Hide grid' : 'Show grid'}
+              onClick={() => set({ guides: { ...guides, visible: !guides.visible } })}
+            >
+              <Icon.Eye off={!guides.visible} />
+            </FigButton>
+          )}
+        </>
       }
     >
+      <StyleBadge node={node} slot="grid" />
       {guides && (
         <>
           <div className="fig-row">

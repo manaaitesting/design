@@ -33,7 +33,8 @@ export type VarScope =
   | 'gap'
   | 'radius'
   | 'strokeWidth'
-  | 'opacity';
+  | 'opacity'
+  | 'typography';
 
 export const COLOR_SCOPES: VarScope[] = ['fill', 'stroke', 'text', 'effect'];
 export const NUMBER_SCOPES: VarScope[] = [
@@ -43,6 +44,7 @@ export const NUMBER_SCOPES: VarScope[] = [
   'radius',
   'strokeWidth',
   'opacity',
+  'typography',
 ];
 
 export const SCOPE_LABEL: Record<VarScope, string> = {
@@ -56,6 +58,7 @@ export const SCOPE_LABEL: Record<VarScope, string> = {
   radius: 'Corner radius',
   strokeWidth: 'Stroke weight',
   opacity: 'Opacity',
+  typography: 'Type size and weight',
 };
 
 /** Which scope a numeric field belongs to, for filtering the variable menu. */
@@ -66,6 +69,12 @@ export const FIELD_SCOPE: Record<string, VarScope> = {
   h: 'size',
   radius: 'radius',
   opacity: 'opacity',
+  // one scope for the four type fields, the way `size` covers both w and h: a
+  // document with a type scale wants those variables offered together
+  fontSize: 'typography',
+  fontWeight: 'typography',
+  lineHeight: 'typography',
+  letterSpacing: 'typography',
 };
 
 /**

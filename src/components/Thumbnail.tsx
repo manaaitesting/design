@@ -28,19 +28,25 @@ export function Thumbnail() {
   const { provider } = useSession();
   const tokenVars = useTokenVars();
   const last = useRef(0);
+  /** which frame the last capture was of, so choosing a new one is not throttled */
+  const captured = useRef<string | null>(null);
   const room = provider.roomname;
 
   useEffect(() => {
     if (readOnly) return;
     const page = doc[useUI.getState().page] ?? doc[ROOT_ID];
-    const first = page?.children?.find((id) => doc[id]?.type === 'frame');
+    // "Set as thumbnail" names the frame; without one, the first frame stands
+    // for the file, which is right until the first frame is a scratch board
+    const chosen = page?.thumbnailOf && doc[page.thumbnailOf] ? page.thumbnailOf : null;
+    const first = chosen ?? page?.children?.find((id) => doc[id]?.type === 'frame');
     if (!first) return;
-    if (Date.now() - last.current < AT_MOST_EVERY_MS) return;
+    if (first === captured.current && Date.now() - last.current < AT_MOST_EVERY_MS) return;
 
     const timer = setTimeout(async () => {
       const node = doc[first];
       if (!node) return;
       last.current = Date.now();
+      captured.current = first;
       try {
         const scale = Math.min(1, HEIGHT / Math.max(node.h, 1));
         const blob = await nodeToPng(first, useUI.getState().viewport.zoom, scale, tokenVars);

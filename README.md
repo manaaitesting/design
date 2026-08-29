@@ -206,6 +206,9 @@ kernel, masks and variable modes directly — no browser, because a boolean that
 clips the wrong region is invisible until someone draws exactly the shape that
 exposes it. `library` runs the shared library against a scratch database.
 `sync` drives the sync server, including the guard that drops a viewer's writes.
+`mcp` spawns the MCP server over stdio against a scratch database and asks it to
+do everything it advertises — the one surface with no screen to catch a
+regression on.
 `editor` drives the real canvas — pointer sequences and key presses, not unit tests of
 internals — because the bugs that actually bit here only appear end to
 end: a hug-sized leaf collapsing to 0×0, a held ⌘D burying a layer five frames
@@ -221,6 +224,11 @@ and writes the running document: edits appear on every open canvas immediately
 and the CRDT merges them with whatever a human is doing at that moment. No
 import/export round trip, no screenshot to interpret.
 
+The surface is Figma's design server, tool for tool — read a node's context, look
+at it, ask what variables and components it is made of, ask how it behaves, map
+it to the code that already implements it — plus the direction Figma's cannot go:
+this canvas is HTML/CSS all the way down, so an agent can *build*.
+
 Register it with any MCP client — `.mcp.json` is checked in for Claude Code:
 
 ```bash
@@ -229,17 +237,38 @@ pnpm mcp        # or: npx tsx server/mcp.ts
 
 | tool | what it does |
 |---|---|
+| `whoami` | the identity it edits as, where sync and the index live, who else is here |
 | `list_files` | every file, with ids |
 | `get_metadata` | the node tree — ids, types, boxes, layout mode |
 | `get_design_context` | the node as React + CSS, HTML, or JSON |
 | `get_node` | every property of one node |
-| `get_variables` | variables, by collection, with every mode's value |
+| `get_screenshot` | a PNG of the node, rendered headlessly from that same export |
+| `download_assets` | the render, the source images inside it, and an SVG per vector layer |
+| `get_variables` · `get_variable_defs` | the file's variables, or just the ones a subtree uses |
+| `get_libraries` · `search_design_system` | what components, styles and variables exist, and where |
+| `get_motion_context` | a node's interactions, and the CSS that plays each transition |
+| `list_shader_fills` · `get_shader_fill` | the shader generators, and the GLSL behind one |
+| `list_shader_effects` · `get_shader_effect` | the Effects list's types and presets, as JSON to paste |
+| `get_code_connect_map` · `add_code_connect_map` | which node is already built, and where |
+| `create_new_file` | a new file, owned by a real account |
 | `create_node` · `update_node` · `delete_node` | write to the live document |
+| `edit_design` | every other canvas verb, as a list of ops run in order |
+| `upload_asset` | an image off disk, placed as a layer |
+| `publish_component` · `import_component` | the shared library, from the agent's side |
 | `set_variable` | create or update a token |
 
-`get_design_context` runs the same `nodeStyle()` the canvas renders with, so what
-an agent reads is what ships — the reason this is more useful than a design file
-an agent has to guess at.
+`edit_design` is the batch tool: group and ungroup, sections, masks, booleans,
+flatten, outline stroke, align, distribute, tidy, resize-to-fit, auto layout,
+scale, components and instances, component properties, variants, styles,
+prototype interactions and flow starts, pages. Each op names the nodes it acts
+on and carries only the fields it needs, and the reply says what each one did —
+including the ones it skipped, and why.
+
+`get_design_context` runs the same `nodeStyle()` the canvas renders with, and
+`get_screenshot` opens that export in headless Chromium, so what an agent reads
+*and what it sees* are what ships — the reason this is more useful than a design
+file an agent has to guess at. Code Connect closes the loop: a node mapped to
+`src/ui/Card.tsx` is a node the next agent reuses instead of rebuilding.
 
 ## Layout model
 
@@ -267,7 +296,7 @@ between a corner and a smooth point, click the path to insert one, `⌫` to remo
 the selected ones. The layer's box re-fits around the points as they move, so
 the outline never drifts out of the thing you can select.
 
-**Boolean groups** — `⌥⌘U` union, `⌥⌘S` subtract, `⌥⌘I` intersect, `⌥⌘X`
+**Boolean groups** — `⌥⌘U` union, `⌥⌘S` subtract, `⌥⌘I` intersect, `⌥⌘E`
 exclude — combine the selection without baking it: the parts stay in the group,
 stay editable, and the operation can be changed from the panel afterwards.
 `⌘E` **flattens** one into a single editable path when you want the other kind,
@@ -332,6 +361,7 @@ friction. `src/document/selection.ts` holds the rules in one place:
 | `Tab` / `⇧Tab` | the next / previous sibling |
 | drag on empty canvas | marquee, at the level you are in, by intersection |
 | right-click | **Select layer** lists every layer under the pointer |
+| `⌥⌘A` | **Select matching layers** — every layer on the page painted like this one |
 
 The container you have drilled into is outlined with a dashed border. Locked
 layers — and everything inside them — are skipped by hit-testing entirely.
@@ -353,14 +383,40 @@ reparent — above, below, or inside another layer.
 
 An interaction is a trigger, an action and a transition, carried by the layer
 that is touched — so a button keeps its behaviour wherever it is copied to. The
-triggers are click, hover, mouse enter, mouse leave, press, drag, key press and
-after-delay; the actions are navigate, back, open / close / swap overlay, scroll
-to, set a variable, open a link, and none; the transitions are instant,
+triggers are click, drag, hover, press, key, mouse enter, mouse leave, mouse
+down, mouse up and after-delay — the last three renamed to tap and touch on a
+touch device, as Figma does; the actions are navigate, change to another
+variant, back, open / close / swap overlay, scroll to, set a variable, set a
+variable *mode*, open a link, and none; the transitions are instant,
 dissolve, smart animate, move in, push and slide, each with a direction, a
 duration and an easing.
 
 Overlays are drawn over the frame you were on, positioned where the interaction
 says, optionally dimming what is behind and dismissing on a click outside.
+"Conditional" is an if / else-if / else list: each branch carries an expression
+over the variables and its own actions, and the first branch that holds is the
+one that runs. The expression language is small on purpose — comparisons joined
+by `and`/`or`/`not`, with `$Name` for a variable — and total, so a condition
+that will not parse is false rather than an error mid-run.
+
+A video layer can be driven from a prototype too: "Play/Pause animation" takes
+a behaviour of toggle, play or pause, and "Set playhead" moves it to a second.
+
+A run remembers what a run should remember: where you had scrolled each frame
+to, which variants its instances were swapped to, and how far through its videos
+had got. Figma's "State" section is how you say to forget — reset the scroll,
+the component state or the video — and it applies going back as well as going
+forward.
+
+The easing menu is Figma's thirteen: a straight line, seven curves and five
+springs. A spring is a simulation rather than a curve, so it is sampled into a
+CSS `linear()` — which is also what lets it overshoot and settle instead of
+merely arriving.
+
+"Change to" swaps an instance for a sibling variant and "Set variable mode"
+puts a collection into one of its modes — both held for the run rather than
+written, like the variables, because a run is a rehearsal.
+
 Smart animate is a FLIP: the outgoing frame is measured, the incoming one lays
 out, and every layer whose name appears in both is animated from where it used
 to be — which is exactly the contract Figma's smart animate has. A variable set
@@ -369,8 +425,17 @@ prototype run is a rehearsal, and it must not leave the design changed.
 
 A frame can scroll while it plays, and a layer inside one can be told to scroll
 with the content, stay put, or stick — none of which the canvas honours, because
-a board on the canvas is flat however tall its content is. Present can draw a
-phone, tablet or laptop bezel around the frame.
+a board on the canvas is flat however tall its content is.
+
+**Prototype settings** live on the page, as Figma's do: the device the
+prototype is meant to be seen on — phone, tablet, laptop, desktop, watch, at
+their real sizes — and the colour behind it. They are part of the document
+rather than of whoever is playing it, so everyone opening the file plays back
+the same thing; the picker in Present's own toolbar overrides it for one run.
+
+A text layer can carry a hyperlink (`⌘K`). It is a property of the layer, so it
+survives everything the layer does: the export writes it as an `<a href>`, and
+a click while presenting follows it.
 
 `⇧⌘⏎` plays it. Present renders the same `NodeView` tree the canvas draws, so
 there is no second renderer to drift.
@@ -382,7 +447,7 @@ there is no second renderer to drift.
 | `V` Move | `K` Scale | `H` Pan | `F` Frame |
 | `R` Rectangle | `O` Ellipse | `L` Line | `⇧L` Arrow |
 | `P` Pen | `T` Text | `C` Comment | `⏎` Edit points |
-| `⌥⌘U` Union | `⌥⌘S` Subtract | `⌥⌘I` Intersect | `⌥⌘X` Exclude |
+| `⌥⌘U` Union | `⌥⌘S` Subtract | `⌥⌘I` Intersect | `⌥⌘E` Exclude |
 | `⌃⌘M` Use as mask | `⌘E` Flatten | `⇧⌘O` Outline stroke | `S` Slice |
 | `⇧R` Rulers | `⌥` hover Measure | `/` Cursor chat | `⇧D` Inspect |
 | `⇧A` Wrap in flex | `⇧F` Frame selection | `]` Bring to front | `[` Send to back |
@@ -392,6 +457,10 @@ there is no second renderer to drift.
 | `⌘/` Quick actions | `⇧D` Inspect | `⌥⌘H` Version history | `⇧⌘⏎` Present |
 | `⇧⌘E` Export | `⌘L` Copy link | `⇧⌘H` Show/hide | `⇧⌘L` Lock |
 | `⌘0` 100% | `⌘1` Zoom to fit | `⌘±` Zoom | `Space`+drag Pan |
+| `⌥⌘A` Select matching | `⌘K` Create link | `⌃⌥T` Tidy up | `⌃⌥V`/`⌃⌥H` Distribute |
+| `I` Copy colors | `⌥L` Collapse layers | `⇧G` Layout guides | `⌥⇧O` Outlines |
+| `⇧'` Pixel grid | `⇧⌘'` Snap to pixel | `⇧C` Comments | `⇧Y` Annotations |
+| `⌃⇧P` Pixel preview | `⌘\` Show/hide UI | `⇧E` Measure | `⌥⌘\` Cursors |
 
 Arrows nudge 1px, `⇧`+arrows nudge 10px. `⌘`-scroll zooms at the cursor;
 plain scroll pans.
@@ -420,7 +489,10 @@ plain scroll pans.
 | `src/components/Palette.tsx` | quick actions |
 | `src/components/TextEditor.tsx` | in-place editing, styled per range |
 | `src/components/Follow.tsx` | observation mode and spotlight |
-| `src/lib/fonts.ts` | the font list, and loading the web faces |
+| `src/components/FontPicker.tsx` | the searchable font menu, and its previews |
+| `src/components/TypeSettings.tsx` | Basics / Details / Variable type settings |
+| `src/lib/fonts.ts` | the font catalogue, and loading the web faces |
+| `src/lib/google-fonts.ts` | every Google family, generated — see `scripts/gen-google-fonts.mjs` |
 | `src/webgl/renderer.ts` | WebGL2 renderer, shared ticker |
 | `src/server/db.ts` | accounts and the file index (SQLite) |
 | `src/server/auth.ts` | scrypt, session cookies, sync tokens |
@@ -445,7 +517,8 @@ subscribe to and take revisions of; styles; variables with collections, modes,
 aliases and scoping; the shape tools and the slice; the pen, with handles and
 point editing across several subpaths; live boolean groups, flatten and outline
 stroke through a real geometry kernel; masks; the scale tool; rulers, guides and
-⌥-measuring; text styled per range, with web fonts, uploaded fonts and OpenType;
+⌥-measuring; text styled per range, with the whole Google Fonts directory
+behind a searchable picker, uploaded fonts, variable axes and OpenType;
 image fills with fit, crop, rotation and the seven adjustments; comment threads;
 prototyping with overlays, smart animate, scroll behaviour, variables and device
 frames; the Assets and Inspect panels, with annotations and dev status; version

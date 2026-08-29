@@ -6,7 +6,7 @@ import { readableOn } from '../lib/color';
 import { Icon } from './ui/Icons';
 import { useConnected, useDoc, usePresence, useReadOnly, useSession } from './Session';
 import { openingFrame } from '../document/prototype';
-import { ZOOM, useUI } from '../state/ui';
+import { ZOOM, useUI, type BooleanView } from '../state/ui';
 import { FigMenuItem, FigPopover } from './ui/Figma';
 import { contentBounds, fitBounds, selectionBounds, type Bounds } from '../lib/view';
 
@@ -19,7 +19,11 @@ import { contentBounds, fitBounds, selectionBounds, type Bounds } from '../lib/v
  */
 function ZoomMenu({ zoom }: { zoom: number }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [typed, setTyped] = useState<string | null>(null);
   const doc = useDoc();
+  const view = useUI((s) => s.view);
+  const preview = useUI((s) => s.view.pixelPreview);
+  const rulers = useUI((s) => s.rulers);
 
   const frame = (bounds: Bounds | null) => {
     const ui = useUI.getState();
@@ -28,15 +32,41 @@ function ZoomMenu({ zoom }: { zoom: number }) {
   };
 
   const items: { label: string; tag: string; divider?: boolean; run: () => void }[] = [
-    { label: 'Zoom in', tag: '+', run: () => useUI.getState().zoomBy(ZOOM.step) },
-    { label: 'Zoom out', tag: '−', run: () => useUI.getState().zoomBy(1 / ZOOM.step) },
+    { label: 'Zoom in', tag: '⌘+', run: () => useUI.getState().zoomBy(ZOOM.step) },
+    { label: 'Zoom out', tag: '⌘−', run: () => useUI.getState().zoomBy(1 / ZOOM.step) },
     { label: 'Zoom to fit', tag: '⇧1', divider: true, run: () => frame(contentBounds(doc)) },
     {
       label: 'Zoom to selection',
       tag: '⇧2',
       run: () => frame(selectionBounds(useUI.getState().selection, doc)),
     },
-    { label: 'Zoom to 100%', tag: '⇧0', divider: true, run: () => useUI.getState().zoomTo(1) },
+    { label: 'Zoom to 50%', tag: '', divider: true, run: () => useUI.getState().zoomTo(0.5) },
+    { label: 'Zoom to 100%', tag: '⇧0', run: () => useUI.getState().zoomTo(1) },
+    { label: 'Zoom to 200%', tag: '', run: () => useUI.getState().zoomTo(2) },
+  ];
+
+  /**
+   * Figma's view options, in Figma's order.
+   *
+   * They are the second half of this menu, and they are all about what the
+   * canvas *shows* rather than what the document *is* — which is why they are
+   * checkmarks here rather than properties in the panel.
+   */
+  const views: {
+    key: BooleanView | 'rulers';
+    label: string;
+    tag: string;
+    divider?: boolean;
+  }[] = [
+    { key: 'pixelGrid', label: 'Pixel grid', tag: '⇧\'' },
+    { key: 'snapToPixel', label: 'Snap to pixel grid', tag: '⇧⌘\'' },
+    { key: 'layoutGuides', label: 'Layout guides', tag: '⇧G' },
+    { key: 'rulers', label: 'Rulers', tag: '⇧R' },
+    { key: 'outlines', label: 'Outlines', tag: '⌥⇧O' },
+    { key: 'cursors', label: 'Multiplayer cursors', tag: '⌥⌘\\' },
+    { key: 'labels', label: 'Additional labels', tag: '' },
+    { key: 'comments', label: 'Comments', tag: '⇧C', divider: true },
+    { key: 'annotations', label: 'Annotations', tag: '⇧Y' },
   ];
 
   return (
@@ -59,12 +89,35 @@ function ZoomMenu({ zoom }: { zoom: number }) {
       {anchor && (
         <FigPopover
           anchor={anchor}
-          width={200}
+          width={230}
+          // the view options make this menu tall; Figma shows it in one piece
+          maxHeight={560}
           onClose={() => {
             setAnchor(null);
             anchor.blur();
           }}
         >
+          {/* Figma opens this menu with the percentage editable, so a number
+              you have in mind is one you can simply type */}
+          <div style={{ padding: '2px 6px 6px' }}>
+            <input
+              className="fig-zoom-field"
+              aria-label="Zoom"
+              value={typed ?? `${Math.round(zoom * 100)}%`}
+              autoFocus
+              spellCheck={false}
+              onChange={(event) => setTyped(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key !== 'Enter') return;
+                const next = Number((typed ?? '').replace(/[^0-9.]/g, ''));
+                if (Number.isFinite(next) && next > 0) useUI.getState().zoomTo(next / 100);
+                setTyped(null);
+                setAnchor(null);
+                anchor?.blur();
+              }}
+            />
+          </div>
           {items.map((item) => (
             <FigMenuItem
               key={item.label}
@@ -78,6 +131,39 @@ function ZoomMenu({ zoom }: { zoom: number }) {
                 // button would swallow Space, which belongs to panning
                 anchor?.blur();
               }}
+            />
+          ))}
+          {/* Figma hangs the three densities off a submenu; the states are the
+              point, so they are rows here — picking the live one turns it off */}
+          <FigMenuItem
+            label="Pixel preview 1×"
+            tag="⌃⇧P"
+            divider
+            selected={preview === '1x'}
+            onSelect={() =>
+              useUI.getState().setPixelPreview(preview === '1x' ? 'off' : '1x')
+            }
+          />
+          <FigMenuItem
+            label="Pixel preview 2×"
+            tag=""
+            selected={preview === '2x'}
+            onSelect={() =>
+              useUI.getState().setPixelPreview(preview === '2x' ? 'off' : '2x')
+            }
+          />
+          {views.map((entry) => (
+            <FigMenuItem
+              key={entry.key}
+              label={entry.label}
+              tag={entry.tag}
+              divider={entry.divider}
+              selected={entry.key === 'rulers' ? rulers : view[entry.key]}
+              onSelect={() =>
+                entry.key === 'rulers'
+                  ? useUI.getState().toggleRulers()
+                  : useUI.getState().toggleView(entry.key)
+              }
             />
           ))}
         </FigPopover>

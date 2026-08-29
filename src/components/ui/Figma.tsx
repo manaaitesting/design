@@ -1,6 +1,17 @@
 'use client';
 
-import { Children, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  Children,
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icons';
 import { FigIcon } from './FigIcon';
@@ -44,12 +55,21 @@ export function FigPopover({
   align = 'right',
   placement = 'below',
   variant = 'menu',
+  maxHeight,
   children,
 }: {
   anchor: HTMLElement | null;
   onClose: () => void;
   width?: number;
   align?: 'left' | 'right';
+  /**
+   * How tall the popover may get before it scrolls itself.
+   *
+   * A dialog that does its own scrolling inside — the font list — has to be
+   * allowed to be as tall as its content, or it ends up with two scrollbars
+   * doing half a job each.
+   */
+  maxHeight?: number;
   /**
    * 'below' hangs the menu off the button. 'beside' puts it outside the
    * inspector entirely, to the panel's left — which is where Figma opens its
@@ -126,7 +146,10 @@ export function FigPopover({
         left: box.left,
         top: box.top,
         width,
-        maxHeight: `min(${variant === 'dark' ? 600 : 420}px, calc(100vh - ${box.top + 16}px))`,
+        // the 8px matches the gap `place()` leaves below a popover it has had
+        // to lift; any more and a dialog that exactly fits grows its own
+        // scrollbar, which is what put two of them in the font picker
+        maxHeight: `min(${maxHeight ?? (variant === 'dark' ? 600 : 420)}px, calc(100vh - ${box.top + 8}px))`,
         overflowY: 'auto',
         ...POPOVER_LOOK[variant],
         zIndex: 90,
@@ -153,6 +176,8 @@ export function FigField({
   title,
   disabled,
   placeholder,
+  width,
+  trailing,
   onApplyVariable,
 }: {
   value: number | 'mixed';
@@ -166,15 +191,24 @@ export function FigField({
   title?: string;
   disabled?: boolean;
   placeholder?: string;
+  /** a field that should not take its share of the row — the truncate count */
+  width?: number;
+  /** a control at the field's trailing edge — the size field's preset caret */
+  trailing?: ReactNode;
   /** shows Figma's hover-revealed variable button inside the field */
   onApplyVariable?: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  // A field driven by something else — a bound variable — says what is driving
+  // it rather than the number that came out, which is the whole point of the
+  // binding: the value is the variable's to change, not this field's.
   const shown =
     draft ??
-    (value === 'mixed'
-      ? 'Mixed'
-      : `${Number.isInteger(value) ? value : Number(value.toFixed(2))}${suffix ?? ''}`);
+    (disabled && placeholder
+      ? placeholder
+      : value === 'mixed'
+        ? 'Mixed'
+        : `${Number.isInteger(value) ? value : Number(value.toFixed(2))}${suffix ?? ''}`);
 
   const commit = (raw: string) => {
     setDraft(null);
@@ -209,7 +243,7 @@ export function FigField({
   };
 
   return (
-    <div className="fig-input" title={title}>
+    <div className="fig-input" title={title} style={width ? { flex: 'none', width } : undefined}>
       {glyph !== undefined && (
         <span className="glyph" onPointerDown={scrub}>
           {glyph}
@@ -238,6 +272,7 @@ export function FigField({
           }
         }}
       />
+      {trailing}
       {onApplyVariable && (
         <button
           type="button"
@@ -258,11 +293,23 @@ export function FigText({
   onChange,
   placeholder,
   glyph,
+  title,
+  live = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   glyph?: ReactNode;
+  /** names the field for anyone who cannot see the label beside it */
+  title?: string;
+  /**
+   * Reports every keystroke rather than waiting for Enter or a blur.
+   *
+   * A name field must not: renaming a layer on every keystroke fills the undo
+   * stack with half-typed names. A search field must, because the list it
+   * filters is the feedback.
+   */
+  live?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (
@@ -271,8 +318,13 @@ export function FigText({
       <input
         value={draft ?? value}
         placeholder={placeholder}
+        title={title}
+        aria-label={title}
         spellCheck={false}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          if (live) onChange(e.target.value);
+        }}
         onBlur={() => {
           if (draft !== null) onChange(draft);
           setDraft(null);
@@ -363,6 +415,8 @@ export interface FigOption<T extends string> {
   value: T;
   label: string;
   divider?: boolean;
+  /** offered but not choosable here — Figma greys these rather than hiding them */
+  disabled?: boolean;
 }
 
 /** A dropdown that reads as a borderless field until hovered, like Figma's. */
@@ -374,6 +428,7 @@ export function FigSelect<T extends string>({
   title,
   width,
   mixed,
+  beside,
 }: {
   value: T;
   options: FigOption<T>[];
@@ -386,6 +441,15 @@ export function FigSelect<T extends string>({
    * ticks nothing, so no option is claimed to apply to all of them.
    */
   mixed?: boolean;
+  /**
+   * Open to the left of the panel rather than under the field.
+   *
+   * A long menu hanging off a row halfway down the inspector covers the rows
+   * you are about to check it against, and near the foot of the panel it has
+   * nowhere to hang at all. Anything with more than a handful of entries goes
+   * beside the panel by default, the way the font picker and the style menu do.
+   */
+  beside?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
@@ -400,18 +464,27 @@ export function FigSelect<T extends string>({
    * nothing — the menu is measured first, then placed above the field if that
    * is where it fits, and nudged up if neither side has room.
    */
+  const aside = beside ?? options.length > 8;
+
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const rect = anchor.current.getBoundingClientRect();
     const height = list.current?.getBoundingClientRect().height ?? 0;
+    const panel = aside ? anchor.current.closest('.fig')?.getBoundingClientRect() : null;
+    const menuWidth = list.current?.getBoundingClientRect().width ?? rect.width;
     const below = window.innerHeight - rect.bottom - 8;
     const above = rect.top - 8;
-    const flip = height > below && above > below;
-    const top = flip
-      ? Math.max(8, rect.top - height - 4)
-      : Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - height - 8));
-    setPos({ x: rect.left, y: top, w: rect.width, ready: true });
-  }, [open, options.length]);
+    const flip = !panel && height > below && above > below;
+    // beside the panel, the menu lines up with the row that opened it; under
+    // the field it hangs off the bottom unless there is no room down there
+    const top = panel
+      ? Math.max(8, Math.min(rect.top, window.innerHeight - height - 8))
+      : flip
+        ? Math.max(8, rect.top - height - 4)
+        : Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - height - 8));
+    const left = panel ? Math.max(8, panel.left - menuWidth - 8) : rect.left;
+    setPos({ x: left, y: top, w: rect.width, ready: true });
+  }, [open, options.length, aside]);
 
   useEffect(() => {
     if (!open) return;
@@ -427,6 +500,12 @@ export function FigSelect<T extends string>({
         type="button"
         className="fig-input"
         title={title}
+        // Figma's selects are comboboxes over a list of options, and a screen
+        // reader — or a test — should be able to tell one from a plain button
+        role="combobox"
+        aria-label={title}
+        aria-expanded={open}
+        aria-haspopup="listbox"
         style={{ flex: width ? 'none' : '1 1 0', width, cursor: 'default' }}
         onPointerDown={(e) => {
           e.stopPropagation();
@@ -472,18 +551,26 @@ export function FigSelect<T extends string>({
                 type="button"
                 className="fig-btn"
                 data-text="true"
+                role="option"
+                disabled={option.disabled}
+                aria-selected={!mixed && option.value === value}
+                aria-disabled={option.disabled || undefined}
                 style={{
                   width: '100%',
                   justifyContent: 'flex-start',
                   background: !mixed && option.value === value ? 'var(--fig-blue)' : undefined,
                   color: !mixed && option.value === value ? '#fff' : undefined,
+                  opacity: option.disabled ? 0.4 : undefined,
                 }}
                 onClick={() => {
+                  if (option.disabled) return;
                   onChange(option.value);
                   setOpen(false);
                 }}
               >
-                <span style={{ width: 10, display: 'inline-flex' }}>
+                {/* decorative: aria-selected already says which one is chosen,
+                    and a tick inside the name would read as part of the label */}
+                <span aria-hidden="true" style={{ width: 10, display: 'inline-flex' }}>
                   {!mixed && option.value === value ? '✓' : ''}
                 </span>
                 {option.label}
@@ -509,6 +596,36 @@ function normalizeColor(input: string): string | null {
   return null;
 }
 
+/**
+ * What every paint picker in the panel needs to know.
+ *
+ * In Figma there is one colour picker, and it is the same one wherever a colour
+ * appears — a fill, a stroke, a shadow, the text colour, a grid. It always
+ * offers the document's colours, the file's variables, and a contrast reading.
+ * Threading four props through every section that happens to show a swatch is
+ * how that stops being true for the ones nobody remembered, so the panel
+ * publishes it once and the rows read it.
+ */
+export interface PaintEnvironment {
+  /** every colour already used on the page, for the "On this page" swatches */
+  pageColors: string[];
+  tokens: { id: string; name: string; value: string; type: string }[];
+  /** turns the picked colour into a variable and returns its reference */
+  onCreateToken?: (hex: string) => void;
+}
+
+const PaintContext = createContext<PaintEnvironment>({ pageColors: [], tokens: [] });
+
+export function PaintProvider({
+  value,
+  children,
+}: {
+  value: PaintEnvironment;
+  children: ReactNode;
+}) {
+  return <PaintContext.Provider value={value}>{children}</PaintContext.Provider>;
+}
+
 /** Figma's paint row: swatch, hex, opacity, visibility, remove. */
 export function FigPaintRow({
   color,
@@ -522,9 +639,9 @@ export function FigPaintRow({
   kind,
   blend,
   onBlend,
-  pageColors = [],
+  pageColors,
   backdrop,
-  tokens = [],
+  tokens,
   onCreateToken,
   typeBody,
   alphaField,
@@ -544,7 +661,7 @@ export function FigPaintRow({
   kind?: PaintType;
   blend?: string;
   onBlend?: (mode: string) => void;
-  /** colours already used on the page, offered as swatches in the picker */
+  /** colours already used on the page; defaults to the panel's PaintProvider */
   pageColors?: string[];
   /** what this paint sits on, for the picker's contrast check */
   backdrop?: string;
@@ -571,6 +688,12 @@ export function FigPaintRow({
 
   // Fill keeps swatch, hex and opacity in one box; Selection colors gives the
   // opacity a box of its own, which is what `alphaField` switches on.
+  // an explicit prop still wins; the context is what a row gets for free
+  const environment = useContext(PaintContext);
+  const swatches = pageColors ?? environment.pageColors;
+  const variables = tokens ?? environment.tokens;
+  const createToken = onCreateToken ?? environment.onCreateToken;
+
   const alphaControls = onAlpha ? (
     <>
       <input
@@ -635,14 +758,14 @@ export function FigPaintRow({
             type={kind}
             alpha={alpha}
             blend={blend}
-            pageColors={pageColors}
+            pageColors={swatches}
             backdrop={backdrop}
-            tokens={tokens}
+            tokens={variables}
             onChange={onColor}
             onAlpha={(next) => onAlpha?.(next)}
             onBlend={onBlend}
             onType={(kind) => onKind?.(kind)}
-            onCreateToken={onCreateToken}
+            onCreateToken={createToken}
             typeBody={typeBody}
             onClose={() => setPicking(false)}
           />

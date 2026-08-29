@@ -1,6 +1,7 @@
 'use client';
 
 import type { GuideSpec } from '../document/types';
+import { useUI } from '../state/ui';
 
 /**
  * Layout guides drawn over a frame.
@@ -9,7 +10,10 @@ import type { GuideSpec } from '../document/types';
  * columns you measure against are not columns you ship.
  */
 export function Guides({ guides }: { guides: GuideSpec }) {
-  if (!guides.visible) return null;
+  // two switches, as Figma has them: the frame carries one, and the view menu
+  // turns every frame's off at once while you look at the design without them
+  const shown = useUI((state) => state.view.layoutGuides);
+  if (!guides.visible || !shown) return null;
 
   const base: React.CSSProperties = {
     position: 'absolute',

@@ -38,6 +38,8 @@ import {
   type Interaction,
   type NodeType,
   type NumericField,
+  FONT_FIELDS,
+  isFontField,
   type Paint,
   type PropBinding,
   type SceneNode,
@@ -102,18 +104,55 @@ function numberOf(value: string): number | null {
   return match ? Number(match[0]) : null;
 }
 
+/**
+ * Writes a bound field's resolved number back onto the node.
+ *
+ * Most bound fields are properties of the node, but the four type ones live
+ * inside `font`, and opacity is stored as a fraction of the percentage the
+ * variable holds. The rendered CSS carries `var(--name)` either way — this is
+ * what keeps the *stored* number honest, because snapping, measuring and the
+ * panel all read that rather than the DOM.
+ */
+function writeBound(ymap: YNode, node: SceneNode, field: NumericField, value: number): void {
+  if (isFontField(field)) {
+    // read through the Y map rather than the snapshot: inside a transaction the
+    // snapshot is still last tick's, and a size written a moment ago is exactly
+    // what the line-height ratio below has to divide by
+    const font = (ymap.get('font') as SceneNode['font']) ?? node.font;
+    if (!font) return;
+    const key = FONT_FIELDS[field];
+    // The variable holds what the field shows — px for line height, a
+    // percentage for letter spacing — while the model stores a ratio and an em
+    // fraction. `css.ts` converts the same way on the way out, so the number
+    // kept here and the number rendered are the same number.
+    const next =
+      field === 'lineHeight'
+        ? value / Math.max(font.size, 1)
+        : field === 'letterSpacing'
+          ? value / 100
+          : value;
+    if (font[key] === next) return;
+    ymap.set('font', { ...font, [key]: next });
+    return;
+  }
+  const next = field === 'opacity' ? value / 100 : value;
+  if (node[field] !== next) ymap.set(field, next);
+}
+
 /** Which kind of style a slot wears, and which slot a kind lands in. */
 const KIND_OF: Record<StyleSlot, StyleKind> = {
   fill: 'paint',
   stroke: 'paint',
   text: 'text',
   effect: 'effect',
+  grid: 'grid',
 };
 
 const SLOT_OF: Record<StyleKind, StyleSlot> = {
   paint: 'fill',
   text: 'text',
   effect: 'effect',
+  grid: 'grid',
 };
 
 /** The gaps between neighbours in a sorted run, along one axis. */
@@ -694,7 +733,7 @@ export class DocStore {
         if (tokenId) bound[field] = tokenId;
         else delete bound[field];
         ymap.set('vars', bound);
-        if (resolved !== null) ymap.set(field, field === 'opacity' ? resolved / 100 : resolved);
+        if (resolved !== null) writeBound(ymap, node, field, resolved);
       }
     });
   }
@@ -713,12 +752,16 @@ export class DocStore {
         if (!node.vars) continue;
         const ymap = this.nodes.get(node.id);
         if (!ymap) continue;
-        for (const [field, tokenId] of Object.entries(node.vars) as [NumericField, string][]) {
+        // Line height is stored as a ratio of the font size, so a layer with
+        // both bound has to resolve its size before the ratio is worked out.
+        const fields = (Object.entries(node.vars) as [NumericField, string][]).sort(
+          ([a], [b]) => Number(b === 'fontSize') - Number(a === 'fontSize'),
+        );
+        for (const [field, tokenId] of fields) {
           const token = this.tokens.get(tokenId);
           const value = token ? numberOf(token.value) : null;
           if (value === null) continue;
-          const next = field === 'opacity' ? value / 100 : value;
-          if (node[field] !== next) ymap.set(field, next);
+          writeBound(ymap, node, field, value);
         }
       }
     });
@@ -740,7 +783,9 @@ export class DocStore {
           ? [{ id: 'base', value: node.border?.color ?? '#000000', opacity: 1, visible: true }]
           : slot === 'text'
             ? node.font
-            : (node.effects ?? []);
+            : slot === 'grid'
+              ? node.guides
+              : (node.effects ?? []);
     const id = this.addStyle({ name, kind, value });
     this.applyStyle([nodeId], id, slot);
     return id;
@@ -811,6 +856,9 @@ export class DocStore {
           } else if (slot === 'effect' && style.kind === 'effect') {
             if (JSON.stringify(node.effects) === JSON.stringify(style.value)) continue;
             ymap.set('effects', style.value);
+          } else if (slot === 'grid' && style.kind === 'grid') {
+            if (JSON.stringify(node.guides) === JSON.stringify(style.value)) continue;
+            ymap.set('guides', style.value);
           }
         }
       }
@@ -2131,6 +2179,43 @@ export class DocStore {
    * Positions are rebased on the selection's own top-left so a paste lands
    * predictably wherever it goes, rather than at the coordinates it was cut from.
    */
+/**
+   * Every layer on the page that looks like this one — Figma's ⌥⌘A.
+   *
+   * "Matching" is what the panel would show as identical: the same kind of
+   * layer, painted the same way, and for text set the same way. Position and
+   * size are deliberately not part of it — two buttons at opposite ends of a
+   * page are still the same button, and that is the point of the command.
+   */
+  selectMatching(id: string, pageId: string): string[] {
+    const source = this.snap[id];
+    if (!source) return [];
+
+    const paintOf = (node: SceneNode): string =>
+      node.fills?.length
+        ? node.fills.map((paint) => `${paint.value}@${paint.opacity ?? 1}`).join(',')
+        : `${node.fill ?? ''}@${node.fillOpacity ?? 1}`;
+    const strokeOf = (node: SceneNode): string =>
+      node.border ? `${node.border.color}/${node.border.width}/${node.border.style}` : '';
+    const typeOf = (node: SceneNode): string =>
+      node.type === 'text' && node.font
+        ? `${node.font.family}/${node.font.size}/${node.font.weight}/${node.font.color}`
+        : '';
+    const signature = (node: SceneNode): string =>
+      [node.type, paintOf(node), strokeOf(node), typeOf(node), node.radius, node.opacity].join('|');
+
+    const wanted = signature(source);
+    const found: string[] = [];
+    const walk = (nodeId: string): void => {
+      const node = this.snap[nodeId];
+      if (!node) return;
+      if (node.type !== 'page' && signature(node) === wanted) found.push(nodeId);
+      for (const child of node.children) walk(child);
+    };
+    walk(pageId);
+    return found;
+  }
+
   serialize(ids: string[]): string {
     const roots = ids.filter((id) => {
       const node = this.snap[id];

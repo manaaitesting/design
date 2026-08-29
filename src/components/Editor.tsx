@@ -14,7 +14,7 @@ import { Present } from './Present';
 import { PromptBar } from './PromptBar';
 import { Resizer } from './Resizer';
 import { ShadersModal } from './ShadersModal';
-import { ToolRail } from './ToolRail';
+import { ToolRail, sampleColor } from './ToolRail';
 import { useDoc, useStore, useTokenVars } from './Session';
 import { PANEL, ZOOM, useUI, type Tool } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
@@ -50,7 +50,8 @@ const BOOLEAN_KEYS: Record<string, BooleanOp> = {
   KeyU: 'union',
   KeyS: 'subtract',
   KeyI: 'intersect',
-  KeyX: 'exclude',
+  // Figma binds Exclude to E, not X — X is the fill/stroke swap
+  KeyE: 'exclude',
 };
 
 function isTyping(target: EventTarget | null): boolean {
@@ -71,6 +72,8 @@ export function Editor({ fileName }: { fileName: string }) {
   const doc = useDoc();
   const tokenVars = useTokenVars();
   const leftPanel = useUI((s) => s.leftPanel);
+  const outlines = useUI((s) => s.view.outlines);
+  const chrome = useUI((s) => s.chrome);
   const leftWidth = useUI((s) => s.leftWidth);
   const rightWidth = useUI((s) => s.rightWidth);
 
@@ -136,6 +139,18 @@ export function Editor({ fileName }: { fileName: string }) {
       // from wherever you are, including inside a panel field.
       // ⌥ is not part of this one: ⌥⌘K is "create component", and swallowing
       // it here would quietly break the menu's own shortcut
+      // ⌘K is Figma's Create link when text is selected; the palette keeps ⌘/
+      if (
+        mod &&
+        !event.altKey &&
+        event.key.toLowerCase() === 'k' &&
+        ui.selection.length === 1 &&
+        doc[ui.selection[0]]?.type === 'text'
+      ) {
+        event.preventDefault();
+        ui.setLinkEditor(ui.selection[0]);
+        return;
+      }
       if (mod && !event.altKey && (event.key === '/' || event.key.toLowerCase() === 'k')) {
         event.preventDefault();
         ui.setPaletteOpen(!ui.paletteOpen);
@@ -225,6 +240,55 @@ export function Editor({ fileName }: { fileName: string }) {
         if (combined) select([combined]);
         return;
       }
+      // ⌃⇧P — pixel preview, as Figma binds it: off → 1× → 2× → off
+      if (event.ctrlKey && event.shiftKey && !mod && event.code === 'KeyP') {
+        event.preventDefault();
+        const now = ui.view.pixelPreview;
+        ui.setPixelPreview(now === 'off' ? '1x' : now === '1x' ? '2x' : 'off');
+        return;
+      }
+      // ⌘\ — every panel out of the way, as Figma binds it
+      if (mod && event.code === 'Backslash' && !event.altKey) {
+        event.preventDefault();
+        ui.toggleChrome();
+        return;
+      }
+      // ⇧E — the Measure tool, latched; ⌥ still measures without it
+      if (!mod && event.shiftKey && !event.altKey && event.code === 'KeyE') {
+        event.preventDefault();
+        ui.setTool(ui.tool === 'measure' ? 'move' : 'measure');
+        return;
+      }
+      // I — sample a colour into the selection, Figma's "Copy colors"
+      if (!mod && !event.altKey && !event.shiftKey && event.code === 'KeyI' && selection.length) {
+        event.preventDefault();
+        void sampleColor(store, selection);
+        return;
+      }
+      // ⌥L — shut every open row in the layers panel, as Figma binds it
+      if (event.altKey && !mod && !event.ctrlKey && event.code === 'KeyL') {
+        event.preventDefault();
+        ui.collapseLayers();
+        return;
+      }
+      // ⌃⌥T / ⌃⌥V / ⌃⌥H — tidy up and distribute, as Figma binds them
+      if (event.ctrlKey && event.altKey && !event.metaKey && selection.length > 1) {
+        if (event.code === 'KeyT') {
+          event.preventDefault();
+          store.tidyUp(selection);
+          return;
+        }
+        if (event.code === 'KeyV' && selection.length > 2) {
+          event.preventDefault();
+          store.distribute(selection, 'vertical');
+          return;
+        }
+        if (event.code === 'KeyH' && selection.length > 2) {
+          event.preventDefault();
+          store.distribute(selection, 'horizontal');
+          return;
+        }
+      }
       // ⌃⌘M — use the selection as a mask, as Figma binds it
       if (event.ctrlKey && event.metaKey && event.code === 'KeyM' && selection.length) {
         event.preventDefault();
@@ -261,6 +325,38 @@ export function Editor({ fileName }: { fileName: string }) {
       if (!mod && event.shiftKey && event.code === 'KeyR') {
         event.preventDefault();
         ui.toggleRulers();
+        return;
+      }
+      // Figma's view options, on Figma's keys
+      if (!mod && event.shiftKey && !event.altKey && event.code === 'KeyG') {
+        event.preventDefault();
+        ui.toggleView('layoutGuides');
+        return;
+      }
+      if (!mod && event.shiftKey && !event.altKey && event.code === 'KeyC' && !event.ctrlKey) {
+        event.preventDefault();
+        ui.toggleView('comments');
+        return;
+      }
+      if (!mod && event.shiftKey && !event.altKey && event.code === 'KeyY') {
+        event.preventDefault();
+        ui.toggleView('annotations');
+        return;
+      }
+      if (event.altKey && event.shiftKey && !mod && event.code === 'KeyO') {
+        event.preventDefault();
+        ui.toggleView('outlines');
+        return;
+      }
+      if (mod && event.altKey && event.code === 'Backslash') {
+        event.preventDefault();
+        ui.toggleView('cursors');
+        return;
+      }
+      // ⇧' and ⇧⌘' — the pixel grid and whether drags land on it
+      if (event.shiftKey && event.code === 'Quote') {
+        event.preventDefault();
+        ui.toggleView(mod ? 'snapToPixel' : 'pixelGrid');
         return;
       }
       if (mod && event.shiftKey && event.code === 'KeyR' && selection.length) {
@@ -366,6 +462,13 @@ export function Editor({ fileName }: { fileName: string }) {
       if (mod && event.key.toLowerCase() === 'd' && selection.length) {
         event.preventDefault();
         select(store.duplicate(selection));
+        return;
+      }
+      // ⌥⌘A — select every layer on the page that looks like this one
+      if (mod && event.altKey && event.key.toLowerCase() === 'a' && selection.length === 1) {
+        event.preventDefault();
+        const matches = store.selectMatching(selection[0], ui.page);
+        if (matches.length) select(matches);
         return;
       }
       if (mod && event.key.toLowerCase() === 'a') {
@@ -479,11 +582,18 @@ export function Editor({ fileName }: { fileName: string }) {
   }, [store, doc, leftPanel, tokenVars]);
 
   return (
-    <div className="fig-shell" style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+    <div
+      className="fig-shell"
+      // Figma's Outlines view: the design as its geometry, with the paint taken
+      // away. It is a way of looking, not a change to the document, so it is a
+      // class on the shell rather than anything the canvas has to re-render.
+      data-outlines={outlines ? 'true' : undefined}
+      style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}
+    >
       <FontFaces />
       <Thumbnail />
-      {leftPanel && <LeftPanel fileName={fileName} />}
-      {leftPanel && (
+      {chrome && leftPanel && <LeftPanel fileName={fileName} />}
+      {chrome && leftPanel && (
         <Resizer
           side="left"
           label="Resize layers panel"
@@ -494,11 +604,12 @@ export function Editor({ fileName }: { fileName: string }) {
           onReset={useUI.getState().resetLeftWidth}
         />
       )}
-      <ToolRail />
+      {chrome && <ToolRail />}
       <div style={{ position: 'relative', flex: 1, display: 'flex', minWidth: 0 }}>
         <Canvas />
         <PromptBar />
       </div>
+      {chrome && (
       <Resizer
         side="right"
         label="Resize design panel"
@@ -508,7 +619,8 @@ export function Editor({ fileName }: { fileName: string }) {
         onResize={useUI.getState().setRightWidth}
         onReset={useUI.getState().resetRightWidth}
       />
-      <Inspector />
+      )}
+      {chrome && <Inspector />}
 
       <ContextMenu />
       <ShadersModal />

@@ -80,6 +80,8 @@ class Room {
     /** @type {Map<import('ws').WebSocket, Set<number>>} */
     this.conns = new Map();
     this.saveTimer = null;
+    /** set once the room has been let go, so a late close cannot revive it */
+    this.released = false;
 
     this.file = path.join(DATA_DIR, `${encodeURIComponent(name)}.bin`);
     this.snapshotDir = path.join(DATA_DIR, 'snapshots');
@@ -211,16 +213,27 @@ class Room {
     const ids = this.conns.get(conn);
     this.conns.delete(conn);
     if (ids) awarenessProtocol.removeAwarenessStates(this.awareness, [...ids], null);
-    if (this.conns.size === 0) {
-      // flush immediately, then let the room go
-      if (this.saveTimer) clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-      try {
-        fs.writeFileSync(this.file, Buffer.from(Y.encodeStateAsUpdate(this.doc)));
-      } catch { /* best effort */ }
-      rooms.delete(this.name);
-      console.log(`[sync] room "${this.name}" idle, released`);
-    }
+    // A dead socket is reported twice — once by the ping timer, once by the
+    // close event — and by the second one this room may already have been
+    // replaced. Writing its document again would clobber the live one.
+    if (this.conns.size > 0 || this.released) return;
+    this.released = true;
+
+    // flush immediately, then let the room go
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    try {
+      fs.writeFileSync(this.file, Buffer.from(Y.encodeStateAsUpdate(this.doc)));
+    } catch { /* best effort */ }
+    rooms.delete(this.name);
+
+    // Dropping the last reference is not enough to free a room. Awareness runs
+    // an interval to expire stale peers, and that timer keeps the awareness —
+    // and through it the whole document — reachable for the life of the
+    // process. A server that opens and closes rooms all day would grow by a
+    // document every time. Destroying the doc destroys its awareness with it.
+    this.doc.destroy();
+    console.log(`[sync] room "${this.name}" idle, released`);
   }
 }
 
