@@ -13,7 +13,7 @@ import {
 import { useUI, type ExportFormat } from '../state/ui';
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { toTailwind } from '../export/tailwind';
-import { download, nodeToPng, nodeToSvg, safeFilename } from '../export/raster';
+import { download, nodeToPdf, nodeToPng, nodeToSvg, safeFilename } from '../export/raster';
 import { ROOT_ID } from '../document/types';
 
 const CODE_FORMATS: ExportFormat[] = ['react', 'html', 'tailwind', 'json'];
@@ -80,6 +80,9 @@ export function ExportDialog() {
       if (format === 'png') {
         const blob = await nodeToPng(targetId, zoom, scale, tokenVars, contentsOnly);
         download(blob, `${name}@${scale}x.png`);
+      } else if (format === 'pdf') {
+        const blob = await nodeToPdf(targetId, zoom, scale, tokenVars, contentsOnly);
+        download(blob, `${name}.pdf`);
       } else {
         const serialised = nodeToSvg(targetId, zoom, tokenVars, contentsOnly);
         if (!serialised) throw new Error('That layer is not on screen.');
@@ -128,11 +131,12 @@ export function ExportDialog() {
                 { value: 'json', label: 'JSON' },
                 { value: 'png', label: 'PNG' },
                 { value: 'svg', label: 'SVG' },
+                { value: 'pdf', label: 'PDF' },
               ]}
             />
           </div>
 
-          {format === 'png' && (
+          {(format === 'png' || format === 'pdf') && (
             <div style={{ width: 72 }}>
               <Select
                 value={String(scale)}

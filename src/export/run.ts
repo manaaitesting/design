@@ -1,6 +1,6 @@
 'use client';
 
-import { download, nodeToPng, nodeToSvg, safeFilename } from './raster';
+import { download, nodeToPdf, nodeToPng, nodeToSvg, safeFilename } from './raster';
 import { toHtml, toJson, toReact } from './toCode';
 import { toTailwind } from './tailwind';
 import type { Doc, ExportSetting, Token } from '../document/types';
@@ -48,6 +48,17 @@ export async function runExport(
         setting.contentsOnly,
       );
       download(blob, `${name}@${setting.scale}x.png`);
+      return;
+    }
+    case 'pdf': {
+      const blob = await nodeToPdf(
+        nodeId,
+        context.zoom,
+        setting.scale,
+        context.tokenVars,
+        setting.contentsOnly,
+      );
+      download(blob, `${name}.pdf`);
       return;
     }
     case 'svg': {

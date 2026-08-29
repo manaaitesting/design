@@ -236,17 +236,8 @@ function sliceToSvg(
   return { svg, width, height };
 }
 
-/** Renders the node to a PNG at the requested pixel scale. */
-export async function nodeToPng(
-  nodeId: string,
-  zoom: number,
-  scale: number,
-  vars: Record<string, string> = {},
-  contentsOnly = false,
-): Promise<Blob> {
-  const serialised = nodeToSvg(nodeId, zoom, vars, contentsOnly);
-  if (!serialised) throw new Error('That layer is not on screen — scroll it into view and try again.');
-
+/** Draws a serialised node onto a canvas at the requested pixel scale. */
+async function rasterise(serialised: Serialised, scale: number): Promise<HTMLCanvasElement> {
   const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialised.svg)}`;
   const image = new Image();
   image.crossOrigin = 'anonymous';
@@ -264,13 +255,119 @@ export async function nodeToPng(
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Canvas 2D is unavailable in this browser.');
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
 
+function encode(canvas: HTMLCanvasElement, type: string, message: string): Promise<Blob> {
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
-      else reject(new Error('Encoding the PNG failed.'));
-    }, 'image/png');
+      else reject(new Error(message));
+    }, type, type === 'image/jpeg' ? 0.92 : undefined);
   });
+}
+
+/** Renders the node to a PNG at the requested pixel scale. */
+export async function nodeToPng(
+  nodeId: string,
+  zoom: number,
+  scale: number,
+  vars: Record<string, string> = {},
+  contentsOnly = false,
+): Promise<Blob> {
+  const serialised = nodeToSvg(nodeId, zoom, vars, contentsOnly);
+  if (!serialised) throw new Error('That layer is not on screen — scroll it into view and try again.');
+  return encode(await rasterise(serialised, scale), 'image/png', 'Encoding the PNG failed.');
+}
+
+/**
+ * Renders the node to a one-page PDF.
+ *
+ * The page is the layer's own size in points — PDF's unit is 1/72", which is
+ * what a CSS pixel is measured against, so a 600-wide frame comes out 600pt and
+ * lands in a layout at the size it was drawn.
+ *
+ * The artwork inside it is a raster, not vector: the canvas is real DOM, and
+ * what turns that into a picture here is the browser's own SVG renderer, which
+ * hands back pixels. `scale` is therefore the resolution of the result rather
+ * than its size. A vector PDF would mean a second renderer walking the document
+ * — the one thing the style invariant exists to prevent — so this stays honest
+ * about being a raster and the ledger says so.
+ */
+export async function nodeToPdf(
+  nodeId: string,
+  zoom: number,
+  scale: number,
+  vars: Record<string, string> = {},
+  contentsOnly = false,
+): Promise<Blob> {
+  const serialised = nodeToSvg(nodeId, zoom, vars, contentsOnly);
+  if (!serialised) throw new Error('That layer is not on screen — scroll it into view and try again.');
+  const canvas = await rasterise(serialised, scale);
+  const jpeg = await encode(canvas, 'image/jpeg', 'Encoding the PDF image failed.');
+  const bytes = new Uint8Array(await jpeg.arrayBuffer());
+  return pdfWithImage(bytes, canvas.width, canvas.height, serialised.width, serialised.height);
+}
+
+/**
+ * The smallest valid PDF that holds one JPEG: catalogue, page tree, page,
+ * image, content stream, and the cross-reference table that says where each of
+ * them starts.
+ *
+ * Written by hand rather than with a library because the whole of it is these
+ * forty lines, and every byte offset in the table has to be counted as the file
+ * is built — which is the only part a library would actually be doing.
+ */
+function pdfWithImage(
+  jpeg: Uint8Array,
+  pixelW: number,
+  pixelH: number,
+  pointW: number,
+  pointH: number,
+): Blob {
+  const parts: BlobPart[] = [];
+  const offsets: number[] = [];
+  let at = 0;
+  // every string written here is ASCII, so its length is its byte count
+  const push = (chunk: string | Uint8Array) => {
+    parts.push(chunk as BlobPart);
+    at += typeof chunk === 'string' ? chunk.length : chunk.byteLength;
+  };
+  const object = (n: number, body: string) => {
+    offsets[n] = at;
+    push(`${n} 0 obj\n${body}\nendobj\n`);
+  };
+
+  push('%PDF-1.4\n');
+  object(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  object(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+  object(
+    3,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pointW} ${pointH}] ` +
+      '/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>',
+  );
+
+  // the image is written out by hand: its stream is the JPEG's own bytes
+  offsets[4] = at;
+  push(
+    '4 0 obj\n<< /Type /XObject /Subtype /Image ' +
+      `/Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 ` +
+      `/Filter /DCTDecode /Length ${jpeg.byteLength} >>\nstream\n`,
+  );
+  push(jpeg);
+  push('\nendstream\nendobj\n');
+
+  // the unit square the image is drawn into, stretched to fill the page
+  const content = `q ${pointW} 0 0 ${pointH} 0 0 cm /Im0 Do Q\n`;
+  object(5, `<< /Length ${content.length} >>\nstream\n${content}endstream`);
+
+  const startxref = at;
+  let table = 'xref\n0 6\n0000000000 65535 f \n';
+  for (let n = 1; n <= 5; n++) table += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  push(table);
+  push(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`);
+
+  return new Blob(parts, { type: 'application/pdf' });
 }
 
 export function download(blob: Blob, filename: string): void {

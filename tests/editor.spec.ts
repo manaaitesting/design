@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { dragBy, doc, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
 
@@ -2015,6 +2016,39 @@ test.describe('panel controls that used to do nothing', () => {
     const settings = (await doc(page))[cover!.id].exports;
     expect(settings).toHaveLength(1);
     expect(settings![0].suffix).toBe('-dark');
+  });
+
+  /**
+   * PDF is the format a handoff asks for, and it was the one format the type
+   * did not have. The page comes out the size of the layer in points, since a
+   * point and a CSS pixel are both 1/72", so a board lands in a document at the
+   * size it was drawn.
+   */
+  test('a layer exports as a PDF the size of the layer', async ({ page }) => {
+    const board = await nodeNamed(page, 'Fixture Board');
+    await select(page, [board!.id]);
+
+    await page.getByRole('button', { name: 'Add export settings' }).click();
+    await page.getByTitle('Format').click();
+    await page.getByRole('listbox').getByRole('option', { name: 'PDF', exact: true }).click();
+
+    const wait = page.waitForEvent('download');
+    await page.locator('.fig-export').click();
+    const saved = await wait;
+    expect(saved.suggestedFilename()).toBe('Fixture-Board.pdf');
+
+    const text = readFileSync((await saved.path())!).toString('latin1');
+    expect(text.startsWith('%PDF-1.4')).toBe(true);
+    expect(text).toContain('/MediaBox [0 0 600 400]');
+    expect(text).toContain('/Filter /DCTDecode');
+    expect(text.trimEnd().endsWith('%%EOF')).toBe(true);
+
+    // The trailer says where the cross-reference table starts, and every offset
+    // in it was counted by hand as the file was built — so this is the one
+    // assertion that says the arithmetic held.
+    const marker = text.lastIndexOf('startxref');
+    const startxref = Number(text.slice(marker + 'startxref'.length).trim().split('\n')[0]);
+    expect(text.slice(startxref, startxref + 4)).toBe('xref');
   });
 
   test('text case and truncation reach the rendered text', async ({ page }) => {
