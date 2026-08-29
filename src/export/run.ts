@@ -2,6 +2,7 @@
 
 import { download, nodeToPng, nodeToSvg, safeFilename } from './raster';
 import { toHtml, toJson, toReact } from './toCode';
+import { toTailwind } from './tailwind';
 import type { Doc, ExportSetting, Token } from '../document/types';
 import type { Collection } from '../document/variables';
 
@@ -64,6 +65,14 @@ export async function runExport(
     case 'html': {
       const html = toHtml(nodeId, context.doc, context.tokens, context.collections);
       download(new Blob([html], { type: 'text/html' }), `${name}.html`);
+      return;
+    }
+    case 'tailwind': {
+      const { markup, css } = toTailwind(nodeId, context.doc, context.tokens, context.collections);
+      download(new Blob([markup], { type: 'text/plain' }), `${name}.jsx`);
+      // the fonts and the `:root` variables have no class list to live in, so
+      // they still travel as CSS — and only when there are any
+      if (css.trim()) download(new Blob([css], { type: 'text/css' }), `${name}.css`);
       return;
     }
     case 'json':

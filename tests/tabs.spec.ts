@@ -1,0 +1,200 @@
+import { expect, test, type Page } from '@playwright/test';
+
+/**
+ * The file tabs.
+ *
+ * These are navigation, which means the failures that matter are not visual:
+ * closing the tab you are standing on has to land you somewhere real, a tab for
+ * a file you cannot open must never appear, and coming back to a file has to
+ * put you where you left it. So the suite drives the strip the way a person
+ * does — clicks, crosses, keys — and asserts on the URL each time.
+ */
+
+const SCRATCH = 'testfile00';
+const DEMO = 'demofile0';
+
+const tab = (page: Page, name: string) =>
+  page.locator('.fig-filetab[data-tab-id]', { hasText: name });
+const tabs = (page: Page) => page.locator('.fig-filetab[data-tab-id]');
+
+/**
+ * Waits for the editor of a particular file to be the one on screen.
+ *
+ * Switching tabs is a client-side navigation, so `window.paperlike` is still
+ * the file you *left* for as long as the new one is being fetched. Waiting on
+ * the handle merely existing would let a test drive the outgoing document.
+ */
+const ready = (page: Page, file: string) =>
+  page.waitForFunction((room) => window.paperlike?.room === room, file, { timeout: 20_000 });
+
+/**
+ * The strip persists per browser, so each test starts from an empty one.
+ *
+ * Cleared once, on the way in, rather than on every navigation — a hook that
+ * ran on each page load would wipe the very tab the previous step had opened,
+ * and the strip would look broken when it was the test that was.
+ */
+async function open(page: Page, file: string): Promise<void> {
+  await page.goto('/files');
+  await page.evaluate(() => {
+    try {
+      localStorage.removeItem('paperlike:tabs');
+      localStorage.removeItem('paperlike:views');
+    } catch {
+      // a private window has no storage; the strip falls back to one tab
+    }
+  });
+  await page.goto(`/f/${file}`);
+  await ready(page, file);
+}
+
+test('a visited file joins the strip, and stays in it', async ({ page }) => {
+  await open(page, SCRATCH);
+  // the Dashboard tab is pinned, always first, and carries no cross
+  const pinned = page.locator('.fig-filetab-pinned');
+  await expect(pinned).toHaveText('Dashboard');
+  await expect(pinned.locator('.fig-filetab-close')).toHaveCount(0);
+
+  await expect(tabs(page)).toHaveCount(1);
+  await expect(tab(page, 'Playwright Scratch')).toHaveAttribute('data-on', 'true');
+
+  // arriving by URL rather than by tab still opens a tab — that is what makes
+  // the strip a record of where you have been rather than of what you clicked
+  await page.goto(`/f/${DEMO}`);
+  await ready(page, DEMO);
+  await expect(tabs(page)).toHaveCount(2);
+  await expect(tab(page, 'Vinyl Sundays')).toHaveAttribute('data-on', 'true');
+  await expect(tab(page, 'Playwright Scratch')).toHaveAttribute('data-on', 'false');
+});
+
+test('clicking a tab switches file without losing the strip', async ({ page }) => {
+  await open(page, SCRATCH);
+  await page.goto(`/f/${DEMO}`);
+  await expect(tabs(page)).toHaveCount(2);
+
+  await tab(page, 'Playwright Scratch').click();
+  await expect(page).toHaveURL(new RegExp(`/f/${SCRATCH}$`));
+  await expect(tab(page, 'Playwright Scratch')).toHaveAttribute('data-on', 'true');
+  await expect(tabs(page)).toHaveCount(2);
+});
+
+test('the cross closes one tab and hands over to its neighbour', async ({ page }) => {
+  await open(page, SCRATCH);
+  await page.goto(`/f/${DEMO}`);
+  await expect(tabs(page)).toHaveCount(2);
+
+  // close the one you are standing on: the other must take over, or you are
+  // left looking at a document with no tab
+  await tab(page, 'Vinyl Sundays').getByRole('button', { name: /^Close/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/f/${SCRATCH}$`));
+  await expect(tabs(page)).toHaveCount(1);
+  await expect(tab(page, 'Playwright Scratch')).toHaveAttribute('data-on', 'true');
+
+  // and closing the last one goes back to the file browser rather than nowhere
+  await tab(page, 'Playwright Scratch').getByRole('button', { name: /^Close/ }).click();
+  await expect(page).toHaveURL(/\/files$/);
+});
+
+test('⌥⌘→ walks the strip instead of nudging a layer', async ({ page }) => {
+  await open(page, SCRATCH);
+  await page.goto(`/f/${DEMO}`);
+  await expect(tabs(page)).toHaveCount(2);
+
+  // a selection makes the canvas's own Arrow binding live, which is exactly the
+  // case the capture-phase listener exists for
+  await page.evaluate(() => {
+    const doc = window.paperlike!.doc();
+    const first = Object.values(doc).find((node) => node.parent === 'root');
+    if (first) window.paperlike!.ui.getState().select([first.id]);
+  });
+  const before = await page.evaluate(() => {
+    const doc = window.paperlike!.doc();
+    const id = window.paperlike!.ui.getState().selection[0] as string | undefined;
+    return id ? { id, x: doc[id].x } : null;
+  });
+
+  await page.keyboard.press('Alt+Meta+ArrowRight');
+  await expect(page).toHaveURL(new RegExp(`/f/${SCRATCH}$`));
+
+  if (before) {
+    await page.goto(`/f/${DEMO}`);
+    await ready(page, DEMO);
+    const after = await page.evaluate(
+      (id) => window.paperlike!.doc()[id]?.x ?? null,
+      before.id,
+    );
+    expect(after, 'switching tabs must not have moved the selected layer').toBe(before.x);
+  }
+
+  // and it wraps, as ⌃⇥ does everywhere else
+  await page.goto(`/f/${SCRATCH}`);
+  await ready(page, SCRATCH);
+  await page.keyboard.press('Alt+Meta+ArrowRight');
+  await expect(page).toHaveURL(new RegExp(`/f/${DEMO}$`));
+});
+
+test('⇧⌘T puts back the tab you just closed', async ({ page }) => {
+  await open(page, SCRATCH);
+  await page.goto(`/f/${DEMO}`);
+  await ready(page, DEMO);
+  await expect(tabs(page)).toHaveCount(2);
+
+  await tab(page, 'Vinyl Sundays').getByRole('button', { name: /^Close/ }).click();
+  await expect(tabs(page)).toHaveCount(1);
+
+  await page.keyboard.press('Shift+Meta+KeyT');
+  await expect(page).toHaveURL(new RegExp(`/f/${DEMO}$`));
+  await expect(tabs(page)).toHaveCount(2);
+});
+
+test('the menu closes others, the rest, and all of them', async ({ page }) => {
+  await open(page, SCRATCH);
+  await page.goto(`/f/${DEMO}`);
+  await ready(page, DEMO);
+  await expect(tabs(page)).toHaveCount(2);
+
+  await tab(page, 'Vinyl Sundays').click({ button: 'right' });
+  // Rename is the owner's to do, and both seeded files are Ada's
+  await expect(page.getByRole('menuitem', { name: 'Rename' })).toBeEnabled();
+  await page.getByRole('menuitem', { name: 'Close others' }).click();
+  await expect(tabs(page)).toHaveCount(1);
+  await expect(page).toHaveURL(new RegExp(`/f/${DEMO}$`));
+
+  await tab(page, 'Vinyl Sundays').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Close all' }).click();
+  await expect(page).toHaveURL(/\/files$/);
+});
+
+test('⌘\\ takes the strip away with the rest of the chrome', async ({ page }) => {
+  await open(page, SCRATCH);
+  await expect(page.locator('.fig-topbar')).toBeVisible();
+
+  await page.keyboard.press('Meta+Backslash');
+  await expect(page.locator('.fig-topbar')).toHaveCount(0);
+
+  await page.keyboard.press('Meta+Backslash');
+  await expect(page.locator('.fig-topbar')).toBeVisible();
+});
+
+test('a file reopens where you left it', async ({ page }) => {
+  await open(page, SCRATCH);
+  await page.goto(`/f/${DEMO}`);
+  await expect(tabs(page)).toHaveCount(2);
+
+  await tab(page, 'Playwright Scratch').click();
+  await ready(page, SCRATCH);
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -321, y: -654, zoom: 1.75 }),
+  );
+
+  // the switch away is what writes the memory, so it has to be a tab click
+  // rather than a reload — a hard navigation never runs the cleanup
+  await tab(page, 'Vinyl Sundays').click();
+  await ready(page, DEMO);
+
+  await tab(page, 'Playwright Scratch').click();
+  await ready(page, SCRATCH);
+  await expect
+    .poll(() => page.evaluate(() => window.paperlike!.ui.getState().viewport))
+    .toEqual({ x: -321, y: -654, zoom: 1.75 });
+});

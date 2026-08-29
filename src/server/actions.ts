@@ -23,6 +23,11 @@ import {
   publishComponent,
   renameFile,
   setThumbnail,
+  createFolder,
+  deleteFolder,
+  moveFileToFolder,
+  renameFolder,
+  setLinkRole,
   shareFile,
   unpublishComponent,
 } from './db';
@@ -140,6 +145,59 @@ export async function shareFileAction(_prev: FormState, form: FormData): Promise
   );
   revalidatePath('/files');
   return error ? { error } : { error: undefined };
+}
+
+/**
+ * Turns the public link on or off.
+ *
+ * `''` is off rather than a third role, because the select that drives this is
+ * one control with three states and the empty option is the honest spelling of
+ * "nobody".
+ */
+export async function setLinkRoleAction(fileId: string, role: '' | 'editor' | 'viewer'): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  setLinkRole(fileId, user.id, role === '' ? null : role);
+  revalidatePath('/files');
+}
+
+// ── Folders ──────────────────────────────────────────────────────────────
+//
+// A folder is a way of looking at your own file list, so every one of these is
+// scoped to the signed-in user in the query itself rather than checked here.
+
+export async function newFolderAction(form: FormData): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  const name = String(form.get('name') ?? '').trim();
+  if (name) createFolder(newId(), name.slice(0, 60), user.id);
+  revalidatePath('/files');
+}
+
+export async function renameFolderAction(form: FormData): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  const id = String(form.get('id') ?? '');
+  const name = String(form.get('name') ?? '').trim();
+  if (id && name) renameFolder(id, user.id, name.slice(0, 60));
+  revalidatePath('/files');
+}
+
+export async function deleteFolderAction(form: FormData): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  const id = String(form.get('id') ?? '');
+  if (id) deleteFolder(id, user.id);
+  revalidatePath('/files');
+  // the folder being looked at has just stopped existing
+  redirect('/files');
+}
+
+export async function moveFileAction(fileId: string, folderId: string): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  moveFileToFolder(fileId, user.id, folderId || null);
+  revalidatePath('/files');
 }
 
 // ── Version history ──────────────────────────────────────────────────────

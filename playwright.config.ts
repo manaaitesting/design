@@ -34,6 +34,8 @@ export default defineConfig({
   projects: [
     // no browser, no dev server: pure functions, checked directly
     { name: 'geometry', testMatch: /geometry\.spec\.ts/ },
+    // the exporters, likewise — they are functions from a document to a string
+    { name: 'export', testMatch: /export\.spec\.ts/ },
     // no browser either: the shared library, against a scratch database
     { name: 'library', testMatch: /library\.spec\.ts/ },
     // no browser either: this one drives the sync server
@@ -43,7 +45,7 @@ export default defineConfig({
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
     {
       name: 'editor',
-      testMatch: /(editor|features)\.spec\.ts/,
+      testMatch: /(editor|features|tabs|share|dashboard|shaders)\.spec\.ts/,
       dependencies: ['setup'],
       use: {
         ...devices['Desktop Chrome'],

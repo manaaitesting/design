@@ -454,7 +454,7 @@ export interface ConstraintSpec {
 }
 
 /** What an export produces. Code formats ignore the scale. */
-export type ExportFormat = 'react' | 'html' | 'json' | 'png' | 'svg';
+export type ExportFormat = 'react' | 'html' | 'tailwind' | 'json' | 'png' | 'svg';
 
 /**
  * One line of a layer's Export section.
@@ -1106,6 +1106,25 @@ export function ancestors(id: string, doc: Doc): SceneNode[] {
     cur = doc[cur].parent;
   }
   return out;
+}
+
+/**
+ * The page a node lives on, or null when it is not in the document at all.
+ *
+ * A link to a layer says which page it is on by saying which layer it is, so
+ * this is what turns `?node=` back into a page and a selection.
+ */
+export function pageOf(id: string, doc: Doc): string | null {
+  let cur = doc[id];
+  if (!cur) return null;
+  if (cur.type === 'page') return cur.id;
+  while (cur?.parent) {
+    const parent = doc[cur.parent];
+    if (!parent) return null;
+    if (parent.type === 'page') return parent.id;
+    cur = parent;
+  }
+  return null;
 }
 
 /** The outermost ancestor that still sits on the page — what a single click selects. */

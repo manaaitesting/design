@@ -28,6 +28,11 @@ async function launch() {
 
 let browser: Promise<Browser> | null = null;
 
+/** The shared headless browser, for anything else that needs a real DOM. */
+export function headless(): Promise<Browser> {
+  return chrome();
+}
+
 async function chrome(): Promise<Browser> {
   if (!browser) {
     browser = launch().catch((error) => {

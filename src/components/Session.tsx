@@ -47,6 +47,10 @@ export function SessionProvider({
     // driven from the console (and by automated UI audits).
     if (process.env.NODE_ENV === 'development' && session) {
       (window as unknown as { paperlike?: unknown }).paperlike = {
+        // which file this handle belongs to — a tab switch is a client-side
+        // navigation, so without it there is no way to tell "the new file has
+        // mounted" from "the old one is still here"
+        room,
         store: session.store,
         doc: () => session.store.getSnapshot(),
         ui: useUIStore,
@@ -55,7 +59,7 @@ export function SessionProvider({
           evaluate(condition, (name) => vars[name]),
       };
     }
-  }, [session]);
+  }, [session, room]);
 
   if (!session) return <Booting />;
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;

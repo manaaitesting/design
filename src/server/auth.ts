@@ -69,6 +69,39 @@ export async function endSession(): Promise<void> {
   (await cookies()).delete(COOKIE);
 }
 
+const GUEST_COOKIE = 'paperlike_guest';
+
+/** Names for the people who arrive by link, so a cursor is not "Anonymous". */
+const GUEST_NAMES = ['Visitor', 'Guest', 'Passer-by', 'Onlooker', 'Newcomer', 'Reader'];
+const GUEST_COLORS = ['#BDEE63', '#4CC3F0', '#9B7BF0', '#F2637F', '#FFC53D', '#5BC8A0'];
+
+/**
+ * Who a link visitor is, for as long as their browser remembers.
+ *
+ * This is an identity, not an authorisation: it decides the name and colour on
+ * a cursor and nothing else. What lets them into the room is the sync token,
+ * which the server signs only after checking the file's `link_role` — so a
+ * forged guest cookie buys a different avatar and no access at all.
+ *
+ * Read-only, deliberately. The cookie is minted in `proxy.ts`, because a server
+ * component may read cookies but not set them; the fallback here is for the
+ * request the proxy did not run on, and it is content to be ephemeral.
+ */
+export async function guestIdentity(): Promise<User> {
+  const existing = (await cookies()).get(GUEST_COOKIE)?.value;
+  const id = /^guest-[a-z0-9]{8,}$/.test(existing ?? '')
+    ? existing!
+    : `guest-${randomBytes(6).toString('hex')}`;
+  // stable per id, so the same visitor keeps the same colour across files
+  const seed = [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return {
+    id,
+    email: '',
+    name: GUEST_NAMES[seed % GUEST_NAMES.length],
+    color: GUEST_COLORS[seed % GUEST_COLORS.length],
+  };
+}
+
 /** The signed-in user, or null. Safe to call from any server component. */
 export async function currentUser(): Promise<User | null> {
   const token = (await cookies()).get(COOKIE)?.value;

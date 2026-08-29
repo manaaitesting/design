@@ -26,6 +26,7 @@ import {
 } from '../lib/actions';
 import { download, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
+import { toTailwind } from '../export/tailwind';
 import { pageActions, useUI } from '../state/ui';
 import { canEditPoints } from '../document/geometry';
 import type { BooleanOp } from '../document/types';
@@ -280,11 +281,28 @@ function Menu({ menu }: { menu: OpenMenu }) {
         return writeText(`${markup}\n\n/* ${safeFilename(first?.name ?? 'layer')}.css */\n${css}`);
       },
     },
+    {
+      label: 'Tailwind',
+      shortcut: '⌥T',
+      disabled: !one,
+      run: () => {
+        const { markup, css } = toTailwind(target, doc, tokens, collections, fonts);
+        return writeText(css.trim() ? `${markup}\n\n/* ${safeFilename(first?.name ?? 'layer')}.css */\n${css}` : markup);
+      },
+    },
     { label: 'HTML', disabled: !one, run: () => writeText(toHtml(target, doc, tokens, collections, fonts)) },
     { label: 'JSON', disabled: !one, run: () => writeText(toJson(target, doc)) },
   ];
 
   const copyPasteAs: Item[] = [
+    {
+      label: 'Copy link to layer',
+      shortcut: '⌘L',
+      disabled: !one,
+      // the layer is a query on the file's own URL, and the editor reads it
+      // back on load — opening on the right page, selected and framed
+      run: () => writeText(`${location.origin}${location.pathname}?node=${target}`),
+    },
     { label: 'Copy as code', items: codeItems, disabled: !one },
     {
       label: 'Copy as SVG',

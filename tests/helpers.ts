@@ -11,6 +11,8 @@ import type { UIState } from '../src/state/ui';
 declare global {
   interface Window {
     paperlike?: {
+      /** the file this handle belongs to — see SessionProvider */
+      room: string;
       store: {
         create(type: string, parent: string, props?: Partial<SceneNode>): string;
         update(id: string, patch: Partial<SceneNode>): void;

@@ -3018,4 +3018,260 @@ select {
     border-radius: 50%;
     background: #fff;
   }
+
+  /* ─── File tabs ────────────────────────────────────────────────────────
+     paper.design's top strip: one tab per open file, across the whole width,
+     above every panel. It is deliberately the shortest bar in the app — 36px,
+     the same ink and lines as the panels — because it is navigation, and the
+     canvas is what you came for. */
+  .fig-topbar {
+    height: 40px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+    background: var(--color-panel);
+    border-bottom: 1px solid var(--color-line);
+    user-select: none;
+  }
+  .fig-topbar-new {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--color-ink-muted);
+    cursor: default;
+  }
+  .fig-topbar-new:hover {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--color-ink);
+  }
+  /* the hairline paper puts between the pinned tab and the file strip */
+  .fig-topbar-rule {
+    width: 1px;
+    height: 16px;
+    flex: none;
+    margin: 0 4px;
+    background: var(--color-line);
+  }
+
+  /* The strip scrolls rather than shrinking tabs to nothing: past a dozen files
+     a 40px tab is unreadable, so the twelfth stays legible and the thirteenth
+     is a scroll away. */
+  .fig-tabstrip {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .fig-tabstrip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .fig-filetab {
+    position: relative;
+    height: 26px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 176px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px 0 7px;
+    border-radius: 5px;
+    text-decoration: none;
+    color: var(--color-ink-dim);
+    font-size: 11px;
+    font-weight: 550;
+    cursor: default;
+    transition: background-color 80ms ease-out, color 80ms ease-out;
+  }
+  .fig-filetab:hover {
+    background: rgba(0, 0, 0, 0.035);
+    color: var(--color-ink);
+  }
+  /* The file you are in gets the signature Paper control treatment — a raised
+     white chip — rather than an underline, so it reads as the surface the
+     canvas below belongs to. */
+  .fig-filetab[data-on='true'],
+  .fig-filetab[data-on='true']:hover {
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+    color: var(--color-ink);
+  }
+  .fig-filetab[data-dragging='true'] {
+    opacity: 0.5;
+  }
+  .fig-filetab:focus-visible {
+    outline: 1.5px solid var(--color-select);
+    outline-offset: -1px;
+  }
+  .fig-filetab-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    opacity: 0.55;
+  }
+  .fig-filetab-icon svg {
+    width: 12px;
+    height: 12px;
+  }
+  .fig-filetab[data-on='true'] .fig-filetab-icon {
+    opacity: 0.8;
+  }
+  /* The Dashboard tab is pinned: no cross, and it never takes part in a drag. */
+  .fig-filetab-pinned {
+    max-width: 132px;
+  }
+  /* Renaming replaces the label in place, so the tab does not resize under the
+     pointer the moment you start typing. */
+  .fig-filetab-rename {
+    flex: 1;
+    min-width: 0;
+  }
+  .fig-filetab-rename input {
+    width: 100%;
+    height: 18px;
+    padding: 0 3px;
+    border: 0;
+    border-radius: 3px;
+    background: #fff;
+    box-shadow: 0 0 0 1.5px var(--color-select);
+    font: inherit;
+    color: var(--color-ink);
+    outline: none;
+  }
+  .fig-filetab-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The cross holds its space always: appearing on hover would shift the label
+     under the pointer, which is how you close the wrong file. */
+  .fig-filetab-close {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    opacity: 0;
+    cursor: default;
+  }
+  .fig-filetab:hover .fig-filetab-close,
+  .fig-filetab[data-on='true'] .fig-filetab-close,
+  .fig-filetab-close:focus-visible {
+    opacity: 0.55;
+  }
+  .fig-filetab-close:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.08);
+  }
+  /* Where a dragged tab would land. */
+  .fig-filetab[data-drop-before='true']::before,
+  .fig-tab-drop {
+    content: '';
+    position: absolute;
+    left: -2px;
+    top: 3px;
+    bottom: 3px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--color-select);
+  }
+  .fig-tab-drop {
+    position: relative;
+    left: 0;
+    flex: none;
+    height: 20px;
+    top: 0;
+    bottom: 0;
+  }
+
+  /* ── Auto-layout handles ───────────────────────────────────────────────
+     The gutters and the padding bands of the selected flex frame. Invisible
+     until the pointer is on them: this is chrome over artwork, and spacing you
+     are not editing is spacing you want to see. */
+  .fig-flex-gap,
+  .fig-flex-pad {
+    position: absolute;
+    pointer-events: auto;
+    background: transparent;
+    transition: background-color 80ms ease-out;
+  }
+  .fig-flex-gap:hover,
+  .fig-flex-gap[data-on='true'],
+  .fig-flex-pad:hover,
+  .fig-flex-pad[data-on='true'] {
+    background: rgba(13, 153, 255, 0.35);
+  }
+  /* what the number means, shown while you are on the grip that changes it */
+  .fig-flex-region {
+    position: absolute;
+    background: rgba(13, 153, 255, 0.16);
+    pointer-events: none;
+  }
+  /* the value you are dragging, over the thing you are dragging */
+  .fig-flex-badge {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--color-select-line);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .fig-tab-menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 168px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-pop);
+  }
+  .fig-tab-menu > button {
+    height: 26px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    text-align: left;
+    font-weight: 450;
+    color: var(--color-ink);
+    cursor: default;
+  }
+  .fig-tab-menu > button:hover:enabled {
+    background: var(--color-select);
+    color: #fff;
+  }
+  .fig-tab-menu > button:disabled {
+    color: var(--color-ink-dim);
+  }
+  .fig-tab-menu > hr {
+    height: 1px;
+    margin: 4px 0;
+    border: 0;
+    background: var(--color-line);
+  }
 }

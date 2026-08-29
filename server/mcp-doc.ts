@@ -78,8 +78,20 @@ export function closeAll(): void {
   sessions.clear();
 }
 
-/** Compact tree, in the spirit of Figma's get_metadata — ids, types, boxes. */
-export function outline(doc: Doc, rootId: string, depth = 0, out: string[] = []): string[] {
+/**
+ * Compact tree, in the spirit of Figma's get_metadata — ids, types, boxes.
+ *
+ * `limit` stops the walk at a given number of levels. A row that was cut short
+ * says how many children are still under it, so an agent knows to ask again
+ * rather than assuming the layer is empty.
+ */
+export function outline(
+  doc: Doc,
+  rootId: string,
+  depth = 0,
+  out: string[] = [],
+  limit?: number,
+): string[] {
   const node = doc[rootId];
   if (!node) return out;
   const size = node.type === 'page' ? '' : ` ${Math.round(node.w)}×${Math.round(node.h)} @ ${Math.round(node.x)},${Math.round(node.y)}`;
@@ -88,7 +100,12 @@ export function outline(doc: Doc, rootId: string, depth = 0, out: string[] = [])
     node.visible ? '' : 'hidden',
     node.locked ? 'locked' : '',
   ].filter(Boolean);
-  out.push(`${'  '.repeat(depth)}${node.type} "${node.name}" id=${node.id}${size}${flags.length ? ` [${flags.join(' ')}]` : ''}`);
-  for (const child of node.children) outline(doc, child, depth + 1, out);
+  const cut = limit !== undefined && depth + 1 >= limit && node.children.length > 0;
+  const more = cut ? `  … ${node.children.length} more inside` : '';
+  out.push(
+    `${'  '.repeat(depth)}${node.type} "${node.name}" id=${node.id}${size}${flags.length ? ` [${flags.join(' ')}]` : ''}${more}`,
+  );
+  if (cut) return out;
+  for (const child of node.children) outline(doc, child, depth + 1, out, limit);
   return out;
 }

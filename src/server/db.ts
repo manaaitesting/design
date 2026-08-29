@@ -67,6 +67,20 @@ export function db(): DatabaseSync {
       UNIQUE (file_id, node_id)
     );
 
+    -- Folders.
+    --
+    -- Flat, and owned by one person. A folder is a way of looking at your own
+    -- file list, not a permission boundary: a file shared with you stays
+    -- visible whatever folder its owner filed it under, which is why the
+    -- folder lives beside the file rather than deciding who may see it.
+    CREATE TABLE IF NOT EXISTS folders (
+      id         TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      owner_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS folders_owner ON folders(owner_id);
     CREATE INDEX IF NOT EXISTS files_owner ON files(owner_id);
     CREATE INDEX IF NOT EXISTS members_user ON file_members(user_id);
     CREATE INDEX IF NOT EXISTS library_file ON library_components(file_id);
@@ -93,6 +107,17 @@ export function db(): DatabaseSync {
   if (!columns.some((column) => column.name === 'thumbnail')) {
     instance.exec('ALTER TABLE files ADD COLUMN thumbnail TEXT');
   }
+  // What anyone holding the link may do: nothing (the column is null, and the
+  // file is invisible without a membership row), look, or edit. Sharing by
+  // email cannot reach someone with no account yet; a link can.
+  if (!columns.some((column) => column.name === 'link_role')) {
+    instance.exec('ALTER TABLE files ADD COLUMN link_role TEXT');
+  }
+  // Which folder the file is filed under, for its owner. Added by ALTER, so it
+  // carries no foreign key — `deleteFolder` empties it by hand instead.
+  if (!columns.some((column) => column.name === 'folder_id')) {
+    instance.exec('ALTER TABLE files ADD COLUMN folder_id TEXT');
+  }
   return instance;
 }
 
@@ -113,6 +138,17 @@ export interface FileRow {
   owner_name: string;
   /** a small PNG of the first artboard, captured by the editor */
   thumbnail?: string | null;
+  /** what anyone with the link may do: null is "nothing — it is private" */
+  link_role?: string | null;
+  /** the owner's folder, or null for the top level */
+  folder_id?: string | null;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  owner_id: string;
+  created_at: number;
 }
 
 // ── Users ────────────────────────────────────────────────────────────────
@@ -149,17 +185,103 @@ export function createFile(id: string, name: string, ownerId: string): void {
     .run(id, ownerId, 'owner');
 }
 
-/** Files the user owns or has been invited to, most recently touched first. */
-export function listFiles(userId: string): FileRow[] {
+export interface FileQuery {
+  /** substring of the name, case-insensitively */
+  q?: string;
+  /** a folder id, or 'none' for the files in no folder at all */
+  folder?: string;
+  sort?: 'recent' | 'name' | 'created';
+}
+
+/**
+ * Files the user owns or has been invited to.
+ *
+ * Filtering happens here rather than in the page because the list is the thing
+ * that grows: a dashboard that fetches four hundred rows to show six is the
+ * same bug whether or not anyone has noticed it yet.
+ */
+export function listFiles(userId: string, query: FileQuery = {}): FileRow[] {
+  const where: string[] = [];
+  const params: (string | number)[] = [userId];
+
+  if (query.q?.trim()) {
+    // LIKE is already case-insensitive for ASCII in SQLite; the ESCAPE keeps a
+    // name containing % or _ from turning into a wildcard search
+    where.push("f.name LIKE ? ESCAPE '\\'");
+    params.push(`%${query.q.trim().replace(/[%_\\]/g, (char) => `\\${char}`)}%`);
+  }
+  if (query.folder === 'none') where.push('f.folder_id IS NULL');
+  else if (query.folder) {
+    where.push('f.folder_id = ?');
+    params.push(query.folder);
+  }
+
+  const order =
+    query.sort === 'name'
+      ? 'f.name COLLATE NOCASE ASC'
+      : query.sort === 'created'
+        ? 'f.created_at DESC'
+        : 'f.updated_at DESC';
+
   return db()
     .prepare(
-      `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.thumbnail, m.role, u.name AS owner_name
+      `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.thumbnail, f.link_role,
+              f.folder_id, m.role, u.name AS owner_name
          FROM files f
          JOIN file_members m ON m.file_id = f.id AND m.user_id = ?
          JOIN users u ON u.id = f.owner_id
-        ORDER BY f.updated_at DESC`,
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY ${order}`,
     )
-    .all(userId) as unknown as FileRow[];
+    .all(...params) as unknown as FileRow[];
+}
+
+// ── Folders ──────────────────────────────────────────────────────────────
+
+export function listFolders(userId: string): (Folder & { count: number })[] {
+  return db()
+    .prepare(
+      `SELECT d.id, d.name, d.owner_id, d.created_at,
+              (SELECT COUNT(*) FROM files f
+                 JOIN file_members m ON m.file_id = f.id AND m.user_id = d.owner_id
+                WHERE f.folder_id = d.id) AS count
+         FROM folders d
+        WHERE d.owner_id = ?
+        ORDER BY d.name COLLATE NOCASE ASC`,
+    )
+    .all(userId) as unknown as (Folder & { count: number })[];
+}
+
+export function createFolder(id: string, name: string, ownerId: string): void {
+  db()
+    .prepare('INSERT INTO folders (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)')
+    .run(id, name, ownerId, Date.now());
+}
+
+export function renameFolder(id: string, ownerId: string, name: string): void {
+  db().prepare('UPDATE folders SET name = ? WHERE id = ? AND owner_id = ?').run(name, id, ownerId);
+}
+
+/** Deleting a folder empties it; it never takes the files down with it. */
+export function deleteFolder(id: string, ownerId: string): void {
+  const database = db();
+  const owned = database.prepare('SELECT id FROM folders WHERE id = ? AND owner_id = ?').get(id, ownerId);
+  if (!owned) return;
+  database.prepare('UPDATE files SET folder_id = NULL WHERE folder_id = ?').run(id);
+  database.prepare('DELETE FROM folders WHERE id = ?').run(id);
+}
+
+/** Files it into a folder, or out of every folder with null. */
+export function moveFileToFolder(fileId: string, userId: string, folderId: string | null): void {
+  // only a member may file it, and only into a folder they own
+  if (!getFileFor(fileId, userId)) return;
+  if (folderId) {
+    const owned = db()
+      .prepare('SELECT id FROM folders WHERE id = ? AND owner_id = ?')
+      .get(folderId, userId);
+    if (!owned) return;
+  }
+  db().prepare('UPDATE files SET folder_id = ? WHERE id = ?').run(folderId, fileId);
 }
 
 /** Every file in the workspace — used by the MCP server, which has no session. */
@@ -176,13 +298,45 @@ export function listAllFiles(): FileRow[] {
 export function getFileFor(fileId: string, userId: string): FileRow | undefined {
   return db()
     .prepare(
-      `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, m.role, u.name AS owner_name
+      `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.link_role, m.role, u.name AS owner_name
          FROM files f
          JOIN file_members m ON m.file_id = f.id AND m.user_id = ?
          JOIN users u ON u.id = f.owner_id
         WHERE f.id = ?`,
     )
     .get(userId, fileId) as unknown as FileRow | undefined;
+}
+
+/**
+ * The file as anyone holding the link sees it, or undefined when the link
+ * grants nothing.
+ *
+ * `role` comes back as the *link's* role, so the caller can treat a link
+ * visitor exactly like a member — the sync token is signed with it either way,
+ * and the sync server drops a viewer's writes without knowing the difference.
+ */
+export function getFileByLink(fileId: string): FileRow | undefined {
+  const row = db()
+    .prepare(
+      `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.link_role,
+              f.link_role AS role, u.name AS owner_name
+         FROM files f JOIN users u ON u.id = f.owner_id
+        WHERE f.id = ? AND f.link_role IS NOT NULL`,
+    )
+    .get(fileId) as unknown as FileRow | undefined;
+  return row;
+}
+
+/** Turns link sharing on at a role, or off with null. The owner's call. */
+export function setLinkRole(
+  fileId: string,
+  ownerId: string,
+  role: 'editor' | 'viewer' | null,
+): boolean {
+  const result = db()
+    .prepare('UPDATE files SET link_role = ? WHERE id = ? AND owner_id = ?')
+    .run(role, fileId, ownerId);
+  return result.changes > 0;
 }
 
 /**

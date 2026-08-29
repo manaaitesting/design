@@ -2109,3 +2109,168 @@ test.describe('interaction editor', () => {
     ).toContain('cubic-bezier');
   });
 });
+
+/**
+ * Deep links.
+ *
+ * A link that only names the file is a link to "somewhere in this document",
+ * which is no use in a review or a handoff. `?node=` is the addressing
+ * primitive underneath comments, agent references and "look at this bit".
+ */
+test.describe('deep links', () => {
+  test('?node= opens on the right page, selected and framed', async ({ page }) => {
+    await openEditor(page);
+    const id = await makeNode(page, 'rect', {
+      name: 'Deep target',
+      x: 4200,
+      y: 3800,
+      w: 120,
+      h: 90,
+      fill: '#F2637F',
+    });
+
+    await page.goto(`/f/testfile00?node=${id}`);
+    await page.waitForFunction((room) => window.paperlike?.room === room, 'testfile00');
+
+    // selected…
+    await expect
+      .poll(() => page.evaluate(() => window.paperlike!.ui.getState().selection))
+      .toEqual([id]);
+
+    // …and actually on screen, which is the half a plain selection would miss
+    await expect(page.locator(`[data-node-id="${id}"]`)).toBeInViewport();
+
+    await removeNodes(page, [id]);
+  });
+
+  test('an id that is not in the document is ignored, not obeyed', async ({ page }) => {
+    await openEditor(page);
+    await page.goto('/f/testfile00?node=not-a-real-node');
+    await page.waitForFunction((room) => window.paperlike?.room === room, 'testfile00');
+    // no selection, no crash, and the canvas still framed itself
+    await expect
+      .poll(() => page.evaluate(() => window.paperlike!.ui.getState().selection))
+      .toEqual([]);
+    await expect(page.locator('[data-canvas-root]')).toBeVisible();
+  });
+});
+
+/**
+ * Auto layout, dragged on the canvas.
+ *
+ * Spacing is a number you arrive at by looking, so the gesture matters more
+ * than the field. These drive the real pointer over the real gutter, because
+ * the thing that can break is the measuring — the mutation is the same
+ * `store.update` the panel has always called.
+ */
+test.describe('flex handles', () => {
+  /** A row of three boxes in an auto-layout frame. */
+  async function stack(page: Page, direction: 'row' | 'column') {
+    const frame = await makeNode(page, 'frame', {
+      name: 'Stack',
+      x: 60,
+      y: 60,
+      w: 400,
+      h: 200,
+      fill: '#ffffff',
+      flex: {
+        mode: 'flex',
+        direction,
+        gap: 20,
+        padding: [24, 24, 24, 24],
+        align: 'start',
+        justify: 'start',
+        wrap: false,
+      },
+    });
+    for (const name of ['A', 'B', 'C']) {
+      await page.evaluate(
+        ({ parent, label }) =>
+          window.paperlike!.store.create('rect', parent, {
+            name: label,
+            w: 60,
+            h: 40,
+            fill: '#0d99ff',
+          }),
+        { parent: frame, label: name },
+      );
+    }
+    await select(page, [frame]);
+    return frame;
+  }
+
+  /** The frame's layout spec. Non-null by construction — `stack` sets one. */
+  const flexOf = async (page: Page, id: string) => {
+    const flex = await page.evaluate((node) => window.paperlike!.doc()[node].flex, id);
+    expect(flex, 'the frame lost its auto layout').not.toBeNull();
+    return flex!;
+  };
+
+  test('dragging a gutter changes the gap', async ({ page }) => {
+    const frame = await stack(page, 'row');
+    const before = await flexOf(page, frame);
+
+    const gutter = page.locator('.fig-flex-gap').first();
+    await expect(gutter).toBeVisible();
+    const box = (await gutter.boundingBox())!;
+    await dragBy(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, { x: 30, y: 0 });
+
+    const after = await flexOf(page, frame);
+    expect(after.gap).toBe(before.gap + 30);
+    // the padding was not along for the ride
+    expect(after.padding).toEqual(before.padding);
+
+    await removeNodes(page, [frame]);
+  });
+
+  test('dragging the left band changes only that padding', async ({ page }) => {
+    const frame = await stack(page, 'row');
+
+    // side 3 is the left edge; it is the fourth band rendered
+    const band = page.locator('.fig-flex-pad').nth(3);
+    const box = (await band.boundingBox())!;
+    await dragBy(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, { x: 16, y: 0 });
+
+    const after = await flexOf(page, frame);
+    expect(after.padding).toEqual([24, 24, 24, 40]);
+
+    await removeNodes(page, [frame]);
+  });
+
+  test('⌥ takes the opposite edge with it', async ({ page }) => {
+    const frame = await stack(page, 'row');
+
+    const band = page.locator('.fig-flex-pad').nth(3);
+    const box = (await band.boundingBox())!;
+    await page.keyboard.down('Alt');
+    await dragBy(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, { x: 10, y: 0 });
+    await page.keyboard.up('Alt');
+
+    const after = await flexOf(page, frame);
+    expect(after.padding).toEqual([24, 34, 24, 34]);
+
+    await removeNodes(page, [frame]);
+  });
+
+  test('a column frame gets horizontal gutters, and the gap still follows y', async ({ page }) => {
+    const frame = await stack(page, 'column');
+    const before = await flexOf(page, frame);
+
+    const gutter = page.locator('.fig-flex-gap').first();
+    const box = (await gutter.boundingBox())!;
+    // wider than tall: the gutter of a column runs across, not down
+    expect(box.width).toBeGreaterThan(box.height);
+    await dragBy(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, { x: 0, y: -12 });
+
+    expect((await flexOf(page, frame)).gap).toBe(before.gap - 12);
+    await removeNodes(page, [frame]);
+  });
+
+  test('a frame with no auto layout has no handles', async ({ page }) => {
+    const plain = await makeNode(page, 'frame', { name: 'Plain', x: 700, y: 60, w: 200, h: 120 });
+    await select(page, [plain]);
+    await expect(page.locator('.fig-flex-gap')).toHaveCount(0);
+    await expect(page.locator('.fig-flex-pad')).toHaveCount(0);
+    await removeNodes(page, [plain]);
+  });
+});

@@ -12,6 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { closeAll, openFile, outline } from './mcp-doc';
 import { assetsIn, closeRenderer, decodeDataUrl, renderNode, svgOfShape, writeAsset } from './mcp-render';
+import { readHtml, type NodeSpec } from './mcp-html';
 import {
   codeConnectFor,
   createFile,
@@ -25,6 +26,7 @@ import {
   unmapCodeConnect,
 } from '../src/server/db';
 import { toHtml, toJson, toReact } from '../src/export/toCode';
+import { toTailwind } from '../src/export/tailwind';
 import { newId } from '../src/lib/id';
 import {
   ROOT_ID,
@@ -82,19 +84,31 @@ const server = new McpServer(
       'approximation of it.',
       '',
       'Start with `list_files`, then `get_metadata` to see the tree, then',
-      '`get_design_context` on the node you care about. `get_screenshot` draws',
-      'that same node headlessly when you need to look at it, and',
-      '`download_assets` writes it and its images out to disk.',
+      '`get_design_context` on the node you care about — it takes several node',
+      'ids at once, so one call reads every component you need rather than one',
+      'call each. `get_screenshot` draws a node headlessly when you need to look',
+      'at it, and `download_assets` writes it and its images out to disk.',
       '',
       'Before generating anything, check `get_code_connect_map`: a node that is',
       'already implemented should be reused, not rebuilt. `search_design_system`',
       'and `get_variable_defs` say which components and variables the design is',
       'made of, and `get_motion_context` says how it behaves.',
       '',
-      'Edits go through `create_node` / `update_node` for single changes and',
-      '`edit_design` for everything else the canvas can do — grouping, auto',
-      'layout, booleans, components, instances, styles, prototyping. They appear',
-      'live on every open canvas.',
+      'BUILD FROM HTML. `write_html` is the fastest way to make anything here:',
+      'send the markup and the CSS and it lays them out in a real browser, reads',
+      'the computed styles back, and writes real layers — a flex container becomes',
+      'an auto layout, an element of pure text becomes a text layer. A screen is',
+      'one call. Put `data-ref` on an element to get its id back.',
+      '',
+      'BUILD IN ONE CALL. `edit_design` takes a list of operations and runs them',
+      'in order, and any op that creates something can be given a `ref` that later',
+      'ops name as "@ref" wherever an id goes. So a screen — its frame, its',
+      'twenty layers, its auto layout, its variables, its component and its',
+      'prototype links — is a single `edit_design` call, not fifty. Never loop',
+      '`create_node`: it exists for the one-off tweak, and using it to build is',
+      'the difference between three tool calls and a hundred.',
+      '',
+      'Every edit lands on the live document, so open canvases show it at once.',
     ].join('\n'),
   },
 );
@@ -126,18 +140,24 @@ server.registerTool(
   {
     title: 'Get document outline',
     description:
-      'The node tree for a file: ids, types, names, sizes and layout mode. Cheap — use it to find the node you want before asking for its context.',
+      'The node tree for a file: ids, types, names, sizes and layout mode. Cheap — use it to find the node you want before asking for its context. `depth` stops it short on a large file; the rows it cut say how many children are still down there.',
     inputSchema: {
       fileId: z.string().describe('File id, e.g. "demofile0" — the last path segment of /f/<id>'),
       nodeId: z.string().optional().describe('Subtree root. Defaults to the page.'),
+      depth: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe('How many levels to walk. Omit for the whole tree.'),
     },
   },
-  async ({ fileId, nodeId }) => {
+  async ({ fileId, nodeId, depth }) => {
     const { store } = await openFile(fileId);
     const doc = store.getSnapshot();
     const root = nodeId ?? ROOT_ID;
     if (!doc[root]) return text(`No node "${root}" in ${fileId}.`);
-    return text(outline(doc, root).join('\n'));
+    return text(outline(doc, root, 0, [], depth).join('\n'));
   },
 );
 
@@ -146,38 +166,60 @@ server.registerTool(
   {
     title: 'Get design as code',
     description:
-      'The node as production code. `react` returns a component plus its stylesheet, `html` a self-contained file, `json` the raw scene graph. This is generated from the same style function the canvas renders with, so it is exact.',
+      'The node as production code. `react` returns a component plus its stylesheet, `tailwind` the same component with utility classes instead, `html` a self-contained file, `json` the raw scene graph. This is generated from the same style function the canvas renders with, so it is exact. Pass `nodeIds` to read several nodes in one call rather than one call each.',
     inputSchema: {
       fileId: z.string(),
-      nodeId: z.string().describe('Node to export. Use get_metadata to find it.'),
-      format: z.enum(['react', 'html', 'json']).default('react'),
+      nodeId: z.string().optional().describe('Node to export. Use get_metadata to find it.'),
+      nodeIds: z
+        .array(z.string())
+        .optional()
+        .describe('Several nodes, each rendered in turn. Use instead of nodeId.'),
+      format: z.enum(['react', 'html', 'tailwind', 'json']).default('react'),
     },
   },
-  async ({ fileId, nodeId, format }) => {
+  async ({ fileId, nodeId, nodeIds, format }) => {
     const { store } = await openFile(fileId);
     const doc = store.getSnapshot();
-    if (!doc[nodeId]) return text(`No node "${nodeId}" in ${fileId}.`);
+    const wanted = nodeIds?.length ? nodeIds : nodeId ? [nodeId] : [];
+    if (!wanted.length) return text('Pass nodeId, or nodeIds for several at once.');
     const tokens = store.listTokens();
     const collections = store.listCollections();
     const fonts = store.listFonts();
 
+    const one = (nodeId: string): string => {
+      if (!doc[nodeId]) return `No node "${nodeId}" in ${fileId}.`;
+
     // A node someone has already built should be used, not generated again —
     // so the mapping arrives with the code rather than in a tool call the agent
     // has to think to make.
-    const mapped = codeConnectFor(fileId, subtreeIds(nodeId, doc));
-    const preamble = mapped.length
-      ? `${mapped
-          .map(
-            (row) =>
-              `// ${doc[row.node_id]?.name ?? row.node_id} (${row.node_id}) is already built: ${row.component_name} in ${row.source} [${row.label}] — use it`,
-          )
-          .join('\n')}\n\n`
-      : '';
+      const mapped = codeConnectFor(fileId, subtreeIds(nodeId, doc));
+      const preamble = mapped.length
+        ? `${mapped
+            .map(
+              (row) =>
+                `// ${doc[row.node_id]?.name ?? row.node_id} (${row.node_id}) is already built: ${row.component_name} in ${row.source} [${row.label}] — use it`,
+            )
+            .join('\n')}\n\n`
+        : '';
 
-    if (format === 'json') return text(toJson(nodeId, doc));
-    if (format === 'html') return text(preamble + toHtml(nodeId, doc, tokens, collections, fonts));
-    const { markup, css } = toReact(nodeId, doc, tokens, collections, fonts);
-    return text(`${preamble}${markup}\n/* ── stylesheet ── */\n\n${css}`);
+      if (format === 'json') return toJson(nodeId, doc);
+      if (format === 'html') return preamble + toHtml(nodeId, doc, tokens, collections, fonts);
+      if (format === 'tailwind') {
+        const tw = toTailwind(nodeId, doc, tokens, collections, fonts);
+        return `${preamble}${tw.markup}${tw.css.trim() ? `\n/* ── stylesheet ── */\n\n${tw.css}` : ''}`;
+      }
+      const { markup, css } = toReact(nodeId, doc, tokens, collections, fonts);
+      return `${preamble}${markup}\n/* ── stylesheet ── */\n\n${css}`;
+    };
+
+    // one node reads exactly as it always did; several are labelled so the
+    // agent can tell which block belongs to which id
+    if (wanted.length === 1) return text(one(wanted[0]));
+    return text(
+      wanted
+        .map((id) => `/* ── ${doc[id]?.name ?? id} (${id}) ── */\n\n${one(id)}`)
+        .join('\n\n'),
+    );
   },
 );
 
@@ -965,12 +1007,106 @@ function withSpecs(props: Record<string, unknown>, node?: SceneNode): Partial<Sc
   return out as Partial<SceneNode>;
 }
 
+/**
+ * Writes a spec tree into the document, depth first.
+ *
+ * `data-ref` on the source markup comes back out here as a name → id mapping,
+ * so an agent that built a screen from HTML can address the pieces of it
+ * afterwards without reading the tree back.
+ */
+function writeSpecs(
+  store: Awaited<ReturnType<typeof openFile>>['store'],
+  specs: NodeSpec[],
+  parentId: string,
+  refs: Map<string, string> = new Map(),
+): { count: number; top: string[]; refs: Map<string, string> } {
+  let count = 0;
+  const top: string[] = [];
+  for (const spec of specs) {
+    const id = store.create(spec.type as NodeType, parentId, withSpecs(spec.props));
+    top.push(id);
+    count += 1;
+    if (spec.ref) refs.set(spec.ref, id);
+    if (spec.children.length) count += writeSpecs(store, spec.children, id, refs).count;
+  }
+  return { count, top, refs };
+}
+
+server.registerTool(
+  'write_html',
+  {
+    title: 'Build from HTML',
+    description: [
+      'Turns HTML and CSS into real layers — the fastest way to build anything here.',
+      '',
+      'This canvas *is* HTML and CSS: a node maps onto a declaration block, so the',
+      'markup is laid out in a real browser and read back through',
+      '`getComputedStyle`. The cascade, shorthands, inheritance, em, %, flexbox and',
+      'the default stylesheet are all resolved before anything is written, which is',
+      'why the result matches what you wrote rather than approximating it.',
+      '',
+      'A flex container becomes an auto layout and its children flow; everything',
+      'else keeps absolute positions. An element whose content is only text becomes',
+      'a text layer, an <img> becomes an image layer, and background, border,',
+      'radius, opacity, overflow and every box-shadow come across.',
+      '',
+      'Put `data-ref="name"` on any element and the reply gives you the id it',
+      'became, so you can edit it afterwards without reading the tree back.',
+      '',
+      'Prefer this over a run of `create_node` calls: a screen is one call here.',
+    ].join('\n'),
+    inputSchema: {
+      fileId: z.string(),
+      html: z.string().describe('A fragment — the body of what you want, not a whole document.'),
+      css: z.string().optional().describe('A stylesheet the markup refers to.'),
+      parentId: z.string().optional().describe('Defaults to the page.'),
+      width: z
+        .number()
+        .int()
+        .min(1)
+        .max(4096)
+        .optional()
+        .describe('Layout width, in px. The web is width-driven; height follows. Default 1440.'),
+      x: z.number().optional().describe('Where the top-level layers land on the page.'),
+      y: z.number().optional(),
+    },
+  },
+  async ({ fileId, html, css, parentId, width, x, y }) => {
+    const { store } = await openFile(fileId);
+    const parent = parentId ?? ROOT_ID;
+    if (!store.getSnapshot()[parent]) return text(`No parent "${parent}".`);
+
+    const specs = await readHtml(html, { width, ...(css ? { css } : {}) });
+    if (!specs.length) return text('That markup laid out to nothing — every element was empty or hidden.');
+
+    // the offset applies to the top level only; everything below is placed by
+    // its parent, either by layout or by its own measured position
+    if (x !== undefined || y !== undefined) {
+      for (const spec of specs) {
+        spec.props.x = (spec.props.x as number ?? 0) + (x ?? 0);
+        spec.props.y = (spec.props.y as number ?? 0) + (y ?? 0);
+      }
+    }
+
+    const { count, refs } = writeSpecs(store, specs, parent);
+    await settle();
+    return text(
+      [
+        `Built ${count} layer(s) in ${parent}.`,
+        ...(refs.size ? ['', 'refs:', ...[...refs].map(([name, id]) => `  ${name} = ${id}`)] : []),
+      ].join('\n'),
+    );
+  },
+);
+
 server.registerTool(
   'create_node',
   {
     title: 'Create a node',
     description:
-      'Adds a node to a file. Appears on every open canvas immediately. Returns the new id.',
+      'Adds ONE node to a file, for a one-off addition. Building anything with more ' +
+      'than a couple of layers goes through `edit_design` in a single call instead — ' +
+      'its ops can point at each other by ref, so the whole tree lands in one round trip.',
     inputSchema: {
       fileId: z.string(),
       type: z.enum(NODE_TYPES),
@@ -992,7 +1128,9 @@ server.registerTool(
   'update_node',
   {
     title: 'Update a node',
-    description: 'Changes properties on an existing node.',
+    description:
+      'Changes properties on ONE existing node. To change several, send one `edit_design` ' +
+      'call with an `update` op each — same result, one round trip.',
     inputSchema: { fileId: z.string(), nodeId: z.string(), props: PROPS },
   },
   async ({ fileId, nodeId, props }) => {
@@ -1027,7 +1165,9 @@ server.registerTool(
   'set_variable',
   {
     title: 'Create or update a theme token',
-    description: 'Tokens publish as CSS custom properties; reference one as var(--name).',
+    description:
+      'Tokens publish as CSS custom properties; reference one as var(--name). ' +
+      'Defining a whole theme goes through `edit_design` with a `set_variable` op each, in one call.',
     inputSchema: {
       fileId: z.string(),
       name: z.string().describe('Without the leading --'),
@@ -1307,17 +1447,31 @@ const OPS = [
   'create_style',
   'apply_style',
   'add_page',
+  'set_variable',
+  'rename',
+  'write_html',
 ] as const;
 
 const OP = z.object({
   op: z.enum(OPS),
-  nodeId: z.string().optional().describe('The one node the op acts on.'),
-  nodeIds: z.array(z.string()).optional().describe('The several nodes the op acts on.'),
+  ref: z
+    .string()
+    .optional()
+    .describe(
+      'A local name for whatever this op creates — a node, a page, a style, a component prop. ' +
+        'Any later op in the same batch can point at it by writing "@name" wherever an id goes, ' +
+        'so a whole tree is built in one call instead of one call per node.',
+    ),
+  nodeId: z.string().optional().describe('The one node the op acts on. May be "@ref".'),
+  nodeIds: z.array(z.string()).optional().describe('The several nodes the op acts on. May be "@ref".'),
   parentId: z.string().optional(),
   index: z.number().int().optional().describe('reparent: where among its new siblings.'),
   type: z.enum(NODE_TYPES).optional().describe('create'),
   props: PROPS.optional().describe('create / update'),
-  name: z.string().optional().describe('add_page · create_style · set_flow_start · add_component_prop'),
+  name: z
+    .string()
+    .optional()
+    .describe('add_page · create_style · set_flow_start · add_component_prop · set_variable · rename'),
   where: z.enum(['front', 'back']).optional().describe('reorder'),
   edge: z
     .enum(['left', 'hcenter', 'right', 'top', 'vcenter', 'bottom'])
@@ -1458,6 +1612,13 @@ const OP = z.object({
     })
     .optional()
     .describe('add_interaction'),
+  varType: z
+    .enum(['color', 'number', 'text'])
+    .optional()
+    .describe('set_variable: defaults to color'),
+  html: z.string().optional().describe('write_html: the markup to build'),
+  css: z.string().optional().describe('write_html: a stylesheet the markup refers to'),
+  width: z.number().optional().describe('write_html: layout width in px, default 1440'),
   slot: z.enum(['fill', 'stroke', 'text', 'effect']).optional().describe('create_style · apply_style'),
   styleId: z.string().optional().describe('apply_style'),
   flex: z
@@ -1479,6 +1640,21 @@ server.registerTool(
     title: 'Edit the design',
     description: [
       'Everything the canvas can do to a document, as a list of operations run in order.',
+      '',
+      'THIS IS THE ONE TOOL TO BUILD WITH. Send the whole design as a single call —',
+      'a hundred ops in one `ops` array, not a hundred calls. Ops see each other:',
+      'give a creating op a `ref` and any later op can name it as "@ref" wherever an',
+      'id goes, so a frame and everything inside it lands in one round trip:',
+      '',
+      '  [{ op: "create", ref: "card",  type: "frame", props: { w: 320, h: 200 } },',
+      '   { op: "create", ref: "title", type: "text",  parentId: "@card", props: { text: "Hi" } },',
+      '   { op: "auto_layout", nodeId: "@card", on: true, flex: { direction: "column", gap: 12 } },',
+      '   { op: "create_component", nodeId: "@card" }]',
+      '',
+      'A ref binds the id the op produced — a node for `create` / `group` / `boolean`,',
+      'a page for `add_page`, a style for `create_style`, a prop for `add_component_prop`.',
+      'An unresolved "@name" is an error, not a node id, and skips only that op.',
+      '',
       'Each op names the nodes it acts on and carries only the fields it needs:',
       '',
       '  create           type, parentId, props        ungroup          nodeIds',
@@ -1491,6 +1667,8 @@ server.registerTool(
       '  align            nodeIds, edge                tidy             nodeIds',
       '  distribute       nodeIds, axis                resize_to_fit    nodeIds',
       '  auto_layout      nodeId, on, flex             add_page         name',
+      '  set_variable     name, value, varType         rename           nodeId, name',
+      '  write_html       html, css, width, parentId    (a whole subtree in one op)',
       '',
       '  create_component nodeId                       add_component_prop mainId, name, propType, value, options',
       '  create_instance  mainId, parentId, x, y       set_prop_value     instanceId, propId, value',
@@ -1502,16 +1680,67 @@ server.registerTool(
       '  set_flow_start   nodeId, name (null clears it)',
       '',
       'Every change lands on the live document, so open canvases show it immediately.',
+      'The reply is the log of what each op did, plus the ids every ref bound to.',
     ].join('\n'),
     inputSchema: { fileId: z.string(), ops: z.array(OP).min(1) },
   },
-  async ({ fileId, ops }) => {
+  async ({ fileId, ops: raw }) => {
     const { store } = await openFile(fileId);
     const log: string[] = [];
     const has = (id?: string) => Boolean(id && store.getSnapshot()[id]);
 
-    for (const [index, op] of ops.entries()) {
-      const step = `${index + 1}. ${op.op}`;
+    /**
+     * What each op's `ref` bound to.
+     *
+     * This is the whole reason a design arrives in one call rather than fifty:
+     * an op can create a frame under the name "card", and every op after it in
+     * the same array can say parentId "@card" without the agent having to make
+     * a round trip to learn the id first.
+     */
+    const refs = new Map<string, string>();
+    /** Names used before anything bound them — reported, never passed through. */
+    let dangling: string[] = [];
+    const deref = <T extends string | undefined>(value: T): T => {
+      if (typeof value !== 'string' || !value.startsWith('@')) return value;
+      const bound = refs.get(value.slice(1));
+      if (bound) return bound as T;
+      dangling.push(value);
+      return value;
+    };
+
+    for (const [index, source] of raw.entries()) {
+      const step = `${index + 1}. ${source.op}`;
+      dangling = [];
+      const op = {
+        ...source,
+        nodeId: deref(source.nodeId),
+        parentId: deref(source.parentId),
+        mainId: deref(source.mainId),
+        instanceId: deref(source.instanceId),
+        destination: deref(source.destination),
+        styleId: deref(source.styleId),
+        propId: deref(source.propId),
+        animation: deref(source.animation),
+        nodeIds: source.nodeIds?.map(deref),
+        branches: source.branches?.map((branch) => ({
+          ...branch,
+          actions: branch.actions.map((action) => ({
+            ...action,
+            destination: deref(action.destination),
+          })),
+        })),
+      };
+      if (dangling.length) {
+        log.push(`${step}: nothing named ${[...new Set(dangling)].join(', ')} yet — skipped`);
+        continue;
+      }
+
+      /** Records what this op made, under the name the op asked for. */
+      const bind = (id: string | null | undefined): string | null | undefined => {
+        if (id && op.ref) refs.set(op.ref, id);
+        return id;
+      };
+
       const many = op.nodeIds ?? (op.nodeId ? [op.nodeId] : []);
       const missing = many.filter((id) => !has(id));
       if (missing.length) {
@@ -1523,8 +1752,8 @@ server.registerTool(
         case 'create': {
           const parent = op.parentId ?? ROOT_ID;
           if (!has(parent)) { log.push(`${step}: no parent "${parent}" — skipped`); break; }
-          const id = store.create((op.type ?? 'frame') as NodeType, parent, withSpecs(op.props ?? {}));
-          log.push(`${step}: created ${op.type ?? 'frame'} ${id}`);
+          const id = bind(store.create((op.type ?? 'frame') as NodeType, parent, withSpecs(op.props ?? {})));
+          log.push(`${step}: created ${op.type ?? 'frame'} ${id}${op.ref ? ` as @${op.ref}` : ''}`);
           break;
         }
         case 'update': {
@@ -1549,11 +1778,12 @@ server.registerTool(
           break;
         case 'duplicate': {
           const made = store.duplicate(many, op.offset ?? 20);
+          bind(made[0]);
           log.push(`${step}: ${made.join(', ') || 'nothing to copy'}`);
           break;
         }
         case 'group': {
-          const id = store.group(many);
+          const id = bind(store.group(many));
           log.push(`${step}: ${id ?? 'needs two or more layers with the same parent'}`);
           break;
         }
@@ -1563,7 +1793,7 @@ server.registerTool(
           break;
         }
         case 'section': {
-          const id = store.wrapInSection(many);
+          const id = bind(store.wrapInSection(many));
           log.push(`${step}: ${id ?? 'nothing to wrap'}`);
           break;
         }
@@ -1572,17 +1802,18 @@ server.registerTool(
           log.push(`${step}: toggled the mask on ${many[0]}`);
           break;
         case 'boolean': {
-          const id = store.booleanGroup(many, (op.boolean ?? 'union') as BooleanOp);
+          const id = bind(store.booleanGroup(many, (op.boolean ?? 'union') as BooleanOp));
           log.push(`${step}: ${id ?? 'needs two or more shapes'}`);
           break;
         }
         case 'flatten': {
-          const id = store.flatten(many);
+          const id = bind(store.flatten(many));
           log.push(`${step}: ${id ?? 'nothing to flatten'}`);
           break;
         }
         case 'outline_stroke': {
           const made = store.outlineStroke(many);
+          bind(made[0]);
           log.push(`${step}: ${made.length} outline(s)`);
           break;
         }
@@ -1614,19 +1845,21 @@ server.registerTool(
           break;
         case 'create_component': {
           if (!op.nodeId) { log.push(`${step}: needs nodeId`); break; }
-          log.push(`${step}: ${store.createComponent(op.nodeId) ? `${op.nodeId} is now a main component` : 'that layer cannot be a component'}`);
+          const made = store.createComponent(op.nodeId);
+          if (made) bind(op.nodeId);
+          log.push(`${step}: ${made ? `${op.nodeId} is now a main component` : 'that layer cannot be a component'}`);
           break;
         }
         case 'create_instance': {
           if (!has(op.mainId)) { log.push(`${step}: no main component "${op.mainId}"`); break; }
           const parent = op.parentId ?? ROOT_ID;
-          const id = store.createInstance(op.mainId!, parent, { x: op.x ?? 0, y: op.y ?? 0 });
+          const id = bind(store.createInstance(op.mainId!, parent, { x: op.x ?? 0, y: op.y ?? 0 }));
           log.push(`${step}: ${id ?? 'that node is not a main component'}`);
           break;
         }
         case 'swap_instance': {
           if (!op.nodeId || !has(op.mainId)) { log.push(`${step}: needs nodeId and mainId`); break; }
-          log.push(`${step}: ${store.swapInstance(op.nodeId, op.mainId!) ?? 'could not swap'}`);
+          log.push(`${step}: ${bind(store.swapInstance(op.nodeId, op.mainId!)) ?? 'could not swap'}`);
           break;
         }
         case 'detach_instance':
@@ -1639,13 +1872,13 @@ server.registerTool(
           break;
         case 'add_component_prop': {
           if (!has(op.mainId) || !op.name) { log.push(`${step}: needs mainId and name`); break; }
-          const id = store.addComponentProp(op.mainId!, {
+          const id = bind(store.addComponentProp(op.mainId!, {
             name: op.name,
             type: (op.propType ?? 'text') as PropType,
             value: op.value ?? '',
             ...(op.options ? { options: op.options } : {}),
-          });
-          log.push(`${step}: ${id ? `prop ${id}` : 'that node is not a component'}`);
+          }));
+          log.push(`${step}: ${id ? `prop ${id}${op.ref ? ` as @${op.ref}` : ''}` : 'that node is not a component'}`);
           break;
         }
         case 'set_prop_value': {
@@ -1655,7 +1888,7 @@ server.registerTool(
           break;
         }
         case 'combine_variants': {
-          const id = store.combineAsVariants(many);
+          const id = bind(store.combineAsVariants(many));
           log.push(`${step}: ${id ?? 'needs two or more components'}`);
           break;
         }
@@ -1705,7 +1938,7 @@ server.registerTool(
           break;
         case 'create_style': {
           if (!op.nodeId || !op.name) { log.push(`${step}: needs nodeId, slot and name`); break; }
-          const id = store.createStyleFrom(op.nodeId, (op.slot ?? 'fill') as StyleSlot, op.name);
+          const id = bind(store.createStyleFrom(op.nodeId, (op.slot ?? 'fill') as StyleSlot, op.name));
           log.push(`${step}: ${id ?? 'that layer has nothing in that slot'}`);
           break;
         }
@@ -1716,8 +1949,53 @@ server.registerTool(
           break;
         }
         case 'add_page': {
-          const id = store.addPage(op.name);
-          log.push(`${step}: page ${id}`);
+          const id = bind(store.addPage(op.name));
+          log.push(`${step}: page ${id}${op.ref ? ` as @${op.ref}` : ''}`);
+          break;
+        }
+        // Tokens belong in the same batch as the layers that reference them:
+        // a design that defines --brand and paints with var(--brand) is one
+        // call, not two.
+        case 'set_variable': {
+          if (!op.name) { log.push(`${step}: needs a name`); break; }
+          const existing = store.listTokens().find((t) => t.name === op.name);
+          if (existing) {
+            store.updateToken(existing.id, { value: op.value ?? '', type: op.varType ?? existing.type });
+            bind(existing.id);
+          } else {
+            bind(store.addToken({ name: op.name, value: op.value ?? '', type: op.varType ?? 'color' }));
+          }
+          log.push(`${step}: --${op.name}: ${op.value ?? ''}`);
+          break;
+        }
+        case 'rename': {
+          if (!op.nodeId || !op.name) { log.push(`${step}: needs nodeId and name`); break; }
+          store.update(op.nodeId, { name: op.name });
+          log.push(`${step}: ${op.nodeId} is now "${op.name}"`);
+          break;
+        }
+        // The one op that is worth more than the rest of the list put together:
+        // a subtree arrives as markup rather than as a node per call, and its
+        // `data-ref`s join the same ref table the other ops use.
+        case 'write_html': {
+          if (!op.html) { log.push(`${step}: needs html`); break; }
+          const parent = op.parentId ?? ROOT_ID;
+          if (!has(parent)) { log.push(`${step}: no parent "${parent}" — skipped`); break; }
+          const specs = await readHtml(op.html, {
+            ...(op.width ? { width: op.width } : {}),
+            ...(op.css ? { css: op.css } : {}),
+          });
+          if (op.x !== undefined || op.y !== undefined) {
+            for (const spec of specs) {
+              spec.props.x = ((spec.props.x as number) ?? 0) + (op.x ?? 0);
+              spec.props.y = ((spec.props.y as number) ?? 0) + (op.y ?? 0);
+            }
+          }
+          const built = writeSpecs(store, specs, parent, refs);
+          // the op's own ref names the outermost layer it made; the markup's
+          // `data-ref`s have already gone into the same table
+          bind(built.top[0]);
+          log.push(`${step}: built ${built.count} layer(s) in ${parent}`);
           break;
         }
         default:
@@ -1726,6 +2004,10 @@ server.registerTool(
     }
 
     await settle();
+    if (refs.size) {
+      log.push('', 'refs:');
+      for (const [name, id] of refs) log.push(`  @${name} = ${id}`);
+    }
     return text(log.join('\n'));
   },
 );

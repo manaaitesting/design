@@ -64,6 +64,21 @@ Exporting emits the GLSL either way: React gets a dependency-free `Shader.jsx`
 runtime beside the component, HTML gets the same programs as a script that finds
 each surface by `data-shader` and drives them all from one frame loop.
 
+There are twenty-six of them, across Gradients, Noise, Patterns and Filters —
+mesh and radial and grain gradients, colour panels, a heatmap; simplex, Perlin,
+neuro and domain-warped noise, paper texture; voronoi, metaballs, dot grid,
+spiral, waves; god rays, swirl, smoke ring, water, a pulsing border, liquid
+metal, halftone, dithering, fluted glass, film grain, dot orb. A generator named
+after simplex or Perlin is one: `src/webgl/glsl.ts` carries real `snoise`,
+`gnoise` and cellular `voronoi` beside the cheap value noise, rather than a
+rename of it.
+
+A shader is the one thing here that cannot fail loudly — a program that does not
+compile paints nothing, and a layer that paints nothing looks exactly like one
+nobody has styled yet. TypeScript sees a template string, so `tests/shaders`
+compiles and links the whole catalogue in a real WebGL2 context and asserts on
+the driver's own info log.
+
 **The inspector is Figma's.** Measured from Figma's own right panel and rebuilt
 to match: 348px wide, `#F5F5F5` fields at 24px with a 24px glyph gutter, 9px
 sub-labels above each field group, 11px/550 section headers that dim to 50% when
@@ -141,6 +156,26 @@ places: the editor hides its tools, and the sync server — which signs the role
 into the handshake token — drops any write that arrives on a viewer's socket. A
 modified client gets nowhere.
 
+**And sharing does not require an account.** Inviting by email is the strong
+form — it names a person and survives the link being passed on — but it cannot
+reach anyone who has not signed up, which is most of the people a design needs
+to be seen by. So a file also carries a `link_role`: nothing, view, or edit for
+anyone holding the URL. A visitor with no account is given a guest identity in
+`proxy.ts` (a server component may read cookies but not set them), and from
+there they are an ordinary member: the same signed handshake, the same role
+inside the signature, the same write-drop on a viewer's socket. The cookie
+carries no authority at all — forging it buys a different avatar. A membership
+row always outranks the link, so a view-only link never demotes an invited
+editor.
+
+**Folders and search.** The dashboard filters in SQL rather than in the page,
+because the list is the thing that grows. Folders are flat and belong to the
+owner: a folder is a way of looking at your own files, not a permission
+boundary, so a file shared with you stays visible whatever its owner filed it
+under, and deleting a folder empties it rather than taking the files down. The
+controls are a GET form, so the view you are looking at is a URL you can send
+yourself.
+
 **History is on disk.** A CRDT merges concurrent edits but does not protect you
 from an intentional one — a stray `⌘A` + `⌫` is a perfectly valid update, and
 once it syncs the previous state is gone from every peer. Undo is per-client and
@@ -185,6 +220,7 @@ gets rendered, cropped to the slice.
 | format | what you get |
 |---|---|
 | React | a component plus a stylesheet, both from `nodeStyle()` |
+| Tailwind | the same component with utility classes instead of a stylesheet |
 | HTML | one self-contained file with styles inlined, shaders included |
 | JSON | the raw scene graph |
 | PNG | rasterised at 1–4x through an SVG `foreignObject` |
@@ -194,6 +230,23 @@ PNG and SVG work because the canvas is real DOM: the node is cloned, its WebGL
 surfaces are frozen to snapshots, its theme variables are re-declared on the
 wrapper, and the browser renders it. There is no second renderer to drift.
 
+**Tailwind is a rewriting of the React export, not a fourth walk of the
+document.** `toReact` already emits one rule per layer from `nodeStyle()`, so
+that CSS *is* the design; re-walking the tree would mean a second opinion about
+what a layer looks like, and two opinions is how an exporter drifts. Each
+generated rule becomes a class list and is spliced back into the same markup.
+
+The mapping is total, which is the property that matters — an export that
+silently loses a declaration produces code that looks fine and renders wrong.
+Properties with an idiomatic utility get one (`flex-col`, `gap-3`, `p-5`,
+`rounded-xl`); the type scale is kept separate from the spacing scale, because
+`text-6` does not exist and 24px is `text-2xl`; an off-scale length becomes
+`gap-[13px]` rather than being rounded to a lie; a variable stays a variable as
+`bg-[var(--brand)]`; and anything with no utility at all becomes an arbitrary
+property, `[mask-image:url(#a)]`, which Tailwind accepts. Only what cannot live
+on an element — the font `@import`s and the `:root` block — is left as CSS.
+`⌥T` copies the selection this way.
+
 ## Tests
 
 ```bash
@@ -201,20 +254,28 @@ pnpm test          # Playwright, headless
 pnpm test:ui       # the same suite, watchable
 ```
 
-Four suites behind one command. `geometry` checks the path builders, the boolean
-kernel, masks and variable modes directly — no browser, because a boolean that
-clips the wrong region is invisible until someone draws exactly the shape that
-exposes it. `library` runs the shared library against a scratch database.
-`sync` drives the sync server, including the guard that drops a viewer's writes.
-`mcp` spawns the MCP server over stdio against a scratch database and asks it to
-do everything it advertises — the one surface with no screen to catch a
-regression on.
-`editor` drives the real canvas — pointer sequences and key presses, not unit tests of
-internals — because the bugs that actually bit here only appear end to
+Several suites behind one command, split by what they need rather than by what
+they cover.
+
+`geometry` checks the path builders, the boolean kernel, masks and variable
+modes directly — no browser, because a boolean that clips the wrong region is
+invisible until someone draws exactly the shape that exposes it. `export` does
+the same for the exporters, which are functions from a document to a string.
+`library` runs the shared library against a scratch database. `sync` drives the
+sync server, including the guard that drops a viewer's writes. `mcp` spawns the
+MCP server over stdio against a scratch database and asks it to do everything it
+advertises — the one surface with no screen to catch a regression on.
+
+`editor` drives the real canvas — pointer sequences and key presses, not unit
+tests of internals — because the bugs that actually bit here only appear end to
 end: a hug-sized leaf collapsing to 0×0, a held ⌘D burying a layer five frames
 deep, snapping fighting the duplicate modifier. It signs in once, then runs
 against `/f/testfile00`, a scratch file `pnpm seed` creates for it, and rebuilds
 that document from scratch before every test. It never touches the demo file.
+Alongside the canvas it covers the things only a browser can answer: the tab
+strip, a stranger opening a shared link in a context that has never signed in,
+the dashboard's search and folders, dragging a gutter to change a gap, and
+compiling all twenty-six shaders on a real GPU.
 
 ## MCP — the canvas as an agent tool
 
@@ -251,6 +312,7 @@ pnpm mcp        # or: npx tsx server/mcp.ts
 | `list_shader_effects` · `get_shader_effect` | the Effects list's types and presets, as JSON to paste |
 | `get_code_connect_map` · `add_code_connect_map` | which node is already built, and where |
 | `create_new_file` | a new file, owned by a real account |
+| `write_html` | HTML and CSS in, real layers out — the fast way to build |
 | `create_node` · `update_node` · `delete_node` | write to the live document |
 | `edit_design` | every other canvas verb, as a list of ops run in order |
 | `upload_asset` | an image off disk, placed as a layer |
@@ -260,15 +322,125 @@ pnpm mcp        # or: npx tsx server/mcp.ts
 `edit_design` is the batch tool: group and ungroup, sections, masks, booleans,
 flatten, outline stroke, align, distribute, tidy, resize-to-fit, auto layout,
 scale, components and instances, component properties, variants, styles,
-prototype interactions and flow starts, pages. Each op names the nodes it acts
-on and carries only the fields it needs, and the reply says what each one did —
-including the ones it skipped, and why.
+prototype interactions and flow starts, pages, variables, renames, and
+`write_html`. Each op names the nodes it acts on and carries only the fields it needs, and the reply says
+what each one did — including the ones it skipped, and why.
+
+### One call, not a hundred
+
+The thing that decides whether an agent is usable on a canvas is not how many
+verbs the server has; it is how many round trips one screen costs. A server
+whose only way to make a child is "create a node, read back its id, create
+another node under it" forces a call per layer, and a login page becomes eighty
+calls and eighty model turns. Two things fix that.
+
+**`write_html` — because the canvas already is HTML.** Everything else here
+maps a node onto a CSS declaration block; `write_html` reads that mapping
+backwards. The markup is laid out in headless Chromium and read back through
+`getComputedStyle`, so the cascade, shorthands, inheritance, `em`, `%`, flexbox
+and the browser's own default stylesheet are all resolved before a single node
+is written — there is no second CSS engine here to disagree with the one the
+canvas renders with. A `display: flex` element becomes a real auto layout, an
+element of pure text becomes a text layer, an `<img>` becomes an image, and
+background, border, radius, opacity, overflow and every `box-shadow` come
+across. An agent already knows how to write a card in HTML; letting it send that
+is the whole saving. `data-ref` on an element comes back as the id it became, so
+the pieces stay addressable without reading the tree back — and those names join
+the same ref table below, so a later op in the same call can style `@title`.
+
+**Ops in a batch can see each other.** Any op that creates something takes a
+`ref`, and every id field in every later op accepts `"@ref"`:
+
+```jsonc
+[{ "op": "add_page",    "ref": "screen", "name": "Signup" },
+ { "op": "set_variable","ref": "accent", "name": "accent", "value": "#111827" },
+ { "op": "create",      "ref": "form",   "type": "frame", "parentId": "@screen",
+   "props": { "w": 360, "h": 280, "fill": "#fff", "radius": 12 } },
+ { "op": "create",      "ref": "title",  "type": "text",  "parentId": "@form",
+   "props": { "text": "Create account", "font": { "size": 24, "color": "var(--accent)" } } },
+ { "op": "auto_layout", "nodeId": "@form", "on": true,
+   "flex": { "direction": "column", "gap": 16, "padding": [24, 24, 24, 24] } },
+ { "op": "create_component", "ref": "main", "nodeId": "@form" },
+ { "op": "create_instance",  "mainId": "@main", "x": 420 },
+ { "op": "write_html", "parentId": "@form",
+   "css": ".row{display:flex;gap:8px;align-items:center}",
+   "html": "<div class=\"row\" data-ref=\"row\"><span>Already have an account?</span></div>" }]
+```
+
+That is a page, a variable, a laid-out frame, its contents, a component and an
+instance — in one tool call. A ref binds whatever the op produced: a node for
+`create`, `group`, `boolean`, `flatten`, `duplicate`; a page for `add_page`; a
+style for `create_style`; a prop for `add_component_prop`. The reply ends with
+the table of what every ref bound to, so the ids are there for the next call
+without a read. A `"@name"` nothing has bound is an error that skips its own op
+and says so — it is never passed through as a literal id, which would write
+nonsense into the document quietly.
+
+Reading is batched the same way: `get_design_context` takes `nodeIds` and
+returns every one of them in a single reply, and `get_metadata` takes a `depth`
+so a large file is one cheap call whose cut-off rows say how many children are
+still underneath.
 
 `get_design_context` runs the same `nodeStyle()` the canvas renders with, and
 `get_screenshot` opens that export in headless Chromium, so what an agent reads
 *and what it sees* are what ships — the reason this is more useful than a design
 file an agent has to guess at. Code Connect closes the loop: a node mapped to
 `src/ui/Card.tsx` is a node the next agent reuses instead of rebuilding.
+
+## Tabs
+
+Across the top of the editor, one tab per open file — paper.design's strip,
+which exists because a design session is rarely one file: you are looking at the
+marketing page while you build the dashboard, and prompting an agent against
+both.
+
+The strip lives in `localStorage`, not in the CRDT: which files *you* have open
+is a property of your session, like your panel widths, so two people in the same
+room see their own strips. A file joins the strip whenever you land on it —
+from a tab, from the file browser, from a pasted link, from the back button — so
+it is a true record of where you have been working, and a file that leaves your
+account leaves the strip with it rather than lingering as a link to a 404.
+
+Only the file you are looking at has a live document behind it. Switching tabs
+is a route change, not nine WebSockets held open — and it still returns you to
+the file *as you left it*, because `saveFileView` remembers each file's viewport
+and page. A file you have opened before reopens framed where you left it instead
+of snapping back to fit-all, which is the whole felt difference between tabs and
+a bookmark bar.
+
+| | |
+|---|---|
+| click a tab | switch to that file |
+| the cross, or middle-click | close it — the neighbour takes over, and the last one closed goes back to Files |
+| right-click | close, close others, close to the right |
+| drag | reorder |
+| `+` | a new file, in a new tab |
+| `⌥⌘→` `⌥⌘←` | next / previous tab, wrapping |
+| `⌥⌘1…8` · `⌥⌘9` | the nth tab · the last one |
+| `⌥⌘W` | close the current tab |
+| `⌘\` | the strip goes with the rest of the chrome |
+
+Those shortcuts listen in the capture phase and stop the event: the canvas binds
+bare arrows to nudge and `⌥⌘`-letters to structural commands on the same window,
+and `⌥⌘→` must switch files rather than move a layer ten pixels on its way.
+
+## Auto layout, dragged
+
+Gap and padding are numbers in the Inspector too, and typing 24 into a field is
+exact. But spacing is not a number you know in advance — it is one you arrive at
+by looking, and a round trip from the artboard to a panel and back breaks the
+loop that gets you there. So selecting a flex frame draws a handle in each
+gutter between its children and a band inside each padding edge, and dragging
+one changes the number.
+
+`src/components/FlexHandles.tsx` computes no layout. The children are real DOM,
+so the browser has already decided where the gutters are; this measures them and
+turns a pointer delta into `flex.gap` or `flex.padding` through the same
+`store.update` the panel calls — so undo, multiplayer and the CRDT come along
+unchanged. A zero-width gutter still gets a 7px grab area, because a handle you
+cannot hit is not a handle. Negative gap is allowed, since overlapping avatars
+and stacked cards are real designs. `⌥` takes the opposite edge with it, as
+Figma's does.
 
 ## Layout model
 
@@ -455,7 +627,8 @@ there is no second renderer to drift.
 | `⌘Z` / `⇧⌘Z` Undo/redo | `⌘D` Duplicate | `⌘A` Select all | `⌫` Delete |
 | `⌘C` Copy | `⌘X` Cut | `⌘V` Paste | `⇧⌘V` Paste in place |
 | `⌘/` Quick actions | `⇧D` Inspect | `⌥⌘H` Version history | `⇧⌘⏎` Present |
-| `⇧⌘E` Export | `⌘L` Copy link | `⇧⌘H` Show/hide | `⇧⌘L` Lock |
+| `⇧⌘E` Export | `⌘L` Copy link to layer | `⇧⌘H` Show/hide | `⇧⌘L` Lock |
+| `⌥T` Copy as Tailwind | `⌥⌘→`/`←` Next/prev tab | `⌥⌘W` Close tab | `⇧⌘T` Reopen tab |
 | `⌘0` 100% | `⌘1` Zoom to fit | `⌘±` Zoom | `Space`+drag Pan |
 | `⌥⌘A` Select matching | `⌘K` Create link | `⌃⌥T` Tidy up | `⌃⌥V`/`⌃⌥H` Distribute |
 | `I` Copy colors | `⌥L` Collapse layers | `⇧G` Layout guides | `⌥⇧O` Outlines |
@@ -479,7 +652,13 @@ plain scroll pans.
 | `src/document/mask.ts` | which layers a mask shapes, and how |
 | `src/document/variables.ts` | collections, modes, aliases → custom properties |
 | `src/document/selection.ts` | Figma's selection rules, in one place |
+| `src/webgl/glsl.ts` | the shared prelude: value, simplex, Perlin and cellular noise |
 | `src/webgl/shaders.ts` | GLSL catalogue + typed params |
+| `src/export/tailwind.ts` | the React export, rewritten as utility classes |
+| `src/state/tabs.ts` | the open-file strip, per browser |
+| `src/components/FileTabs.tsx` | the tab strip itself |
+| `src/components/FlexHandles.tsx` | on-canvas gap and padding drags |
+| `proxy.ts` | the guest identity a link visitor arrives with |
 | `src/export/raster.ts` | PNG / SVG rendering via foreignObject |
 | `src/components/Comments.tsx` | comment pins and threads |
 | `src/components/Shape.tsx` | shapes and boolean groups, as clipped layers |

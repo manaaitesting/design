@@ -12,10 +12,11 @@ import {
 } from './Session';
 import { useUI, type ExportFormat } from '../state/ui';
 import { toHtml, toJson, toReact } from '../export/toCode';
+import { toTailwind } from '../export/tailwind';
 import { download, nodeToPng, nodeToSvg, safeFilename } from '../export/raster';
 import { ROOT_ID } from '../document/types';
 
-const CODE_FORMATS: ExportFormat[] = ['react', 'html', 'json'];
+const CODE_FORMATS: ExportFormat[] = ['react', 'html', 'tailwind', 'json'];
 
 /** The suffix goes into a filename, so it is filtered like one. */
 function safeSuffix(suffix: string): string {
@@ -51,6 +52,10 @@ export function ExportDialog() {
     if (!target || !isCode) return { code: '', css: '' };
     if (format === 'react') {
       const { markup, css } = toReact(targetId, doc, tokens, collections, fonts);
+      return { code: markup, css };
+    }
+    if (format === 'tailwind') {
+      const { markup, css } = toTailwind(targetId, doc, tokens, collections, fonts);
       return { code: markup, css };
     }
     if (format === 'html') return { code: toHtml(targetId, doc, tokens, collections, fonts), css: '' };
@@ -119,6 +124,7 @@ export function ExportDialog() {
               options={[
                 { value: 'react', label: 'React' },
                 { value: 'html', label: 'HTML' },
+                { value: 'tailwind', label: 'Tailwind' },
                 { value: 'json', label: 'JSON' },
                 { value: 'png', label: 'PNG' },
                 { value: 'svg', label: 'SVG' },

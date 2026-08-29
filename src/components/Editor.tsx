@@ -15,16 +15,17 @@ import { PromptBar } from './PromptBar';
 import { Resizer } from './Resizer';
 import { ShadersModal } from './ShadersModal';
 import { ToolRail, sampleColor } from './ToolRail';
-import { useDoc, useStore, useTokenVars } from './Session';
-import { PANEL, ZOOM, useUI, type Tool } from '../state/ui';
+import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
+import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
-import { ROOT_ID, type BooleanOp, type Doc } from '../document/types';
+import { ROOT_ID, pageOf, type BooleanOp, type Doc } from '../document/types';
 import { firstChild, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
 import { canEditPoints } from '../document/geometry';
 import { readNodes, writeNodes } from '../lib/clipboard';
 import { copyAsPng, copyProperties, flip, pasteAt, pasteProperties } from '../lib/actions';
 import { download, safeFilename } from '../export/raster';
+import { toTailwind } from '../export/tailwind';
 
 const TOOL_KEYS: Record<string, Tool> = {
   v: 'move',
@@ -67,10 +68,13 @@ function isTyping(target: EventTarget | null): boolean {
  */
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
-export function Editor({ fileName }: { fileName: string }) {
+export function Editor({ fileName, room }: { fileName: string; room: string }) {
   const store = useStore();
   const doc = useDoc();
   const tokenVars = useTokenVars();
+  const tokens = useTokens();
+  const collections = useCollections();
+  const fonts = useCustomFonts();
   const leftPanel = useUI((s) => s.leftPanel);
   const outlines = useUI((s) => s.view.outlines);
   const chrome = useUI((s) => s.chrome);
@@ -82,6 +86,19 @@ export function Editor({ fileName }: { fileName: string }) {
   useIsoLayoutEffect(() => {
     useUI.getState().hydratePanels();
   }, []);
+
+  // The UI store outlives this component, and a selection, a drilled-into frame
+  // or a page id from the tab you just left names nothing in the file you just
+  // opened. Runs before the effects below, which restore what *this* file had.
+  const openedAt = useRef<Viewport | null>(null);
+  useIsoLayoutEffect(() => {
+    useUI.getState().resetForFile();
+    // Where the canvas stood the moment this file opened. Framing waits for the
+    // document to arrive, which can be a beat or two; if the viewport has moved
+    // by then, someone is already looking around and the frame must not yank
+    // the canvas out from under them.
+    openedAt.current = useUI.getState().viewport;
+  }, [room]);
 
   // Shrinking the window can leave the panels wider than the space available.
   // Re-running the setters re-applies the clamp against the new innerWidth.
@@ -95,30 +112,113 @@ export function Editor({ fileName }: { fileName: string }) {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // A link copied from the Pages menu carries `?page=` — open on that page once
-  // the document has actually loaded it, rather than on whatever came first.
+  // Declared here rather than beside the framing effect below: the deep-link
+  // effect sets it, to say the canvas has already been pointed somewhere.
+  const framed = useRef(false);
+
+  // A copied link carries `?page=` and, when it points at one layer, `?node=`.
+  // Both are honoured once the document has actually loaded, rather than on
+  // whatever arrived first — and `node` wins, since a link to a layer says
+  // which page it is on by saying which layer it is.
   const deepLinked = useRef(false);
   useEffect(() => {
     if (deepLinked.current) return;
-    const wanted = new URLSearchParams(window.location.search).get('page');
-    if (!wanted) {
+    const query = new URLSearchParams(window.location.search);
+    const wantedPage = query.get('page');
+    const wantedNode = query.get('node');
+    if (!wantedPage && !wantedNode) {
       deepLinked.current = true;
       return;
     }
-    if (!store.listPages().includes(wanted)) return;
-    deepLinked.current = true;
-    useUI.getState().setPage(wanted);
-  }, [doc, store]);
 
-  // Frame the document once, as soon as the first content arrives from sync.
-  const framed = useRef(false);
+    const ui = useUI.getState();
+    if (wantedNode) {
+      // the node has to be here *and* reachable, or the page it names is wrong
+      const home = pageOf(wantedNode, doc);
+      if (!home) return;
+      deepLinked.current = true;
+      ui.setPage(home);
+      ui.select([wantedNode]);
+      const bounds = selectionBounds([wantedNode], doc);
+      const fitted = bounds && fitBounds(bounds, leftPanel, ui.leftWidth, ui.rightWidth);
+      if (fitted) ui.setViewport(fitted);
+      // the frame-on-open effect below must not undo the framing we just did
+      framed.current = true;
+      return;
+    }
+
+    if (!store.listPages().includes(wantedPage!)) return;
+    deepLinked.current = true;
+    ui.setPage(wantedPage!);
+  }, [doc, store, leftPanel]);
+
+  // Frame the document once, as soon as the first content arrives from sync —
+  // unless this file has been open in a tab before, in which case it reopens
+  // where it was left rather than snapping back to fit-all.
   useEffect(() => {
     if (framed.current) return;
-    const fitted = fitView(doc, leftPanel, leftWidth, rightWidth);
-    if (!fitted) return;
+    // nothing has arrived from sync yet — restoring a page the document does
+    // not have would silently drop you back on the first one
+    const pages = store.listPages();
+    if (!pages.length) return;
+
+    const now = useUI.getState().viewport;
+    const opened = openedAt.current;
+    if (opened && (now.x !== opened.x || now.y !== opened.y || now.zoom !== opened.zoom)) {
+      framed.current = true;
+      return;
+    }
+
+    const saved = loadFileView(room);
+    if (saved) {
+      framed.current = true;
+      const ui = useUI.getState();
+      ui.setViewport(saved.viewport);
+      // a `?page=` link is an explicit instruction and outranks the memory
+      const linked = new URLSearchParams(window.location.search).get('page');
+      if (!linked && saved.page !== ui.page && pages.includes(saved.page)) ui.setPage(saved.page);
+      return;
+    }
+    // Past the check above the document has arrived, so this is the opening
+    // view whether or not there was anything to frame. Leaving `framed` false
+    // for an empty file would mean an empty file never remembers where you
+    // left it — which is exactly the file you are about to put something in.
     framed.current = true;
-    useUI.getState().setViewport(fitted);
-  }, [doc, leftPanel, leftWidth, rightWidth]);
+    const fitted = fitView(doc, leftPanel, leftWidth, rightWidth);
+    if (fitted) useUI.getState().setViewport(fitted);
+  }, [doc, leftPanel, leftWidth, rightWidth, room, store]);
+
+  // …and record where you leave it. Writing on every wheel tick would hammer
+  // storage, so this settles first; the unmount write is what catches the last
+  // move before a tab switch takes the component away.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const remember = () => {
+      const { viewport, page } = useUI.getState();
+      const opened = openedAt.current;
+      // Nothing has set a viewport for *this* file yet — while a file is still
+      // arriving, what is on screen belongs to the tab we came from, and
+      // writing it here would greet you with the wrong file's framing.
+      if (
+        opened &&
+        viewport.x === opened.x &&
+        viewport.y === opened.y &&
+        viewport.zoom === opened.zoom
+      ) {
+        return;
+      }
+      saveFileView(room, { viewport, page });
+    };
+    const unsubscribe = useUI.subscribe(() => {
+      clearTimeout(timer);
+      timer = setTimeout(remember, 400);
+    });
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+      remember();
+    };
+  }, [room]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -257,6 +357,24 @@ export function Editor({ fileName }: { fileName: string }) {
       if (!mod && event.shiftKey && !event.altKey && event.code === 'KeyE') {
         event.preventDefault();
         ui.setTool(ui.tool === 'measure' ? 'move' : 'measure');
+        return;
+      }
+      // ⌘L — a link back to exactly this: the file, the page, and the layer
+      // when there is one. Figma's Copy link, and what `?node=` above reads.
+      if (mod && !event.altKey && !event.shiftKey && event.code === 'KeyL') {
+        event.preventDefault();
+        const url = new URL(window.location.href);
+        url.search = '';
+        if (selection.length === 1) url.searchParams.set('node', selection[0]);
+        else url.searchParams.set('page', ui.page);
+        void navigator.clipboard?.writeText(url.toString());
+        return;
+      }
+      // ⌥T — the selection as Tailwind, beside the other ⌥ copies
+      if (event.altKey && !mod && !event.shiftKey && event.code === 'KeyT' && selection.length === 1) {
+        event.preventDefault();
+        const { markup, css } = toTailwind(selection[0], doc, tokens, collections, fonts);
+        void navigator.clipboard?.writeText(css.trim() ? `${markup}\n\n/* stylesheet */\n${css}` : markup);
         return;
       }
       // I — sample a colour into the selection, Figma's "Copy colors"
@@ -579,7 +697,7 @@ export function Editor({ fileName }: { fileName: string }) {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [store, doc, leftPanel, tokenVars]);
+  }, [store, doc, leftPanel, tokenVars, tokens, collections, fonts]);
 
   return (
     <div
@@ -588,7 +706,8 @@ export function Editor({ fileName }: { fileName: string }) {
       // away. It is a way of looking, not a change to the document, so it is a
       // class on the shell rather than anything the canvas has to re-render.
       data-outlines={outlines ? 'true' : undefined}
-      style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}
+      // the tab strip above owns the rest of the viewport
+      style={{ display: 'flex', height: '100%', overflow: 'hidden' }}
     >
       <FontFaces />
       <Thumbnail />

@@ -257,6 +257,17 @@ export interface UIState {
   page: string;
   setPage: (id: string) => void;
 
+  /**
+   * Clears everything that belongs to *a* document rather than to you.
+   *
+   * This store is one store for the whole app, which is right for panel widths
+   * and wrong for a selection: switching tabs would otherwise carry a selection,
+   * a drilled-into frame and a page id from the file you left into the file you
+   * arrived at, where those ids name nothing. Panels, tools, view options and
+   * chrome are yours and survive the switch.
+   */
+  resetForFile: () => void;
+
   /** briefly flags a layer the pointer hit but could not select */
   lockedHint: string | null;
   setLockedHint: (id: string | null) => void;
@@ -434,6 +445,56 @@ function readPanels(): { leftWidth?: number; rightWidth?: number; pagesHeight?: 
   }
 }
 
+// ── Where you were in each file ──────────────────────────────────────────
+
+const VIEW_KEY = 'paperlike:views';
+/** Enough files to cover any plausible tab strip, and no more. */
+const VIEW_LIMIT = 24;
+
+export interface FileView {
+  viewport: Viewport;
+  page: string;
+}
+
+/**
+ * The viewport and page you left a file on, per file.
+ *
+ * Tabs are only worth having if coming back to one puts you where you were.
+ * Keeping every open file's document live would do it and cost a WebSocket
+ * each; remembering this much costs nothing and is indistinguishable in use,
+ * because a file you return to reopens framed exactly as you left it rather
+ * than snapping back to fit-all.
+ */
+export function saveFileView(room: string, view: FileView): void {
+  try {
+    const all = readViews();
+    delete all[room];
+    const entries = Object.entries(all).slice(-(VIEW_LIMIT - 1));
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ ...Object.fromEntries(entries), [room]: view }));
+  } catch {
+    // a remembered viewport is not worth breaking a pan over
+  }
+}
+
+export function loadFileView(room: string): FileView | null {
+  const saved = readViews()[room];
+  if (!saved || typeof saved.page !== 'string') return null;
+  const { x, y, zoom } = saved.viewport ?? {};
+  const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
+  if (!finite(x) || !finite(y) || !finite(zoom) || zoom <= 0) return null;
+  return saved;
+}
+
+function readViews(): Record<string, FileView> {
+  try {
+    const raw = localStorage.getItem(VIEW_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, FileView>) : {};
+  } catch {
+    return {};
+  }
+}
+
 export const useUI = create<UIState>((set) => ({
   tool: 'move',
   setTool: (tool) =>
@@ -596,6 +657,32 @@ export const useUI = create<UIState>((set) => ({
 
   page: 'root',
   setPage: (page) => set({ page, selection: [], entered: null, editing: null }),
+  resetForFile: () =>
+    set({
+      page: 'root',
+      selection: [],
+      hover: null,
+      anchor: null,
+      entered: null,
+      editing: null,
+      vectorEdit: null,
+      anchorSelection: [],
+      linkEditor: null,
+      cropping: null,
+      expanded: {},
+      guides: [],
+      lockedHint: null,
+      contextMenu: null,
+      presenting: null,
+      paletteOpen: false,
+      historyOpen: false,
+      exportOpen: false,
+      shadersOpen: false,
+      prompt: null,
+      following: null,
+      spotlight: false,
+      chatting: false,
+    }),
 
   lockedHint: null,
   setLockedHint: (lockedHint) => set({ lockedHint }),

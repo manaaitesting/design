@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useState, type RefObject } from 'react';
 import { useDoc, usePresence, useStore } from './Session';
+import { FlexHandles } from './FlexHandles';
 import { toScreen, useUI } from '../state/ui';
 import { isInFlow, type Doc, type SceneNode } from '../document/types';
 
@@ -401,6 +402,11 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           ))}
         </>
       )}
+
+      {/* Auto layout, edited where it is: the gutters between the children and
+          the bands inside the edges. Drawn under the resize handles below, so a
+          corner handle still wins the pointer where the two meet. */}
+      {!vectorEdit && <FlexHandles containerRef={containerRef} />}
 
       {/* slices: an export region, drawn as chrome because it paints nothing */}
       {slices.map((id) => {

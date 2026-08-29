@@ -1,14 +1,17 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { currentUser } from '../../src/server/auth';
-import { listFiles, listMembers } from '../../src/server/db';
+import { listFiles, listFolders, listMembers } from '../../src/server/db';
 import {
   deleteFileAction,
+  deleteFolderAction,
   duplicateFileAction,
   newFile,
+  newFolderAction,
   renameFileAction,
   signOut,
 } from '../../src/server/actions';
+import { FolderPicker } from '../../src/components/FolderPicker';
 import { Icon } from '../../src/components/ui/Icons';
 import { ShareControl } from '../../src/components/ShareControl';
 import { readableOn } from '../../src/lib/color';
@@ -24,11 +27,39 @@ function ago(timestamp: number): string {
   return days < 30 ? `${days}d ago` : new Date(timestamp).toLocaleDateString();
 }
 
-export default async function FilesPage() {
+/** The controls above the grid are a GET form, so a view is a shareable URL. */
+type Query = { q?: string; folder?: string; sort?: string };
+
+export default async function FilesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Query>;
+}) {
   const user = await currentUser();
   if (!user) redirect('/signin');
 
-  const files = listFiles(user.id);
+  const { q = '', folder = '', sort = 'recent' } = await searchParams;
+  const folders = listFolders(user.id);
+  const sortBy = sort === 'name' || sort === 'created' ? sort : 'recent';
+  const files = listFiles(user.id, { q, folder, sort: sortBy });
+  const total = listFiles(user.id).length;
+  const filtered = Boolean(q || folder);
+  const current = folders.find((entry) => entry.id === folder);
+  // Rows come back from node:sqlite with a null prototype, and a client
+  // component may only be handed plain objects — so the picker gets a copy
+  // rather than the query result.
+  const folderOptions = folders.map((entry) => ({ id: entry.id, name: entry.name }));
+
+  /** A link to this same view with one thing changed. */
+  const href = (patch: Query) => {
+    const next = new URLSearchParams();
+    const merged = { q, folder, sort: sortBy, ...patch };
+    if (merged.q) next.set('q', merged.q);
+    if (merged.folder) next.set('folder', merged.folder);
+    if (merged.sort && merged.sort !== 'recent') next.set('sort', merged.sort);
+    const search = next.toString();
+    return search ? `/files?${search}` : '/files';
+  };
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-canvas)' }}>
@@ -70,18 +101,140 @@ export default async function FilesPage() {
       </header>
 
       <main style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px 64px' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Files</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+          <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
+            {current ? current.name : 'Files'}
+          </h1>
           <span style={{ color: 'var(--color-ink-dim)' }}>
             {files.length} {files.length === 1 ? 'file' : 'files'}
+            {filtered && total !== files.length ? ` of ${total}` : ''}
           </span>
           <div style={{ flex: 1 }} />
+
+          {/* A GET form, so the view you are looking at is a URL you can send
+              to yourself. The hidden fields carry the rest of the query, or
+              searching would silently drop the folder you were in. */}
+          <form method="get" action="/files" style={{ display: 'flex', gap: 6 }}>
+            {folder && <input type="hidden" name="folder" value={folder} />}
+            <input
+              type="search"
+              name="q"
+              defaultValue={q}
+              placeholder="Search files"
+              aria-label="Search files"
+              style={{
+                width: 168,
+                height: 24,
+                padding: '0 8px',
+                border: 0,
+                borderRadius: 5,
+                background: 'var(--color-control)',
+                boxShadow: 'var(--shadow-control)',
+                outline: 'none',
+              }}
+            />
+            <select
+              name="sort"
+              defaultValue={sortBy}
+              aria-label="Sort files"
+              style={{
+                height: 24,
+                border: 0,
+                borderRadius: 5,
+                padding: '0 4px',
+                background: 'var(--color-control)',
+                boxShadow: 'var(--shadow-control)',
+                outline: 'none',
+              }}
+            >
+              <option value="recent">Recently edited</option>
+              <option value="created">Recently created</option>
+              <option value="name">Name</option>
+            </select>
+            <button type="submit" className="btn">
+              Search
+            </button>
+          </form>
+
           <form action={newFile}>
             <button type="submit" className="btn btn-raised">
               <Icon.Plus />
               New file
             </button>
           </form>
+        </div>
+
+        {/* Folders, as a row of chips rather than a sidebar: they are a filter
+            on one list, not a second tree to keep in your head. */}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 6,
+            marginBottom: 18,
+          }}
+        >
+          <Link
+            href={href({ folder: '' })}
+            className="btn"
+            style={{
+              textDecoration: 'none',
+              ...(folder ? {} : { background: 'var(--color-row-active)', color: 'var(--color-ink)' }),
+            }}
+          >
+            All files
+          </Link>
+          {folders.map((entry) => (
+            <Link
+              key={entry.id}
+              href={href({ folder: entry.id })}
+              className="btn"
+              style={{
+                textDecoration: 'none',
+                ...(folder === entry.id
+                  ? { background: 'var(--color-row-active)', color: 'var(--color-ink)' }
+                  : {}),
+              }}
+            >
+              {entry.name}
+              <span style={{ color: 'var(--color-ink-dim)' }}>{entry.count}</span>
+            </Link>
+          ))}
+
+          <form action={newFolderAction} style={{ display: 'flex', gap: 6 }}>
+            <input
+              name="name"
+              placeholder="New folder"
+              aria-label="New folder name"
+              required
+              style={{
+                width: 120,
+                height: 24,
+                padding: '0 8px',
+                border: 0,
+                borderRadius: 5,
+                background: 'var(--color-control)',
+                boxShadow: 'var(--shadow-control)',
+                outline: 'none',
+              }}
+            />
+            <button type="submit" className="btn" title="Create the folder">
+              <Icon.Plus />
+            </button>
+          </form>
+
+          {current && (
+            <>
+              <div style={{ flex: 1 }} />
+              <form action={deleteFolderAction}>
+                <input type="hidden" name="id" value={current.id} />
+                <button type="submit" className="btn" title="Delete this folder — the files in it stay">
+                  Delete folder
+                </button>
+              </form>
+            </>
+          )}
         </div>
 
         {files.length === 0 ? (
@@ -94,9 +247,15 @@ export default async function FilesPage() {
               border: '1px solid var(--color-line)',
             }}
           >
-            <p style={{ fontWeight: 500, margin: '0 0 6px' }}>No files yet</p>
+            <p style={{ fontWeight: 500, margin: '0 0 6px' }}>
+              {filtered ? 'Nothing here' : 'No files yet'}
+            </p>
             <p style={{ color: 'var(--color-ink-muted)', margin: 0 }}>
-              Create one to open the canvas, then share it to design together.
+              {filtered ? (
+                <Link href="/files">Clear the search and look at everything</Link>
+              ) : (
+                'Create one to open the canvas, then share it to design together.'
+              )}
             </p>
           </div>
         ) : (
@@ -132,6 +291,7 @@ export default async function FilesPage() {
                       <input type="hidden" name="id" value={file.id} />
                       <input
                         name="name"
+                        aria-label="File name"
                         defaultValue={file.name}
                         readOnly={!owned}
                         style={{
@@ -188,7 +348,14 @@ export default async function FilesPage() {
                     </div>
 
                     <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                      {owned && <ShareControl fileId={file.id} />}
+                      {owned && (
+                        <FolderPicker
+                          fileId={file.id}
+                          folderId={file.folder_id ?? ''}
+                          folders={folderOptions}
+                        />
+                      )}
+                      {owned && <ShareControl fileId={file.id} linkRole={file.link_role} />}
                       <form action={duplicateFileAction}>
                         <input type="hidden" name="id" value={file.id} />
                         <button type="submit" className="btn" title="Make a copy you own">
