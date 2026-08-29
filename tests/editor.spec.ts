@@ -319,6 +319,37 @@ test('a marquee inside a frame you have drilled into catches the right layers', 
 });
 
 /**
+ * Searching the layers panel. Assets and Variables each had a search field;
+ * Layers, which is the list you actually have to find things in, did not.
+ */
+test('the layers panel searches by name, keeping the chain to each hit', async ({ page }) => {
+  const board = await nodeNamed(page, 'Fixture Board');
+  await page.locator('button[title="Search layers"]').click();
+  const field = page.locator('input[aria-label="Search layers"]');
+  await field.fill('caption');
+
+  const rows = page.locator('.fig-layer[data-layer-id]');
+  // the hit, and the board above it that says where it is
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText('Fixture Board');
+  await expect(rows.last()).toContainText('Caption');
+  // and it reached a buried layer without the tree ever being opened by hand
+  expect(
+    await page.evaluate(() =>
+      Object.values(window.paperlike!.ui.getState().expanded).some(Boolean),
+    ),
+  ).toBe(false);
+
+  await field.fill('nothing matches this');
+  await expect(page.getByText('No layers match')).toBeVisible();
+
+  // Escape drops the search and gives the whole tree back
+  await field.press('Escape');
+  await expect(page.locator('.fig-layer', { hasText: 'Fixture Board' }).first()).toBeVisible();
+  expect(board).toBeTruthy();
+});
+
+/**
  * Every board on the page wears its name above it, and the name is what you
  * click to pick the board up rather than whatever is inside it. Sections had
  * this; frames, which is most of what a page is made of, did not.

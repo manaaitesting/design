@@ -62,6 +62,51 @@ export function flattenLayers(
   return rows;
 }
 
+/**
+ * The rows a search leaves standing.
+ *
+ * Every layer whose name matches, plus the ancestors that lead to it: a hit six
+ * levels down says nothing without the frames above it, so the chain is part of
+ * the answer rather than context you have to go and find. Expansion is ignored
+ * while searching — a result you cannot see is not a result.
+ */
+export function searchLayers(doc: Doc, pageId: string, query: string): LayerRow[] {
+  const needle = query.trim().toLowerCase();
+  const rows: LayerRow[] = [];
+  if (!needle) return rows;
+
+  const walk = (id: string, depth: number, hidden: boolean, locked: boolean): boolean => {
+    const node = doc[id];
+    if (!node) return false;
+    const rowHidden = hidden || !node.visible;
+    const rowLocked = locked || node.locked;
+    // written in now, and taken out again below if nothing under it matched —
+    // the subtree's rows are exactly what follows this index
+    const at = rows.length;
+    rows.push({
+      id,
+      node,
+      depth,
+      hasChildren: node.children.length > 0,
+      open: node.children.length > 0,
+      hidden: rowHidden,
+      locked: rowLocked,
+    });
+
+    let keep = (node.name ?? '').toLowerCase().includes(needle);
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      if (walk(node.children[i], depth + 1, rowHidden, rowLocked)) keep = true;
+    }
+    if (!keep) rows.length = at;
+    return keep;
+  };
+
+  const page = doc[pageId];
+  if (!page) return rows;
+  for (let i = page.children.length - 1; i >= 0; i--) walk(page.children[i], 0, false, false);
+  return rows;
+}
+
 /** Where a dragged row would land relative to the row under the pointer. */
 export type DropWhere = 'above' | 'below' | 'inside';
 

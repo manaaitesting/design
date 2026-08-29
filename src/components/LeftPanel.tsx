@@ -26,6 +26,7 @@ import { ancestors, descendants, ROOT_ID, type NodeType } from '../document/type
 import {
   flattenLayers,
   isContainer,
+  searchLayers,
   isLegalDrop,
   movingNodes,
   placementFor,
@@ -67,7 +68,7 @@ const TYPE_ICON: Record<NodeType, React.ReactNode> = {
  * already part of a multi-selection holds that selection so the whole group can
  * be dragged, narrowing it only if the pointer never moved.
  */
-function useLayerDrag(rows: Row[]) {
+function useLayerDrag(rows: Row[], reorderable = true) {
   const store = useStore();
   const [dragging, setDragging] = useState<string[]>([]);
   const [target, setTarget] = useState<DropTarget | null>(null);
@@ -97,6 +98,10 @@ function useLayerDrag(rows: Row[]) {
       const parent = doc[id]?.parent;
       ui.setEntered(parent && doc[parent]?.type !== 'page' ? parent : null);
     }
+
+    // A filtered tree is not the stacking order, so there is nowhere honest for
+    // a drop to land in it. Pressing still selects; it just cannot restack.
+    if (!reorderable) return;
 
     const startX = event.clientX;
     const startY = event.clientY;
@@ -193,6 +198,9 @@ type Drag = ReturnType<typeof useLayerDrag>;
 export function LeftPanel({ fileName }: { fileName: string }) {
   const tab = useUI((s) => s.tab);
   const setTab = useUI((s) => s.setTab);
+  /** the layer search: closed by default, as Figma keeps it */
+  const [searching, setSearching] = useState(false);
+  const [layerQuery, setLayerQuery] = useState('');
   const toggleLeftPanel = useUI((s) => s.toggleLeftPanel);
   const width = useUI((s) => s.leftWidth);
 
@@ -236,7 +244,47 @@ export function LeftPanel({ fileName }: { fileName: string }) {
         <>
           <PagesSection />
           <div className="fig-left-section" style={{ borderTop: '1px solid var(--fig-line)' }}>
-            <span style={{ flex: 1 }}>Layers</span>
+            {searching ? (
+              <input
+                autoFocus
+                value={layerQuery}
+                placeholder="Search layers"
+                aria-label="Search layers"
+                // the canvas owns most single keys, and a layer called "Frame 5"
+                // cannot be typed if F arms the frame tool halfway through
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === 'Escape') {
+                    setLayerQuery('');
+                    setSearching(false);
+                  }
+                }}
+                onChange={(event) => setLayerQuery(event.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: 22,
+                  border: 0,
+                  borderRadius: 5,
+                  padding: '0 6px',
+                  background: 'var(--color-control)',
+                  color: 'inherit',
+                  font: 'inherit',
+                }}
+              />
+            ) : (
+              <span style={{ flex: 1 }}>Layers</span>
+            )}
+            <FigButton
+              title="Search layers"
+              on={searching}
+              onClick={() => {
+                setSearching((open) => !open);
+                setLayerQuery('');
+              }}
+            >
+              <Icon.Search />
+            </FigButton>
             <FigButton
               title="Collapse layers  ⌥L"
               onClick={() => useUI.getState().collapseLayers()}
@@ -244,7 +292,7 @@ export function LeftPanel({ fileName }: { fileName: string }) {
               <FigIcon name="Collapse layers" />
             </FigButton>
           </div>
-          <LayersTree />
+          <LayersTree query={searching ? layerQuery : ''} />
         </>
       )}
       {tab === 'assets' && <AssetsTab />}
@@ -538,7 +586,7 @@ function ScopeEditor({ token }: { token: Token }) {
  * -select needs a range, and a drag needs to know what sits above the pointer.
  * Front-most first, like Figma — see `document/layers`.
  */
-function LayersTree() {
+function LayersTree({ query }: { query: string }) {
   const doc = useDoc();
   const pageId = useUI((s) => s.page);
   const expanded = useUI((s) => s.expanded);
@@ -546,11 +594,17 @@ function LayersTree() {
   const page = doc[pageId] ?? doc[ROOT_ID];
   const listRef = useRef<HTMLDivElement>(null);
 
+  const searching = query.trim().length > 0;
+  // A search answers with the layers that match and the chain that leads to
+  // each — a hit six levels down says nothing without the frames above it.
   const rows = useMemo(
-    () => flattenLayers(doc, page?.id ?? ROOT_ID, expanded),
-    [doc, page?.id, expanded],
+    () =>
+      searching
+        ? searchLayers(doc, page?.id ?? ROOT_ID, query)
+        : flattenLayers(doc, page?.id ?? ROOT_ID, expanded),
+    [doc, page?.id, expanded, query, searching],
   );
-  const drag = useLayerDrag(rows);
+  const drag = useLayerDrag(rows, !searching);
 
   // Selecting on the canvas has to reveal the layer: open every ancestor, then
   // bring the row into view, the way Figma follows a selection.
@@ -575,7 +629,10 @@ function LayersTree() {
       {rows.map((row) => (
         <LayerRow key={row.id} row={row} drag={drag} />
       ))}
-      {page && page.children.length === 0 && (
+      {searching && rows.length === 0 && (
+        <div style={{ padding: '6px 16px', color: 'var(--fig-dim)' }}>No layers match</div>
+      )}
+      {!searching && page && page.children.length === 0 && (
         <div style={{ padding: '6px 16px', color: 'var(--fig-dim)' }}>Press F to draw a frame</div>
       )}
     </div>
