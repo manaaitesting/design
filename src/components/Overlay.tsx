@@ -3,7 +3,8 @@
 import { useLayoutEffect, useState, type RefObject } from 'react';
 import { useDoc, usePresence, useStore } from './Session';
 import { FlexHandles } from './FlexHandles';
-import { toScreen, useUI } from '../state/ui';
+import { toScreen, toWorld, useUI } from '../state/ui';
+import { nearestEdge, snapCandidates, type SnapGuide } from '../document/snapping';
 import { isInFlow, type Doc, type SceneNode } from '../document/types';
 
 export interface Rect {
@@ -89,6 +90,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const vectorEdit = useUI((s) => s.vectorEdit);
   const pageId = useUI((s) => s.page);
   const select = useUI((s) => s.select);
+  const setGuides = useUI((s) => s.setGuides);
   const presence = usePresence();
 
   const remoteIds = presence.flatMap((p) => p.selection);
@@ -138,31 +140,48 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     event.stopPropagation();
 
     const zoom = viewport.zoom;
-    const originWorld = {
-      x: bounds.x / zoom,
-      y: bounds.y / zoom,
-      w: bounds.w / zoom,
-      h: bounds.h / zoom,
-    };
+    // `bounds` is in canvas pixels, which is the viewport's pan *and* its zoom.
+    // Dividing by the zoom alone left the anchor offset by however far the
+    // canvas had been panned, so a group scaled about a point that was not on
+    // it — invisible only while the canvas sat at the origin.
+    const corner = toWorld(viewport, bounds.x, bounds.y);
+    const originWorld = { x: corner.x, y: corner.y, w: bounds.w / zoom, h: bounds.h / zoom };
     const start = selection.map((id) => ({ id, node: doc[id] })).filter((entry) => entry.node);
 
     const move = (e: PointerEvent) => {
       const dx = (e.clientX - event.clientX) / zoom;
       const dy = (e.clientY - event.clientY) / zoom;
-      const scaleX = handle.includes('e')
-        ? (originWorld.w + dx) / originWorld.w
+      // the same two modifiers a single layer answers to: ⌥ works both ways at
+      // once about the middle, ⇧ keeps the group's proportion
+      const reach = e.altKey ? 2 : 1;
+      let scaleX = handle.includes('e')
+        ? (originWorld.w + dx * reach) / originWorld.w
         : handle.includes('w')
-          ? (originWorld.w - dx) / originWorld.w
+          ? (originWorld.w - dx * reach) / originWorld.w
           : 1;
-      const scaleY = handle.includes('s')
-        ? (originWorld.h + dy) / originWorld.h
+      let scaleY = handle.includes('s')
+        ? (originWorld.h + dy * reach) / originWorld.h
         : handle.includes('n')
-          ? (originWorld.h - dy) / originWorld.h
+          ? (originWorld.h - dy * reach) / originWorld.h
           : 1;
       if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) return;
+      if (e.shiftKey) {
+        // whichever axis was pulled harder carries both
+        const uniform = Math.abs(scaleX - 1) >= Math.abs(scaleY - 1) ? scaleX : scaleY;
+        scaleX = uniform;
+        scaleY = uniform;
+      }
 
-      const anchorX = handle.includes('w') ? originWorld.x + originWorld.w : originWorld.x;
-      const anchorY = handle.includes('n') ? originWorld.y + originWorld.h : originWorld.y;
+      const anchorX = e.altKey
+        ? originWorld.x + originWorld.w / 2
+        : handle.includes('w')
+          ? originWorld.x + originWorld.w
+          : originWorld.x;
+      const anchorY = e.altKey
+        ? originWorld.y + originWorld.h / 2
+        : handle.includes('n')
+          ? originWorld.y + originWorld.h
+          : originWorld.y;
 
       store.updateMany(
         start.map((entry) => entry.id),
@@ -188,6 +207,43 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     window.addEventListener('pointerup', up);
   };
 
+  /**
+   * Figma's rotate: press just outside a corner and swing.
+   *
+   * The angle is read from the middle of the layer to the pointer, and only the
+   * *change* since the press is applied — so grabbing the corner does not snap
+   * the layer round to wherever the pointer happened to be. ⇧ steps in 15°.
+   */
+  const startRotate = (event: React.PointerEvent, id: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = doc[id];
+    const rect = rects[id];
+    const base = containerRef.current?.getBoundingClientRect();
+    if (!node || !rect || !base) return;
+
+    // a layer turns about its middle, and the measured box shares that middle
+    // however far round it already is
+    const centreX = base.left + rect.x + rect.w / 2;
+    const centreY = base.top + rect.y + rect.h / 2;
+    const angleTo = (x: number, y: number) => (Math.atan2(y - centreY, x - centreX) * 180) / Math.PI;
+    const grabbed = angleTo(event.clientX, event.clientY);
+    const was = node.rotation ?? 0;
+
+    const move = (e: PointerEvent) => {
+      const turned = was + (angleTo(e.clientX, e.clientY) - grabbed);
+      const stepped = e.shiftKey ? Math.round(turned / 15) * 15 : Math.round(turned);
+      store.update(id, { rotation: ((stepped % 360) + 360) % 360 });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      store.commit(); // one gesture, one undo step
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   const startResize = (event: React.PointerEvent, handle: HandleId, id: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -195,14 +251,26 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     if (!node) return;
     const origin = { x: node.x, y: node.y, w: node.w, h: node.h };
     const rect = rects[id];
-    const startW = rect?.w ? rect.w / viewport.zoom : node.w;
-    const startH = rect?.h ? rect.h / viewport.zoom : node.h;
+    const angle = node.rotation ?? 0;
+    // A rotated layer is measured by the box *around* it, which is not its own
+    // size — so a turned layer is sized from the document, and a straight one
+    // from the DOM, which is authoritative for anything that hugs or fills.
+    const startW = angle ? node.w : rect?.w ? rect.w / viewport.zoom : node.w;
+    const startH = angle ? node.h : rect?.h ? rect.h / viewport.zoom : node.h;
 
     const ratio = startH ? startW / startH : 1;
+    const rad = (angle * Math.PI) / 180;
+    const centre = { x: origin.x + startW / 2, y: origin.y + startH / 2 };
+    const candidates = node.parent ? snapCandidates(doc, [id], node.parent) : [];
 
     const move = (e: PointerEvent) => {
-      const dx = (e.clientX - event.clientX) / viewport.zoom;
-      const dy = (e.clientY - event.clientY) / viewport.zoom;
+      const screenX = (e.clientX - event.clientX) / viewport.zoom;
+      const screenY = (e.clientY - event.clientY) / viewport.zoom;
+      // The pointer moves across the screen; the box grows along its own axes.
+      // On a turned layer those are not the same direction, so the delta is
+      // turned back by however far the layer is turned before it is used.
+      const dx = angle ? screenX * Math.cos(rad) + screenY * Math.sin(rad) : screenX;
+      const dy = angle ? -screenX * Math.sin(rad) + screenY * Math.cos(rad) : screenY;
       // which way each axis grows: away from the far edge, or back from the near
       // one. A middle handle contributes nothing on its cross axis.
       const ex = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
@@ -228,19 +296,49 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
       w = Math.max(1, Math.round(w));
       h = Math.max(1, Math.round(h));
 
-      // The point the box grows away from, decided *after* the size is final —
+      // Snap the edge being dragged to its siblings, the way a move already
+      // does. Skipped when the gesture has its own idea of the size — a ratio
+      // or a centre — and on a turned layer, whose edges are not on these axes.
+      // ⌘ bypasses it, as it does for a move.
+      const held = e.shiftKey || node.aspectLocked || e.altKey;
+      const guides: SnapGuide[] = [];
+      if (!angle && !held && !e.metaKey && !e.ctrlKey && candidates.length) {
+        const tolerance = 6 / viewport.zoom;
+        if (ex) {
+          const edge = ex > 0 ? origin.x + w : origin.x + startW - w;
+          const near = nearestEdge(edge, candidates, 'x', tolerance);
+          if (near) {
+            w = Math.max(1, Math.round(ex > 0 ? near.at - origin.x : origin.x + startW - near.at));
+            guides.push({ axis: 'x', at: near.at, from: near.other.y, to: near.other.y + near.other.h });
+          }
+        }
+        if (ey) {
+          const edge = ey > 0 ? origin.y + h : origin.y + startH - h;
+          const near = nearestEdge(edge, candidates, 'y', tolerance);
+          if (near) {
+            h = Math.max(1, Math.round(ey > 0 ? near.at - origin.y : origin.y + startH - near.at));
+            guides.push({ axis: 'y', at: near.at, from: near.other.x, to: near.other.x + near.other.w });
+          }
+        }
+      }
+      setGuides(guides);
+
+      // The point the box is held by, as a fraction of it: the side opposite the
+      // handle, or the middle under ⌥. Decided *after* the size is final —
       // computing it first is what made a ⇧-drag on a north or west handle slide
       // the box while it scaled.
-      const x = e.altKey
-        ? Math.round(origin.x + (startW - w) / 2)
-        : ex < 0
-          ? Math.round(origin.x + (startW - w))
-          : origin.x;
-      const y = e.altKey
-        ? Math.round(origin.y + (startH - h) / 2)
-        : ey < 0
-          ? Math.round(origin.y + (startH - h))
-          : origin.y;
+      const ax = e.altKey ? 0.5 : ex > 0 ? 0 : ex < 0 ? 1 : 0.5;
+      const ay = e.altKey ? 0.5 : ey > 0 ? 0 : ey < 0 ? 1 : 0.5;
+      // A layer turns about its middle, so keeping a corner still means moving
+      // the middle. With no rotation this is the plain "opposite edge stays".
+      const offX = (ax - 0.5) * (startW - w);
+      const offY = (ay - 0.5) * (startH - h);
+      const x = Math.round(
+        centre.x + (angle ? offX * Math.cos(rad) - offY * Math.sin(rad) : offX) - w / 2,
+      );
+      const y = Math.round(
+        centre.y + (angle ? offX * Math.sin(rad) + offY * Math.cos(rad) : offY) - h / 2,
+      );
 
       const patch: Partial<SceneNode> = { w, h, wMode: 'fixed', hMode: 'fixed' };
       // only write a coordinate that actually moved: a no-op write still pins
@@ -253,6 +351,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      setGuides([]);
       store.commit(); // one gesture, one undo step
     };
     window.addEventListener('pointermove', move);
@@ -416,6 +515,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           {HANDLES.map((handle) => (
             <div
               key={handle.id}
+              data-group-handle={handle.id}
               onPointerDown={(e) => startGroupResize(e, handle.id)}
               style={{
                 position: 'absolute',
@@ -524,15 +624,28 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         const single = selection.length === 1;
         const flowed = isInFlow(node, doc);
 
+        // A turned layer is measured by the box *around* it. That box is not the
+        // layer's own, but its middle is — a layer turns about its middle — so
+        // the real box is rebuilt from that middle at the layer's own size and
+        // turned to match. An untouched layer keeps the measured box, which is
+        // authoritative for anything that hugs or fills.
+        const angle = node.rotation ?? 0;
+        const w = angle ? node.w * viewport.zoom : rect.w;
+        const h = angle ? node.h * viewport.zoom : rect.h;
+        const left = rect.x + rect.w / 2 - w / 2;
+        const top = rect.y + rect.h / 2 - h / 2;
+        const turn = angle ? `rotate(${angle}deg)` : undefined;
+
         return (
           <div key={id}>
             <div
               style={{
                 position: 'absolute',
-                left: rect.x,
-                top: rect.y,
-                width: rect.w,
-                height: rect.h,
+                left,
+                top,
+                width: w,
+                height: h,
+                transform: turn,
                 outline: '1.75px solid var(--color-select-line)',
                 outlineOffset: -0.875,
               }}
@@ -556,6 +669,8 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               </span>
             )}
 
+            {/* the readout stays upright however far the layer is turned: a
+                number you have to tilt your head to read is not a readout */}
             {single && editing !== id && (
               <span
                 style={{
@@ -572,30 +687,70 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                   whiteSpace: 'nowrap',
                 }}
               >
-                {Math.round(rect.w / viewport.zoom)} × {Math.round(rect.h / viewport.zoom)}
+                {Math.round(w / viewport.zoom)} × {Math.round(h / viewport.zoom)}
               </span>
             )}
 
-            {single &&
-              editing !== id &&
-              HANDLES.map((handle) => (
-                <div
-                  key={handle.id}
-                  onPointerDown={(e) => startResize(e, handle.id, id)}
-                  style={{
-                    position: 'absolute',
-                    left: rect.x + rect.w * handle.cx - 3.5,
-                    top: rect.y + rect.h * handle.cy - 3.5,
-                    width: 7,
-                    height: 7,
-                    background: '#fff',
-                    border: '1px solid var(--color-select-line)',
-                    borderRadius: 1,
-                    cursor: handle.cursor,
-                    pointerEvents: 'auto',
-                  }}
-                />
-              ))}
+            {/* The handles ride inside a box that carries the same turn, so they
+                sit on the layer's corners rather than on the corners of the box
+                around it — and their offsets stay the plain fractions they are. */}
+            {single && editing !== id && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left,
+                  top,
+                  width: w,
+                  height: h,
+                  transform: turn,
+                  pointerEvents: 'none',
+                }}
+              >
+                {HANDLES.map((handle) => (
+                  <div key={handle.id}>
+                    {/* Rotation lives just outside each corner, where Figma puts
+                        it. Placed clear of the box so it can never take a press
+                        that belonged to the layer, and before the resize handle
+                        so the corner itself still resizes. */}
+                    {handle.cx !== 0.5 && handle.cy !== 0.5 && (
+                      <div
+                        data-rotate={handle.id}
+                        onPointerDown={(e) => startRotate(e, id)}
+                        style={{
+                          position: 'absolute',
+                          left: `${handle.cx * 100}%`,
+                          top: `${handle.cy * 100}%`,
+                          marginLeft: handle.cx ? 4 : -22,
+                          marginTop: handle.cy ? 4 : -22,
+                          width: 18,
+                          height: 18,
+                          cursor: 'crosshair',
+                          pointerEvents: 'auto',
+                        }}
+                      />
+                    )}
+                    <div
+                      data-handle={handle.id}
+                      onPointerDown={(e) => startResize(e, handle.id, id)}
+                      style={{
+                        position: 'absolute',
+                        left: `${handle.cx * 100}%`,
+                        top: `${handle.cy * 100}%`,
+                        marginLeft: -3.5,
+                        marginTop: -3.5,
+                        width: 7,
+                        height: 7,
+                        background: '#fff',
+                        border: '1px solid var(--color-select-line)',
+                        borderRadius: 1,
+                        cursor: handle.cursor,
+                        pointerEvents: 'auto',
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}

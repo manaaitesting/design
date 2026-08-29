@@ -319,6 +319,91 @@ test('a marquee inside a frame you have drilled into catches the right layers', 
 });
 
 /**
+ * Rotation, and what it does to everything drawn around a layer.
+ *
+ * A rotated element measures as the box *around* it, so chrome built from that
+ * measurement is the wrong size and its handles sit off the corners — and a
+ * resize computed from a screen delta pulls along the wrong axis entirely.
+ */
+test.describe('rotation', () => {
+  test('dragging outside a corner turns the layer', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Turner', x: 700, y: 500, w: 100, h: 100, fill: '#4CC3F0' });
+    await select(page, [id]);
+
+    const zone = await page.locator('[data-rotate="se"]').boundingBox();
+    const node = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    const centre = { x: node!.x + node!.width / 2, y: node!.y + node!.height / 2 };
+    const from = { x: zone!.x + zone!.width / 2, y: zone!.y + zone!.height / 2 };
+    // swing the grab point a quarter turn about the middle of the layer
+    const to = { x: centre.x - (from.y - centre.y), y: centre.y + (from.x - centre.x) };
+    await dragBy(page, from, { x: to.x - from.x, y: to.y - from.y });
+
+    const after = (await doc(page))[id];
+    expect(Math.abs(after.rotation - 90)).toBeLessThanOrEqual(2);
+    // turning is not resizing
+    expect([after.w, after.h]).toEqual([100, 100]);
+    await removeNodes(page, [id]);
+  });
+
+  test('the size readout reports the layer, not the box around it', async ({ page }) => {
+    const id = await makeNode(page, 'rect', {
+      name: 'Tilted', x: 700, y: 500, w: 200, h: 100, rotation: 90, fill: '#F2637F',
+    });
+    await select(page, [id]);
+
+    // measured, the turned layer is 100 wide and 200 tall; it is neither
+    await expect(page.locator('text=/^200 × 100$/').first()).toBeVisible();
+    await removeNodes(page, [id]);
+  });
+
+  test('a handle on a turned layer pulls along the layer, not the screen', async ({ page }) => {
+    const id = await makeNode(page, 'rect', {
+      name: 'Quarter', x: 700, y: 500, w: 100, h: 100, rotation: 90, fill: '#9B7BF0',
+    });
+    await select(page, [id]);
+
+    // a quarter turn puts the layer's east edge at the bottom of the screen, so
+    // dragging down is what widens it
+    const handle = await page.locator('[data-handle="e"]').boundingBox();
+    await dragBy(page, { x: handle!.x + handle!.width / 2, y: handle!.y + handle!.height / 2 }, { x: 0, y: 40 });
+
+    const after = (await doc(page))[id];
+    expect([after.w, after.h]).toEqual([140, 100]);
+    // the edge it was held by has not moved: the middle shifted to keep it still
+    expect([after.x, after.y]).toEqual([680, 520]);
+    await removeNodes(page, [id]);
+  });
+});
+
+test('a resize snaps its edge to a sibling, as a move does', async ({ page }) => {
+  const mover = await makeNode(page, 'rect', { name: 'Grower', x: 700, y: 500, w: 100, h: 100, fill: '#4CC3F0' });
+  const anchor = await makeNode(page, 'rect', { name: 'Wall', x: 860, y: 500, w: 100, h: 100, fill: '#F2637F' });
+  await select(page, [mover]);
+
+  // 155 wide would leave the edge 5 short of Wall's left side — inside the pull
+  const handle = await page.locator('[data-handle="e"]').boundingBox();
+  await dragBy(page, { x: handle!.x + handle!.width / 2, y: handle!.y + handle!.height / 2 }, { x: 55, y: 0 });
+
+  expect((await doc(page))[mover].w).toBe(160);
+  await removeNodes(page, [mover, anchor]);
+});
+
+test('⌥ on a multi-selection handle scales about the middle of the group', async ({ page }) => {
+  const left = await makeNode(page, 'rect', { name: 'Left', x: 500, y: 600, w: 100, h: 100, fill: '#4CC3F0' });
+  const right = await makeNode(page, 'rect', { name: 'Right', x: 640, y: 600, w: 100, h: 100, fill: '#F2637F' });
+  await select(page, [left, right]);
+
+  const handle = await page.locator('[data-group-handle="se"]').boundingBox();
+  await dragBy(page, { x: handle!.x + handle!.width / 2, y: handle!.y + handle!.height / 2 }, { x: 48, y: 0 }, ['Alt']);
+
+  const nodes = await doc(page);
+  // the group is 240 wide about a middle at 620; ⌥ takes it to 336
+  expect([nodes[left].x, nodes[left].w]).toEqual([452, 140]);
+  expect([nodes[right].x, nodes[right].w]).toEqual([648, 140]);
+  await removeNodes(page, [left, right]);
+});
+
+/**
  * The resize modifiers. Both are muscle memory rather than features: ⌥ holds the
  * centre, ⇧ holds the proportion, and between them they are most of what sizing
  * a layer by hand actually is.
@@ -353,7 +438,10 @@ test.describe('resize modifiers', () => {
     const after = (await doc(page))[id];
     // 2:1 held: the height follows the width the edge handle never touches
     expect([after.w, after.h]).toEqual([150, 75]);
-    expect([after.x, after.y]).toEqual([700, 500]);
+    // ⇧ on an edge holds the *opposite edge*, which is a line rather than a
+    // corner — so the cross axis grows evenly either side of it, and the west
+    // edge stays where it was while the top and bottom both move out
+    expect([after.x, after.y]).toEqual([700, 488]);
     await removeNodes(page, [id]);
   });
 

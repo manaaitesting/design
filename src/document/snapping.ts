@@ -82,6 +82,30 @@ export function snap(
   return result;
 }
 
+/**
+ * The candidate edge nearest `value` on one axis, for snapping a resize.
+ *
+ * A drag moves a whole box and can be snapped by shifting it; a resize moves one
+ * edge, and the other three have to stay where they are — so this answers about
+ * a single coordinate rather than about a box.
+ */
+export function nearestEdge(
+  value: number,
+  candidates: Box[],
+  axis: 'x' | 'y',
+  threshold: number,
+): { at: number; other: Box } | null {
+  let best: { at: number; other: Box; delta: number } | null = null;
+  for (const other of candidates) {
+    for (const target of edgesOf(other, axis)) {
+      const delta = Math.abs(target - value);
+      if (delta > threshold) continue;
+      if (!best || delta < best.delta) best = { at: target, other, delta };
+    }
+  }
+  return best ? { at: best.at, other: best.other } : null;
+}
+
 /** Boxes worth snapping to: siblings at the same level, plus the parent's frame. */
 export function snapCandidates(doc: Doc, movingIds: string[], parentId: string): Box[] {
   const parent = doc[parentId];
