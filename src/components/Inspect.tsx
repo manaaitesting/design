@@ -13,6 +13,7 @@ import {
 } from './Session';
 import { cssFor, writeText } from '../lib/actions';
 import { toHtml, toJson, toReact } from '../export/toCode';
+import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { nodeStyle } from '../document/css';
 import { isInFlow, type Doc, type SceneNode } from '../document/types';
 
@@ -25,7 +26,7 @@ import { isInFlow, type Doc, type SceneNode } from '../document/types';
  * was drawn with. Nothing here re-derives anything.
  */
 
-type Format = 'css' | 'react' | 'html' | 'json';
+type Format = 'css' | 'react' | 'html' | 'swift' | 'android' | 'json';
 
 export function Inspect({ node }: { node?: SceneNode }) {
   const doc = useDoc();
@@ -47,6 +48,10 @@ export function Inspect({ node }: { node?: SceneNode }) {
       }
       case 'html':
         return toHtml(node.id, doc, tokens, collections, fonts);
+      case 'swift':
+        return toSwiftUI(node.id, doc, tokens);
+      case 'android':
+        return toAndroidXml(node.id, doc, tokens);
       case 'json':
         return toJson(node.id, doc);
       case 'css':
@@ -201,6 +206,8 @@ export function Inspect({ node }: { node?: SceneNode }) {
               { value: 'css', label: 'CSS' },
               { value: 'react', label: 'React' },
               { value: 'html', label: 'HTML' },
+              { value: 'swift', label: 'SwiftUI' },
+              { value: 'android', label: 'Android' },
               { value: 'json', label: 'JSON' },
             ]}
             title="Code format"

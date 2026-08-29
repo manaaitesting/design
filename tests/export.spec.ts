@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { toTailwind, toUtilities } from '../src/export/tailwind';
+import { flatColor, toAndroidXml, toSwiftUI } from '../src/export/toNative';
 import { makeNode } from '../src/document/defaults';
 import { ROOT_ID, type Doc } from '../src/document/types';
 
@@ -142,4 +143,60 @@ test('nothing is dropped: every declaration reaches the class list', () => {
   // that every declaration found a class.
   expect(css).toContain('@import');
   expect(css).not.toMatch(/^\./m);
+});
+
+/**
+ * SwiftUI and Android XML, the two languages Figma's handoff offers beside CSS.
+ *
+ * The property under test is the same one the Tailwind export is held to:
+ * nothing is invented. Both emitters read their numbers back out of
+ * `nodeStyle()`, so what they say about a layer cannot drift from what the
+ * canvas draws — which is why the assertions below are about the *values*
+ * rather than about the shape of the snippet.
+ */
+test('a colour reaches both platforms in the form each one spells it', () => {
+  expect(flatColor('#635bff')).toEqual({ hex: '#635BFF', alpha: 1 });
+  expect(flatColor('#abc')).toEqual({ hex: '#AABBCC', alpha: 1 });
+  expect(flatColor('rgba(16, 24, 40, 0.5)')).toEqual({ hex: '#101828', alpha: 0.5 });
+  // a gradient has no one colour, and guessing at one would be a lie
+  expect(flatColor('linear-gradient(90deg, #fff, #000)')).toBeNull();
+  expect(flatColor(undefined)).toBeNull();
+});
+
+test('the card becomes a SwiftUI view with its own numbers', () => {
+  const swift = toSwiftUI('card', build());
+
+  // the auto layout is the stack, with the gap it actually has
+  expect(swift).toContain('VStack(spacing: 12)');
+  expect(swift).toContain('.padding(20)');
+  // size, fill and radius, all as the canvas has them
+  expect(swift).toContain('.frame(width: 320, height: 200)');
+  expect(swift).toContain('Color(hex: "#101828")');
+  expect(swift).toContain('cornerRadius: 12');
+  // the text, its size and its weight
+  expect(swift).toContain('Text("Pro")');
+  expect(swift).toContain('.font(.system(size: 24, weight: .semibold))');
+  expect(swift).toContain('Color(hex: "#FFFFFF")');
+  // and the helper the snippet needs to compile travels with it
+  expect(swift).toContain('extension Color {');
+});
+
+test('the card becomes an Android layout with its own numbers', () => {
+  const xml = toAndroidXml('card', build());
+
+  expect(xml.startsWith('<?xml version="1.0" encoding="utf-8"?>')).toBe(true);
+  expect(xml).toContain('xmlns:android="http://schemas.android.com/apk/res/android"');
+  // a laid-out frame is a LinearLayout, and it keeps its direction
+  expect(xml).toContain('<LinearLayout');
+  expect(xml).toContain('android:orientation="vertical"');
+  expect(xml).toContain('android:layout_width="320dp"');
+  expect(xml).toContain('android:background="#101828"');
+  expect(xml).toContain('android:paddingTop="20dp"');
+  // text carries sp rather than dp, which is the whole point of the unit
+  expect(xml).toContain('<TextView');
+  expect(xml).toContain('android:text="Pro"');
+  expect(xml).toContain('android:textSize="24sp"');
+  expect(xml).toContain('android:textColor="#FFFFFF"');
+  // every tag that opened is closed
+  expect((xml.match(/<LinearLayout/g) ?? []).length).toBe((xml.match(/<\/LinearLayout>/g) ?? []).length);
 });

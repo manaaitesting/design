@@ -26,6 +26,7 @@ import {
 } from '../lib/actions';
 import { download, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
+import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
 import { pageActions, useUI } from '../state/ui';
 import { canEditPoints } from '../document/geometry';
@@ -291,6 +292,8 @@ function Menu({ menu }: { menu: OpenMenu }) {
       },
     },
     { label: 'HTML', disabled: !one, run: () => writeText(toHtml(target, doc, tokens, collections, fonts)) },
+    { label: 'SwiftUI', disabled: !one, run: () => writeText(toSwiftUI(target, doc, tokens)) },
+    { label: 'Android XML', disabled: !one, run: () => writeText(toAndroidXml(target, doc, tokens)) },
     { label: 'JSON', disabled: !one, run: () => writeText(toJson(target, doc)) },
   ];
 
