@@ -94,9 +94,13 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const presence = usePresence();
 
   const remoteIds = presence.flatMap((p) => p.selection);
-  // Figma keeps a section's name on the canvas at all times — it is how you
-  // tell one board from another without selecting anything
-  const sections = (doc[pageId]?.children ?? []).filter((id) => doc[id]?.type === 'section');
+  // Figma keeps a board's name on the canvas at all times — it is how you tell
+  // one from another without selecting anything, and it is the thing you click
+  // to pick the board up rather than what is inside it.
+  const boards = (doc[pageId]?.children ?? []).filter((id) => {
+    const kind = doc[id]?.type;
+    return kind === 'section' || kind === 'frame';
+  });
   // a slice is invisible by design, so its outline has to be permanent chrome
   const slices = Object.values(doc)
     .filter((node) => node.type === 'slice' && node.visible)
@@ -107,7 +111,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     ...(entered ? [entered] : []),
     ...(lockedHint ? [lockedHint] : []),
     ...remoteIds,
-    ...sections,
+    ...boards,
     ...slices,
     // "Additional labels" writes a size under every frame, so every frame has
     // to be measured — not only the ones the pointer is on
@@ -577,8 +581,8 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         );
       })}
 
-      {/* section names — always on, and clicking one selects the board */}
-      {sections.map((id) => {
+      {/* board names — always on, and clicking one selects it */}
+      {boards.map((id) => {
         const rect = rects[id];
         const node = doc[id];
         if (!rect || !node || !node.visible) return null;
@@ -587,11 +591,14 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         if (selection.includes(id)) return null;
         return (
           <button
-            key={`section-${id}`}
+            key={`board-${id}`}
             type="button"
             className="section-label"
+            // a section titles a region of the page and reads larger; a frame
+            // is a board among boards, and Figma labels it more quietly
+            data-kind={node.type}
             data-on={selection.includes(id) || undefined}
-            style={{ left: rect.x, top: rect.y - 20 }}
+            style={{ left: rect.x, top: rect.y - (node.type === 'section' ? 20 : 16) }}
             onPointerDown={(event) => {
               event.stopPropagation();
               select([id]);

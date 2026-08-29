@@ -319,6 +319,23 @@ test('a marquee inside a frame you have drilled into catches the right layers', 
 });
 
 /**
+ * Every board on the page wears its name above it, and the name is what you
+ * click to pick the board up rather than whatever is inside it. Sections had
+ * this; frames, which is most of what a page is made of, did not.
+ */
+test('a frame wears its name on the canvas, and the name selects it', async ({ page }) => {
+  const board = await nodeNamed(page, 'Fixture Board');
+  const label = page.locator('.section-label', { hasText: 'Fixture Board' });
+  await expect(label).toBeVisible();
+
+  await label.click();
+  expect(await selection(page)).toEqual([board!.id]);
+
+  // and the label steps aside once the layer draws its own name
+  await expect(page.locator('.section-label', { hasText: 'Fixture Board' })).toHaveCount(0);
+});
+
+/**
  * Rotation, and what it does to everything drawn around a layer.
  *
  * A rotated element measures as the box *around* it, so chrome built from that
