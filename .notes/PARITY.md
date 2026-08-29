@@ -19,12 +19,12 @@ update it at the end of every session.** It outlives compaction; nothing else he
 - **Baseline on the day the ledger was written:** `pnpm typecheck` clean;
   `pnpm test` **345 passed, 0 failed** (2.8m, all seven projects).
 - **Phase 2 (ranking): complete** — the ranked list is below, kept for the record.
-- **Phase 3: complete.** The ranked twenty are closed, and so is everything the
-  ledger listed as open afterwards. 22 commits. Suite **377 passed, 0 failed**;
-  typecheck clean. Every closed row carries its commit and its test name.
-- **Two rows are deliberately not done**, because closing them means guessing at
-  Figma and a confident wrong model of Figma is the expensive mistake here. See
-  *Waiting on an answer* below. Nothing else is outstanding.
+- **Phase 3: complete.** Every open row in this ledger is closed. 26 commits.
+  Suite **379 passed, 0 failed**; typecheck clean. Every closed row carries its
+  commit and its test name.
+- **Nothing is outstanding.** What remains is one `partial` that is argued rather
+  than broken (SV-01), one `partial` that is a recorded trade (X-05, a raster
+  PDF), the eight `deliberate` rows, and the honest limits listed below.
 
 ### What Phase 3 changed
 
@@ -174,6 +174,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | <a id="c-14"></a>C-14 | Dragging a layer over a frame reparents it into that frame | Yes — the frame highlights and the layer becomes its child on drop | The move drag only writes `x`/`y`. Nothing calls `reparent`/`moveMany` from the canvas; the layers panel is the only place that reparents. **Now matches Figma.** | parity | `Canvas.tsx:683-715` (only `{x, y}` written); `store.ts:1020,1047`; panel caller `LeftPanel.tsx:179` — **fixed `ff275cd`**. A drop reparents, and lands where the pointer is (`8e1cc04`). |
 | <a id="c-15"></a>C-15 | Dragging a child *inside* an auto-layout frame reorders it | Yes — the child lifts out and drops between siblings | `draggableTarget` walks up out of the flow, so the gesture moves the whole containing frame instead of the child **Now matches Figma.** | parity | `Canvas.tsx:81-85` and `:663`; `isInFlow` at `types.ts:1068-1072` — **fixed `72973c5`**. Any number of flowed children reorder together (`221f57a`). |
 | <a id="c-16"></a>C-16 | Every top-level frame shows a clickable name label on the canvas | Yes | Only sections do **Now matches Figma.** | parity | `Overlay.tsx:450-472` (`sections` only, from `:97`) — **fixed `013cdc3`**. |
+| <a id="s-12"></a>S-12 | Dragging a frame's own background | A selected frame is moved by it; an unselected one is marqueed inside. A press that never moves is a click, and a click picks the board | The same, and it is why the name label (C-16) matters — that is how you take hold of an unselected board | parity | `Canvas.tsx` frame-background block — **fixed `9155460`** |
 | C-17 | Crop mode: drag pans the picture, not the box | Yes | Same, on the paint or the layer | parity | `Canvas.tsx:507-543`; test `features.spec.ts:691` |
 | C-18 | Drop an image file onto the canvas | Places an image layer where dropped | Same, plus paste | parity | `Canvas.tsx:798-821`, `:159-175` |
 | C-19 | Pixel grid appears at high zoom only | Yes | Yes, ≥4× | parity | `Canvas.tsx:984-1006` |
@@ -238,7 +239,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-36 | Shortcuts do not fire while typing | Yes | Yes, plus a belt-and-braces `ui.editing` guard | parity | `Editor.tsx:58-62,280,291` |
 | K-37 | ⌥T copy as Tailwind | *(Figma has no equivalent)* | Present | deliberate | `Editor.tsx:373-379` |
 | K-38 | ⇧⌘K place image | Opens a file picker and places the image | Absent **Now matches Figma.** | parity | no `ShiftK`/place-image handler in `Editor.tsx` — **fixed `1dd7696`**. Lands in the middle of the view; Figma hands it to the cursor to click-place. |
-| K-39 | `N` / ⇧N next / previous frame | **Unverified.** `N` is Figma's next-frame key *in Present*; that it is bound on the editor canvas is my claim and I could not confirm it | Absent | missing | no `KeyN` in `Editor.tsx`. **Do not implement until someone confirms the binding** — a wrong shortcut is worse than a missing one |
+| K-39 | `N` / ⇧N next / previous frame | Zooms to the next frame on the page. Filed under *Zoom* in Figma's own shortcut panel as "Zoom to Next / Previous Frame"; the order is canvas order — left to right, then top to bottom | Both, framing what they land on **Now matches Figma.** | parity | `Editor.tsx` walking-the-boards block — **fixed `9155460`**. The Phase 1 row was right; the later demotion to "unverified" was over-cautious. |
 
 ## Layers panel (`LeftPanel.tsx`)
 
@@ -399,21 +400,21 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 
 ---
 
-## Waiting on an answer
+## Two rows that were parked, and how they closed
 
-Both of these need someone who can check Figma. Implementing either on my own
-reading would be exactly the mistake the campaign is set up to avoid.
+Both K-39 and S-12 were held back as "ask the user", because closing them meant
+guessing at Figma. That was the wrong stopping point: **Figma publishes its
+shortcut panel and its selection behaviour**, so the uncertainty was answerable
+from the source rather than from me or from you. Asking is the fallback when the
+answer is not written down — not the first move.
 
-- **K-39 — `N` / ⇧N for the next frame.** `N` is Figma's next-frame key *in
-  Present*. That it is also bound on the editor canvas is my claim from Phase 1
-  and I could not confirm it. A wrong shortcut is worse than a missing one, so
-  the row stands `missing` with the uncertainty written into it.
-- **S-12 — marquee inside a frame.** Pressing on a frame's background always
-  hits the frame, so there is no way to rubber-band its children even after
-  drilling in. What I do not know is whether Figma marquees there or moves the
-  frame — I believe dragging a frame's background moves the frame, in which case
-  this is `parity` and the row should be closed as such rather than "fixed".
-  `Canvas.tsx` — the `!stack.length` guard.
+- **K-39** — `N` / ⇧N are listed under *Zoom* in Figma's shortcut panel as "Zoom
+  to Next / Previous Frame". Editor bindings, not Present-only. The Phase 1 row
+  was right and my later demotion of it was over-cautious.
+- **S-12** — one rule covers it: a frame already selected is moved by a drag on
+  its background; one that is not is marqueed inside. Confirmed against Figma's
+  own help centre and the UI3 threads where people hit the selected/unselected
+  distinction.
 
 ## Known limits, recorded rather than hidden
 
@@ -448,6 +449,12 @@ V-07, and the four approximate adjustments. All six README limits stand.
   pre-existing test bent. Three ledger corrections recorded above; the C-10 edge
   anchor is the one place a model of Figma was reasoned to rather than known, and
   is flagged for challenge.
+- **2026-08-30, third pass** — closed K-39 and S-12, the two rows the previous
+  pass had parked as "ask the user". Both were answerable from Figma's own
+  published shortcut panel and help centre. **The lesson for later sessions:
+  "ask when unsure" means ask when the answer is not written down anywhere —
+  check Figma's docs first.** No row in this ledger is open now: 189 parity,
+  8 deliberate, 2 partial (both argued, neither broken).
 - **2026-08-30, continued** — closed everything the ledger had left open. S-13
   (a press keeps a layer you already selected) turned out to be the
   highest-frequency `wrong` row in the file and had not been ranked at all,
