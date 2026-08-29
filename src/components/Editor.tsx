@@ -303,6 +303,13 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
 
       // ── Walking the tree ───────────────────────────────────────────────
       if (event.key === 'Enter' && selection.length === 1 && !event.shiftKey) {
+        // What a text layer has instead of children is its text, so ⏎ opens
+        // that — the same key that steps into a frame steps into the words.
+        if (doc[selection[0]]?.type === 'text') {
+          event.preventDefault();
+          ui.setEditing(selection[0]);
+          return;
+        }
         // a shape has points rather than children; ⏎ edits them. A parametric
         // one stays parametric until a point actually moves, so this is safe to
         // press on a star you only wanted to look at.

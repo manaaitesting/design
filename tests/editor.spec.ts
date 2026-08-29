@@ -161,6 +161,18 @@ test('a ⇧ marquee adds to the selection instead of replacing it', async ({ pag
   await removeNodes(page, [kept, swept]);
 });
 
+test('⏎ opens a selected text layer for editing', async ({ page }) => {
+  const caption = await nodeNamed(page, 'Caption');
+  await select(page, [caption!.id]);
+
+  await page.keyboard.press('Enter');
+
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().editing)).toBe(caption!.id);
+  // and the editor took the caret, as Figma does when you step into the words
+  await expect(page.locator(`[data-node-id="${caption!.id}"][contenteditable]`)).toBeFocused();
+  await page.keyboard.press('Escape');
+});
+
 /**
  * The digits set opacity. The editor's own comment named them as Figma's
  * opacity shortcut — as the reason the zoom keys need a modifier — and then
