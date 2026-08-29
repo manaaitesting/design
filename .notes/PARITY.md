@@ -81,6 +81,13 @@ Ordered by **how often a real user hits it per hour**, not by difficulty.
 `wrong` outranks `missing` at equal frequency: behaviour that contradicts Figma is
 worse than absent behaviour, because the user already trusted it.
 
+**This table is the ranking as it stood before any of the work, kept for the
+record — every row in it is now closed.** The verdicts in it are the *old* ones;
+the tables further down carry the current state. The one thing worth taking from
+it is what it got wrong: S-13, which turned out to be the highest-frequency
+`wrong` row in the whole ledger, is not in it at all, because Phase 1 read
+`resolveClick` without asking what it did once a selection already existed.
+
 | # | row | verdict | why it ranks here |
 |---|-----|---------|-------------------|
 | 1 | [C-14 drag a layer into another frame](#c-14) | missing | Every layout session. Dropping a layer on a frame must reparent it; here it only changes x/y, so the layer sits visually inside a frame it is not a child of. Silently corrupts the tree. |
@@ -102,7 +109,7 @@ worse than absent behaviour, because the user already trusted it.
 | 17 | [S-09 select inverse](#s-09) | missing | Occasional but has no workaround at all. |
 | 18 | [X-05 PDF export](#x-05) | missing | Occasional, but it is the format handoff asks for and nothing in the README calls it deliberate. |
 | 19 | [O-05 multi-selection resize ignores ⇧ and ⌥](#o-05) | missing | Same modifiers as C-09/C-10, on the group path, which is a separate code path. |
-| 20 | [SV-01 route components call `db.ts` directly](#sv-01) | partial | Never hit by a user; listed because the goal names it. See the row — the stated invariant is arguably *not* violated, and that argument belongs here rather than in a fix. |
+| 20 | [SV-01 route components call `db.ts` directly](#sv-01) | partial | Never hit by a user; listed because the goal names it. Argued, not changed. |
 
 Everything below rank 20 is in the tables; unranked rows are either `parity`,
 `deliberate`, or too rare to compete with the twenty above.
@@ -118,7 +125,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | TL-01 | Move tool `V` | Selects and drags | Same | parity | `Editor.tsx:31`; `Canvas.tsx:581-716` |
 | TL-02 | Scale tool `K` | Scales layer *and* its type/radii/strokes | Scales via `store.scaleNodes` against a gesture-start baseline | parity | `Editor.tsx:32`; `Canvas.tsx:546-579`; `store.ts:1922`; test `features.spec.ts:278` |
 | TL-03 | Hand tool `H` | Pans | Same, plus middle-drag and Space | parity | `Editor.tsx:33`; `Canvas.tsx:344-360` |
-| TL-04 | Frame tool `F` | Draws a frame; click-without-drag offers presets | parity | partial — **fixed `42450a3`**. | `Editor.tsx:34`; `Canvas.tsx:455-502` (fallback size at `:477`) |
+| TL-04 | Frame tool `F` | Draws a frame; click-without-drag offers presets | Draws a frame; click-without-drag makes a 100×100 frame, no preset list **Now matches Figma.** | parity | `Editor.tsx:34`; `Canvas.tsx:455-502` (fallback size at `:477`) — **fixed `42450a3`**. |
 | TL-05 | Shape flyout `R`/`O` + polygon/star | Six shapes behind one button, remembers the last | Same six, remembers the last | parity | `ToolRail.tsx:25-32,127-167`; test `features.spec.ts:18` |
 | TL-06 | Line `L` / Arrow `⇧L` | Two-endpoint drag, ⇧ constrains to 45° | Same | parity | `Editor.tsx:45-47`; `Canvas.tsx:415-453`; `constrain45` at `Canvas.tsx:67-78` |
 | TL-07 | Pen `P` | Click places a corner, drag pulls handles, click first point closes, ⏎ ends open, ⌫ removes last | All five | parity | `Canvas.tsx:386-412`, key handling `:310-328` |
@@ -139,11 +146,11 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | S-02 | Double-click | Descends exactly one level, never to the leaf | Same | parity | `selection.ts:82-103`; test `editor.spec.ts:22` |
 | S-03 | ⌘-click | Selects the deepest node under the pointer | Same | parity | `selection.ts:63-66`; `Canvas.tsx:634-639` |
 | S-04 | ⇧-click | Adds/removes one node | Same (`toggle`) | parity | `Canvas.tsx:644-647`; `ui.ts:516-521` |
-| <a id="s-05"></a>S-05 | Marquee hit test | Tests the *rendered* box | parity | wrong — **fixed `d770604`**. | `Canvas.tsx:620-626`; `selection.ts:132-149` |
-| <a id="s-06"></a>S-06 | ⇧ + marquee | Adds the marquee'd nodes to the current selection | parity | wrong — **fixed `d770604`**. | `Canvas.tsx:596-600` and `:621-627` |
+| <a id="s-05"></a>S-05 | Marquee hit test | Tests the *rendered* box | Tests stored `node.x/y/w/h` against a world-space box. Parent-local coords are compared to page coords whenever `entered` is set, and a hug-sized layer's stored size can lag its rendered size. Also contradicts the "canvas is real DOM" invariant. **Now matches Figma.** | parity | `Canvas.tsx:620-626`; `selection.ts:132-149` — **fixed `d770604`**. |
+| <a id="s-06"></a>S-06 | ⇧ + marquee | Adds the marquee'd nodes to the current selection | Replaces it: `select(nodesInBox(...))` is unconditional, and the ⇧ branch above only skips the *clear* **Now matches Figma.** | parity | `Canvas.tsx:596-600` and `:621-627` — **fixed `d770604`**. |
 | S-07 | ⏎ / Esc / ⇥ tree walking | Into first child / out to parent / next sibling | All three, and ⏎ opens points on a path-capable shape first | parity | `Editor.tsx:296-320`; `selection.ts:106-129` |
 | S-08 | ⌘A select all | Selects everything at the level you are in | Same | parity | `Editor.tsx:592-598` |
-| <a id="s-09"></a>S-09 | Select inverse | Selects everything *but* the selection | parity | missing — **fixed `04dd72b`**. | no hit for `inverse` in `src/` outside `geometry.ts:1393`, `shaders.ts:478` |
+| <a id="s-09"></a>S-09 | Select inverse | Selects everything *but* the selection | Absent — no handler, no menu row **Now matches Figma.** | parity | no hit for `inverse` in `src/` outside `geometry.ts:1393`, `shaders.ts:478` — **fixed `04dd72b`**. |
 | S-10 | ⌥⌘A select all with same … | Selects visually matching layers | `store.selectMatching` | parity | `Editor.tsx:586-591`; `store.ts:2190`; test `features.spec.ts:1278` |
 | S-11 | Locked layers unselectable | Locked layers and their subtrees are untouchable | Same, plus a "this is locked" hint the canvas draws | parity | `selection.ts:18-25,40-46`; `Overlay.tsx:292-321` |
 
@@ -156,17 +163,17 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | C-03 | ⌘/⌃ + wheel zooms about the pointer | Yes | Yes, point under cursor pinned | parity | `Canvas.tsx:187-194` |
 | C-04 | Trackpad two-finger scroll pans | Yes | Yes | parity | `Canvas.tsx:195-197` |
 | C-05 | Zoom limits shared by wheel / keys / menu | One set of limits | One `ZOOM` constant for all three | parity | `ui.ts:372`; test `editor.spec.ts:2851` |
-| <a id="c-06"></a>C-06 | ⇧ + wheel pans horizontally | Yes — the only horizontal pan a wheel mouse has | parity | missing — **fixed `4caafa6`**. | `Canvas.tsx:195-197` (no `shiftKey` branch); only `shiftKey` uses in the file are `:424,:597,:644` |
+| <a id="c-06"></a>C-06 | ⇧ + wheel pans horizontally | Yes — the only horizontal pan a wheel mouse has | Absent: horizontal pan comes only from `deltaX` **Now matches Figma.** | parity | `Canvas.tsx:195-197` (no `shiftKey` branch); only `shiftKey` uses in the file are `:424,:597,:644` — **fixed `4caafa6`**. |
 | C-07 | Drag to move, with sibling snapping and ⌘ to bypass | Yes | Yes, edge/centre snapping plus ruler guides; ⌘ bypasses | parity | `Canvas.tsx:668-702`; tests `editor.spec.ts:69,90` |
-| <a id="c-08"></a>C-08 | Rotate by dragging just outside a corner handle | Cursor becomes a rotate arc; drag rotates; ⇧ snaps to 15° | parity | missing — **fixed `a59cdfa`**. | `Overlay.tsx:18-27` (eight handles), `:548-567` (only those rendered); field at `Inspector.tsx:2324-2338` |
-| <a id="c-09"></a>C-09 | ⌥ resize from centre | Opposite edge moves too | parity | missing — **fixed `fce8d36`**. | `Overlay.tsx:201-221` |
-| <a id="c-10"></a>C-10 | ⇧ resize keeps proportion, on every handle | Yes, edges included | parity | wrong — **fixed `fce8d36`**. | `Overlay.tsx:206-219` |
-| <a id="c-11"></a>C-11 | Resizing snaps to siblings and guides | Yes | parity | partial — **fixed `a59cdfa`**. | `Overlay.tsx:191-229` and `:135-189`; compare the move path `Canvas.tsx:694-702` |
+| <a id="c-08"></a>C-08 | Rotate by dragging just outside a corner handle | Cursor becomes a rotate arc; drag rotates; ⇧ snaps to 15° | No rotate hit zone anywhere. `HANDLES` is the eight resize handles only. Rotation exists as a *number field* in the panel. **Now matches Figma.** | parity | `Overlay.tsx:18-27` (eight handles), `:548-567` (only those rendered); field at `Inspector.tsx:2324-2338` — **fixed `a59cdfa`**. |
+| <a id="c-09"></a>C-09 | ⌥ resize from centre | Opposite edge moves too | `startResize` never reads `altKey` **Now matches Figma.** | parity | `Overlay.tsx:201-221` — **fixed `fce8d36`**. |
+| <a id="c-10"></a>C-10 | ⇧ resize keeps proportion, on every handle | Yes, edges included | Guarded by `patch.w && patch.h`, so only corners. And for a `w`/`n` handle `patch.x`/`patch.y` are computed at `:210,:214` *before* the ratio rewrites `patch.h` at `:218`, so the box slides while it scales. **Now matches Figma.** | parity | `Overlay.tsx:206-219` — **fixed `fce8d36`**. |
+| <a id="c-11"></a>C-11 | Resizing snaps to siblings and guides | Yes | No snapping in either resize path; `setGuides` is never called from `Overlay` **Now matches Figma.** | parity | `Overlay.tsx:191-229` and `:135-189`; compare the move path `Canvas.tsx:694-702` — **fixed `a59cdfa`**. Skipped under ⇧/⌥ and on a turned layer; ⌘ bypasses. |
 | C-12 | ⌥-drag duplicates | Leaves a copy, drags the duplicate | Same | parity | `Canvas.tsx:652-659` |
 | C-13 | ⌥ hover measures to the layer under the pointer | Yes | Yes, tracked on the window so it appears on keydown | parity | `Canvas.tsx:237-250`; `Measure.tsx` |
-| <a id="c-14"></a>C-14 | Dragging a layer over a frame reparents it into that frame | Yes — the frame highlights and the layer becomes its child on drop | parity | missing — **fixed `ff275cd`**. Dropping into an auto-layout frame appends to the end of the flow rather than inserting at the pointer — still open. | `Canvas.tsx:683-715` (only `{x, y}` written); `store.ts:1020,1047`; panel caller `LeftPanel.tsx:179` |
-| <a id="c-15"></a>C-15 | Dragging a child *inside* an auto-layout frame reorders it | Yes — the child lifts out and drops between siblings | parity | wrong — **fixed `72973c5`**. A multi-selection inside a layout still moves the container — still open. | `Canvas.tsx:81-85` and `:663`; `isInFlow` at `types.ts:1068-1072` |
-| <a id="c-16"></a>C-16 | Every top-level frame shows a clickable name label on the canvas | Yes | parity | missing — **fixed `013cdc3`**. | `Overlay.tsx:450-472` (`sections` only, from `:97`) |
+| <a id="c-14"></a>C-14 | Dragging a layer over a frame reparents it into that frame | Yes — the frame highlights and the layer becomes its child on drop | The move drag only writes `x`/`y`. Nothing calls `reparent`/`moveMany` from the canvas; the layers panel is the only place that reparents. **Now matches Figma.** | parity | `Canvas.tsx:683-715` (only `{x, y}` written); `store.ts:1020,1047`; panel caller `LeftPanel.tsx:179` — **fixed `ff275cd`**. A drop reparents, and lands where the pointer is (`8e1cc04`). |
+| <a id="c-15"></a>C-15 | Dragging a child *inside* an auto-layout frame reorders it | Yes — the child lifts out and drops between siblings | `draggableTarget` walks up out of the flow, so the gesture moves the whole containing frame instead of the child **Now matches Figma.** | parity | `Canvas.tsx:81-85` and `:663`; `isInFlow` at `types.ts:1068-1072` — **fixed `72973c5`**. Any number of flowed children reorder together (`221f57a`). |
+| <a id="c-16"></a>C-16 | Every top-level frame shows a clickable name label on the canvas | Yes | Only sections do **Now matches Figma.** | parity | `Overlay.tsx:450-472` (`sections` only, from `:97`) — **fixed `013cdc3`**. |
 | C-17 | Crop mode: drag pans the picture, not the box | Yes | Same, on the paint or the layer | parity | `Canvas.tsx:507-543`; test `features.spec.ts:691` |
 | C-18 | Drop an image file onto the canvas | Places an image layer where dropped | Same, plus paste | parity | `Canvas.tsx:798-821`, `:159-175` |
 | C-19 | Pixel grid appears at high zoom only | Yes | Yes, ≥4× | parity | `Canvas.tsx:984-1006` |
@@ -179,10 +186,10 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
 |----|-----------|-------------------|-----------------|---------|----------|
 | O-01 | Selection outline, name label, size pill, eight handles | Yes | Yes | parity | `Overlay.tsx:489-567` |
-| <a id="o-02"></a>O-02 | A rotated layer's chrome is rotated with it | Yes | parity | wrong — **fixed `a59cdfa`**. | `Overlay.tsx:56-70` (esp. `:64`); rotation applied at `css.ts:184` |
-| <a id="o-03"></a>O-03 | Resizing a rotated layer follows the handle | Yes | parity | wrong — **fixed `a59cdfa`**. | `Overlay.tsx:201-215` |
-| O-04 | Multi-selection scales about the opposite corner | Yes | parity | parity — **fixed `a59cdfa`**. Was wrongly recorded as parity: the anchor ignored the viewport pan. | `Overlay.tsx:135-189` |
-| <a id="o-05"></a>O-05 | ⇧ / ⌥ on a multi-selection resize | Proportional / from centre | parity | missing — **fixed `a59cdfa`**. | `Overlay.tsx:149-181` |
+| <a id="o-02"></a>O-02 | A rotated layer's chrome is rotated with it | Yes | `useRects` uses `getBoundingClientRect()`, which is the axis-aligned box of a rotated element, so the outline is bigger than the shape and the handles sit off its corners **Now matches Figma.** | parity | `Overlay.tsx:56-70` (esp. `:64`); rotation applied at `css.ts:184` — **fixed `a59cdfa`**. |
+| <a id="o-03"></a>O-03 | Resizing a rotated layer follows the handle | Yes | Screen-space `dx`/`dy` are applied straight to unrotated `w`/`h`, so the handle drags the wrong axis **Now matches Figma.** | parity | `Overlay.tsx:201-215` — **fixed `a59cdfa`**. |
+| O-04 | Multi-selection scales about the opposite corner | Yes | Yes **Now matches Figma.** | parity | `Overlay.tsx:135-189` — **fixed `a59cdfa`**. Was wrongly recorded as parity in Phase 1: the anchor ignored the viewport pan, and a nested selection mixed coordinate spaces (`808e571`). |
+| <a id="o-05"></a>O-05 | ⇧ / ⌥ on a multi-selection resize | Proportional / from centre | `startGroupResize` reads neither modifier **Now matches Figma.** | parity | `Overlay.tsx:149-181` — **fixed `a59cdfa`**. |
 | O-06 | Hover highlight | Yes | Yes | parity | `Overlay.tsx:339-351` |
 | O-07 | Other people's selections, in their colour and name | Yes | Yes | parity | `Overlay.tsx:234-270` |
 | O-08 | Auto-layout gutter/padding handles on canvas | Yes | Yes | parity | `Overlay.tsx:409`; `FlexHandles.tsx`; tests `features.spec.ts:2166-2280` |
@@ -199,7 +206,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-04 | ⌘D duplicate | Yes | Yes | parity | `Editor.tsx:580-584` |
 | K-05 | `]` / `[` bring to front / send to back | Yes | Yes | parity | `Editor.tsx:651-652`; `store.ts:1095-1108`; test `editor.spec.ts:1196` |
 | <a id="k-06"></a>K-06 | ⌘] / ⌘\[ bring forward / send backward one step | Yes | Both, one place at a time | parity | `store.ts:1095` reorder takes forward/backward; `Editor.tsx:651-660`; menu at `ContextMenu.tsx:395-398` — **fixed `dfec129`** |
-| <a id="k-07"></a>K-07 | Digit keys set opacity (`5` → 50%, `55` typed quickly → 55%, `0` → 100%) | Yes | parity | missing — **fixed `21141fe`**. | `Editor.tsx:677-695`; no `opacity` handler in the key effect |
+| <a id="k-07"></a>K-07 | Digit keys set opacity (`5` → 50%, `55` typed quickly → 55%, `0` → 100%) | Yes | Absent. `Editor.tsx:677` *comments* that "the bare digits are Figma's opacity shortcuts" and uses that as the reason ⌘/⇧ are required for zoom — then never handles the bare digits. **Now matches Figma.** | parity | `Editor.tsx:677-695`; no `opacity` handler in the key effect — **fixed `21141fe`**. |
 | K-08 | ⌘G / ⇧⌘G group, ungroup | Yes | Yes | parity | `Editor.tsx:542-555` |
 | K-09 | ⌥⌘G frame selection | Yes | Yes | parity | `Editor.tsx:326-331` |
 | K-10 | ⇧A add auto layout | Yes | Yes | parity | `Editor.tsx:633-638` |
@@ -216,7 +223,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-21 | ⇧⌘H / ⇧⌘L hide, lock | Yes | Yes | parity | `Editor.tsx:615-624` |
 | K-22 | ⌫ / ⌦ delete | Yes | Yes | parity | `Editor.tsx:626-631` |
 | K-23 | Arrow nudge 1px, ⇧arrow 10px | Yes | Yes | parity | `Editor.tsx:655-662` |
-| K-24 | Nudge reorders inside an auto-layout frame | Yes | parity | missing — **fixed `87820bc`**. Along the flow axis only; the cross axis is the layout's. | `Editor.tsx:655-662` |
+| K-24 | Nudge reorders inside an auto-layout frame | Yes | No — always writes `x`/`y` **Now matches Figma.** | parity | `Editor.tsx:655-662` — **fixed `87820bc`**. Along the flow axis only; the cross axis is the layout's. |
 | K-25 | ⇧1 fit, ⇧2 fit selection, ⇧0 100% | Yes | Yes, and also accepts ⌘ | parity | `Editor.tsx:678-695`; tests `editor.spec.ts:2843,2860` |
 | K-26 | `+` / `−` zoom about the canvas centre | Yes | Yes | parity | `Editor.tsx:667-676`; `ui.ts:396-401`; test `editor.spec.ts:2823` |
 | K-27 | ⌘\ hide UI | Yes | Yes | parity | `Editor.tsx:351-355`; test `features.spec.ts:1451` |
@@ -230,7 +237,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-35 | Held shortcuts fire once | Yes | Yes — `ONE_SHOT` guard | parity | `Editor.tsx:282-287`; test `editor.spec.ts:125` |
 | K-36 | Shortcuts do not fire while typing | Yes | Yes, plus a belt-and-braces `ui.editing` guard | parity | `Editor.tsx:58-62,280,291` |
 | K-37 | ⌥T copy as Tailwind | *(Figma has no equivalent)* | Present | deliberate | `Editor.tsx:373-379` |
-| K-38 | ⇧⌘K place image | Opens a file picker and places the image | parity | missing — **fixed `1dd7696`**. Lands in the middle of the view; Figma hands it to the cursor to click-place. | no `ShiftK`/place-image handler in `Editor.tsx` |
+| K-38 | ⇧⌘K place image | Opens a file picker and places the image | Absent **Now matches Figma.** | parity | no `ShiftK`/place-image handler in `Editor.tsx` — **fixed `1dd7696`**. Lands in the middle of the view; Figma hands it to the cursor to click-place. |
 | K-39 | `N` / ⇧N next / previous frame | **Unverified.** `N` is Figma's next-frame key *in Present*; that it is bound on the editor canvas is my claim and I could not confirm it | Absent | missing | no `KeyN` in `Editor.tsx`. **Do not implement until someone confirms the binding** — a wrong shortcut is worse than a missing one |
 
 ## Layers panel (`LeftPanel.tsx`)
@@ -241,7 +248,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | L-02 | Containers ship collapsed, chevron opens | Yes | Yes | parity | `ui.ts:95-103`; test `editor.spec.ts:809` |
 | L-03 | Selecting on canvas reveals the row | Yes | Yes — opens every ancestor | parity | `ui.ts:531-538`; test `editor.spec.ts:817` |
 | L-04 | ⇧-click range, ⌘-click toggle | Yes | Yes | parity | test `editor.spec.ts:825` |
-| <a id="l-05"></a>L-05 | Search layers by name | Yes — a search field at the top of the panel | parity | missing — **fixed `0d50814`**. | `LeftPanel.tsx:818,1211` vs `LayersTree` at `:541`; palette at `Palette.tsx:261` |
+| <a id="l-05"></a>L-05 | Search layers by name | Yes — a search field at the top of the panel | Absent. Assets (`:818`) and Variables (`:1211`) each have one; Layers does not. Quick actions can jump to a layer by name, which is not the same thing. **Now matches Figma.** | parity | `LeftPanel.tsx:818,1211` vs `LayersTree` at `:541`; palette at `Palette.tsx:261` — **fixed `0d50814`**. Restacking is off while a search runs. |
 | L-06 | Drag a row to restack | Yes | Yes | parity | `LeftPanel.tsx:70-192`; test `editor.spec.ts:839` |
 | L-07 | Drop a row onto a frame to reparent | Yes | Yes | parity | `LeftPanel.tsx:179`; test `editor.spec.ts:856` |
 | L-08 | A drag carries the whole selection | Yes | Yes | parity | test `editor.spec.ts:873` |
@@ -294,7 +301,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | I-02 | Spacing to neighbours | Yes | Yes | parity | `Inspect.tsx:161-180,253` |
 | I-03 | Variables used by the layer | Yes | Yes | parity | `Inspect.tsx:184-193` |
 | I-04 | Dev status (ready / built) and annotations | Yes | Yes | parity | `Inspect.tsx:75-128`; `Overlay.tsx:432-447` |
-| I-05 | Code in several languages (iOS/Android) | Figma offers Swift/XML | parity | missing — **fixed `7058bee`**. SwiftUI and Android XML; Compose and UIKit are not offered. | `ContextMenu.tsx:274-294`; `ExportDialog.tsx:19` |
+| I-05 | Code in several languages (iOS/Android) | Figma offers Swift/XML | React / HTML / Tailwind / JSON / CSS only **Now matches Figma.** | parity | `ContextMenu.tsx:274-294`; `ExportDialog.tsx:19` — **fixed `7058bee`**. SwiftUI and Android XML; Compose and UIKit are not offered. |
 
 ## Text
 
@@ -312,7 +319,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | T-10 | Paste keeps the model in step | Yes | Yes — diffs the plain text after every change | parity | `TextEditor.tsx:137-146` |
 | T-11 | Text on a path | Figma does not have it either | Absent | deliberate | README "honest limits" |
 | T-12 | A shader as a text fill | — | Absent | deliberate | README "honest limits" |
-| <a id="t-13"></a>T-13 | ⏎ with a text layer selected enters edit mode | Yes | parity | missing — **fixed `c4b9ec6`**. | `Editor.tsx:296-312`; `geometry.ts:499-501` |
+| <a id="t-13"></a>T-13 | ⏎ with a text layer selected enters edit mode | Yes | No. ⏎ tries `canEditPoints` (false for `text`) then `firstChild` (a text layer has none), so the key does nothing. **Now matches Figma.** | parity | `Editor.tsx:296-312`; `geometry.ts:499-501` — **fixed `c4b9ec6`**. |
 
 ## Vectors
 
@@ -359,9 +366,9 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | X-02 | SVG | Yes | Yes | parity | `export/raster.ts`; `ContextMenu.tsx:308` |
 | X-03 | Code export (React / HTML / Tailwind / JSON) | Figma offers CSS/iOS/Android | Present, and Tailwind rewrites the React output rather than re-walking the document | parity | `export/toCode.ts`; `export/tailwind.ts`; test `editor.spec.ts:222` |
 | X-04 | Export suffix, contents-only | Yes | Yes | parity | `ExportDialog.tsx:22-24`; test `editor.spec.ts:1530` |
-| <a id="x-05"></a>X-05 | PDF | Yes | partial | missing — **fixed `21b79ec`**. The page is the layer's size in points; the artwork inside is a raster, not vector — see the commit for why. | `types.ts:457` |
+| <a id="x-05"></a>X-05 | PDF | Yes | Exports a real one-page PDF, sized in points — but the artwork inside it is a raster | partial | `types.ts:457` — **fixed `21b79ec`**. The page is the layer's size in points; the artwork inside is a raster, not vector. |
 | X-06 | Slices export the region under them | Yes | Yes | parity | test `features.spec.ts:526` |
-| X-07 | JPG export | Yes | parity | missing — **fixed `6743ce0`**. | `types.ts:457` |
+| X-07 | JPG export | Yes | Absent **Now matches Figma.** | parity | `types.ts:457` — **fixed `6743ce0`**. |
 | X-08 | One source of style for canvas and export | — | `nodeStyle()` feeds both | parity (invariant) | `document/css.ts`; `export/toCode.ts` |
 
 ## Collaboration and file management
