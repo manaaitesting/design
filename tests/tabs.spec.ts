@@ -98,6 +98,10 @@ test('the cross closes one tab and hands over to its neighbour', async ({ page }
 test('⌥⌘→ walks the strip instead of nudging a layer', async ({ page }) => {
   await open(page, SCRATCH);
   await page.goto(`/f/${DEMO}`);
+  // `ready` and not just the tab count: until the handle belongs to this file,
+  // reading the document below samples the one we just left, and the node id it
+  // picks up is then looked for in a file that never had it
+  await ready(page, DEMO);
   await expect(tabs(page)).toHaveCount(2);
 
   // a selection makes the canvas's own Arrow binding live, which is exactly the

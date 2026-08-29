@@ -104,6 +104,7 @@ import {
   type PrototypeDevice,
 } from '../document/types';
 import { FRAME_PRESETS } from '../document/presets';
+import { viewCentre } from '../lib/view';
 import type { PaintType } from './ui/PaintPicker';
 import { conditionError } from '../document/condition';
 import { newId } from '../lib/id';
@@ -176,6 +177,7 @@ export function Inspector() {
   const setTab = useUI((s) => s.setInspectorTab);
   const vectorEdit = useUI((s) => s.vectorEdit);
   const page = useUI((s) => s.page);
+  const tool = useUI((s) => s.tool);
 
   const nodes = selection.map((id) => doc[id]).filter(Boolean) as SceneNode[];
   const node = nodes[0];
@@ -234,7 +236,12 @@ export function Inspector() {
         <Inspect node={node} />
       ) : (
         <div className="scroll" style={{ flex: 1 }}>
-          {!node ? (
+          {tool === 'frame' ? (
+            // Figma answers the Frame tool with the sizes everyone means by
+            // name. Drawing one by hand still works; this is for the times you
+            // wanted "iPhone 16" and not "393 by 852".
+            <FramePresets />
+          ) : !node ? (
             <PageSection />
           ) : vectorEdit === node.id ? (
             // Point editing replaces the layer's own panel with the point's,
@@ -279,6 +286,53 @@ export function Inspector() {
       )}
     </div>
     </PaintProvider>
+  );
+}
+
+/**
+ * The frame presets, offered while the Frame tool is armed.
+ *
+ * A preset is worth having because it is the size *everyone else* means by that
+ * name — a "Desktop" that is not 1440 wide turns every review into a
+ * conversation about the frame instead of the design.
+ */
+function FramePresets() {
+  const store = useStore();
+  const page = useUI((s) => s.page);
+
+  return (
+    <FigSection title="Frame">
+      {FRAME_PRESETS.map((preset) => (
+        <button
+          key={`${preset.name}-${preset.w}x${preset.h}`}
+          type="button"
+          className="fig-preset-row"
+          data-divider={preset.divider || undefined}
+          onClick={() => {
+            const ui = useUI.getState();
+            const at = viewCentre(ui.viewport, { w: preset.w, h: preset.h });
+            const id = store.create('frame', page, {
+              name: preset.name,
+              x: at.x,
+              y: at.y,
+              w: preset.w,
+              h: preset.h,
+              fill: '#FFFFFF',
+              flex: null,
+            });
+            store.commit();
+            ui.select([id]);
+            // the board is made; the tool has done its job
+            ui.setTool('move');
+          }}
+        >
+          <span>{preset.name}</span>
+          <span className="fig-preset-size">
+            {preset.w} × {preset.h}
+          </span>
+        </button>
+      ))}
+    </FigSection>
   );
 }
 

@@ -64,3 +64,27 @@ export function fitBounds(bounds: Bounds, leftPanel: boolean, leftWidth: number,
     y: height / 2 - ((bounds.minY + bounds.maxY) / 2) * zoom,
   };
 }
+
+/**
+ * The middle of the canvas area, in world coordinates.
+ *
+ * Where something goes when it is created from a panel rather than drawn: the
+ * Assets list dropping a component, the frame presets making a board. `inset`
+ * backs off by half the thing's size so it lands centred rather than with its
+ * corner in the middle.
+ */
+export function viewCentre(
+  viewport: { x: number; y: number; zoom: number },
+  inset: { w: number; h: number } = { w: 120, h: 80 },
+): { x: number; y: number } {
+  const rect =
+    typeof document === 'undefined'
+      ? null
+      : document.querySelector<HTMLElement>('[data-canvas-root]')?.getBoundingClientRect();
+  const width = rect?.width ?? 1200;
+  const height = rect?.height ?? 800;
+  return {
+    x: Math.round((width / 2 - viewport.x) / viewport.zoom - inset.w / 2),
+    y: Math.round((height / 2 - viewport.y) / viewport.zoom - inset.h / 2),
+  };
+}

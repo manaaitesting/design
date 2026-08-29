@@ -22,6 +22,7 @@ import {
 } from '../document/variables';
 import type { Token } from '../document/types';
 import { PANEL, pageActions, useUI } from '../state/ui';
+import { viewCentre as canvasCentre } from '../lib/view';
 import { ancestors, descendants, ROOT_ID, type NodeType } from '../document/types';
 import {
   flattenLayers,
@@ -826,7 +827,7 @@ function AssetsTab() {
   /** Places an instance, either where it was dropped or in the middle of the view. */
   const place = (mainId: string, at?: { x: number; y: number }) => {
     if (readOnly) return;
-    const centre = at ?? viewCentre();
+    const centre = at ?? canvasCentre(useUI.getState().viewport);
     const id = store.createInstance(mainId, pageId, centre);
     if (id) select([id]);
   };
@@ -1033,7 +1034,7 @@ function LibrarySection({ query, readOnly }: { query: string; readOnly: boolean 
     const id = store.importComponent(result.payload, pageId, {
       id: entry.id,
       version: result.version ?? entry.version,
-    }, viewCentre());
+    }, canvasCentre(useUI.getState().viewport));
     store.commit();
     if (id) select([id]);
   };
@@ -1078,17 +1079,6 @@ function LibrarySection({ query, readOnly }: { query: string; readOnly: boolean 
 }
 
 /** The middle of the canvas in world coordinates — where a click-placed asset goes. */
-function viewCentre(): { x: number; y: number } {
-  const vp = useUI.getState().viewport;
-  const canvas = document.querySelector<HTMLElement>('[data-canvas-root]');
-  const rect = canvas?.getBoundingClientRect();
-  const width = rect?.width ?? window.innerWidth;
-  const height = rect?.height ?? window.innerHeight;
-  return {
-    x: Math.round((width / 2 - vp.x) / vp.zoom) - 60,
-    y: Math.round((height / 2 - vp.y) / vp.zoom) - 40,
-  };
-}
 
 /**
  * Variables.

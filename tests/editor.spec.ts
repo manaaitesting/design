@@ -138,6 +138,28 @@ test('two children of an auto layout reorder together, keeping their order', asy
   await removeNodes(page, [built.frame]);
 });
 
+/**
+ * Arming the Frame tool in Figma answers with the sizes everyone means by name.
+ * Paperlike had the preset list, but only for resizing a frame that already
+ * existed — the tool itself offered nothing but a blank drag.
+ */
+test('the Frame tool offers presets, and one of them makes the board', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('frame'));
+
+  const row = page.locator('.fig-preset-row', { hasText: 'Desktop' }).first();
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('1440 × 1024');
+  await row.click();
+
+  const made = (await doc(page))[(await selection(page))[0]];
+  expect([made.type, made.w, made.h]).toEqual(['frame', 1440, 1024]);
+  expect(made.name).toBe('Desktop');
+  // the board is made, so the tool stands down
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+  await removeNodes(page, [made.id]);
+});
+
 test('⇧⌘K opens a picker and places the image it is given', async ({ page }) => {
   const chooser = page.waitForEvent('filechooser');
   await page.keyboard.press('Shift+Meta+k');
