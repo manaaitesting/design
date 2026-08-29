@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDoc, useReadOnly, useStore } from './Session';
+import { inverseOf } from '../document/selection';
 import { useUI } from '../state/ui';
 import { openingFrame } from '../document/prototype';
 import { descendants, ROOT_ID, type Doc } from '../document/types';
@@ -180,6 +181,11 @@ function commands(doc: Doc, store: ReturnType<typeof useStore>): Entry[] {
       const id = store.autoLayoutSelection(selection());
       if (id) pick([id]);
     }, '⇧A'),
+    make('select-inverse', 'Select inverse', () => {
+      const state = ui();
+      const level = state.entered && doc[state.entered] ? state.entered : state.page;
+      pick(inverseOf(state.selection, doc, level));
+    }, '⇧⌘A', false),
     make('group', 'Group selection', () => {
       const id = store.group(selection());
       if (id) pick([id]);

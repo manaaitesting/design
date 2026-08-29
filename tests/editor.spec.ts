@@ -161,6 +161,29 @@ test('a ⇧ marquee adds to the selection instead of replacing it', async ({ pag
   await removeNodes(page, [kept, swept]);
 });
 
+test('⇧⌘A selects everything that is not selected', async ({ page }) => {
+  const ids = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const made = ['One', 'Two', 'Three'].map((name, i) =>
+      store.create('rect', 'root', { name, x: 700 + i * 70, y: 500, w: 60, h: 60, fill: '#4CC3F0' } as never),
+    );
+    store.commit();
+    return made;
+  });
+  await select(page, [ids[0]]);
+
+  await page.keyboard.press('Shift+Meta+a');
+
+  const nodes = await doc(page);
+  const names = (await selection(page)).map((id) => nodes[id].name).sort();
+  // the fixture board is a sibling, so it inverts in too — what is *not* there
+  // is the layer that was selected
+  expect(names).not.toContain('One');
+  expect(names).toEqual(expect.arrayContaining(['Two', 'Three', 'Fixture Board']));
+
+  await removeNodes(page, ids);
+});
+
 /**
  * A wheel mouse has one axis. Without ⇧ turning it sideways there is no way to
  * pan the canvas horizontally with a wheel at all — only a trackpad, which

@@ -128,6 +128,18 @@ export function siblingOf(id: string, doc: Doc, step: 1 | -1): string | null {
   return siblings[(index + step + siblings.length) % siblings.length];
 }
 
+/**
+ * ⇧⌘A — everything selectable at this level that is not selected now.
+ *
+ * "This level" rather than "the page", so it inverts inside a frame you have
+ * drilled into, which is where the command is actually useful.
+ */
+export function inverseOf(selection: string[], doc: Doc, level: string): string[] {
+  return (doc[level]?.children ?? []).filter(
+    (id) => !selection.includes(id) && doc[id]?.visible && !isLocked(id, doc),
+  );
+}
+
 /** Marquee — everything at `level` whose box intersects the rectangle. */
 export function nodesInBox(
   box: { x: number; y: number; w: number; h: number },

@@ -19,7 +19,7 @@ import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVa
 import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
 import { ROOT_ID, pageOf, type BooleanOp, type Doc } from '../document/types';
-import { firstChild, parentOf, siblingOf } from '../document/selection';
+import { firstChild, inverseOf, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
 import { canEditPoints } from '../document/geometry';
 import { readNodes, writeNodes } from '../lib/clipboard';
@@ -596,6 +596,14 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       if (mod && event.key.toLowerCase() === 'd' && selection.length) {
         event.preventDefault();
         select(store.duplicate(selection));
+        return;
+      }
+      // ⇧⌘A — select inverse, as Figma binds it. Checked before plain ⌘A,
+      // which does not test its modifiers and would otherwise swallow it.
+      if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        const level = ui.entered && doc[ui.entered] ? ui.entered : ui.page;
+        select(inverseOf(selection, doc, level));
         return;
       }
       // ⌥⌘A — select every layer on the page that looks like this one
