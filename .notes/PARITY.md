@@ -19,11 +19,12 @@ update it at the end of every session.** It outlives compaction; nothing else he
 - **Baseline on the day the ledger was written:** `pnpm typecheck` clean;
   `pnpm test` **345 passed, 0 failed** (2.8m, all seven projects).
 - **Phase 2 (ranking): complete** — the ranked list is below, kept for the record.
-- **Phase 3: the ranked twenty are done.** 19 rows closed with code and tests;
-  SV-01 was argued rather than changed. Suite now **366 passed, 0 failed**;
-  typecheck clean. Every row below carries its commit and its test name.
-- **Next session starts here:** re-read this file, then pick from *Still open*
-  near the bottom. Nothing in the top twenty is outstanding.
+- **Phase 3: complete.** The ranked twenty are closed, and so is everything the
+  ledger listed as open afterwards. 22 commits. Suite **377 passed, 0 failed**;
+  typecheck clean. Every closed row carries its commit and its test name.
+- **Two rows are deliberately not done**, because closing them means guessing at
+  Figma and a confident wrong model of Figma is the expensive mistake here. See
+  *Waiting on an answer* below. Nothing else is outstanding.
 
 ### What Phase 3 changed
 
@@ -117,7 +118,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | TL-01 | Move tool `V` | Selects and drags | Same | parity | `Editor.tsx:31`; `Canvas.tsx:581-716` |
 | TL-02 | Scale tool `K` | Scales layer *and* its type/radii/strokes | Scales via `store.scaleNodes` against a gesture-start baseline | parity | `Editor.tsx:32`; `Canvas.tsx:546-579`; `store.ts:1922`; test `features.spec.ts:278` |
 | TL-03 | Hand tool `H` | Pans | Same, plus middle-drag and Space | parity | `Editor.tsx:33`; `Canvas.tsx:344-360` |
-| TL-04 | Frame tool `F` | Draws a frame; click-without-drag offers presets | Draws a frame; click-without-drag makes a 100×100 frame, no preset list | partial | `Editor.tsx:34`; `Canvas.tsx:455-502` (fallback size at `:477`) |
+| TL-04 | Frame tool `F` | Draws a frame; click-without-drag offers presets | parity | partial — **fixed `42450a3`**. | `Editor.tsx:34`; `Canvas.tsx:455-502` (fallback size at `:477`) |
 | TL-05 | Shape flyout `R`/`O` + polygon/star | Six shapes behind one button, remembers the last | Same six, remembers the last | parity | `ToolRail.tsx:25-32,127-167`; test `features.spec.ts:18` |
 | TL-06 | Line `L` / Arrow `⇧L` | Two-endpoint drag, ⇧ constrains to 45° | Same | parity | `Editor.tsx:45-47`; `Canvas.tsx:415-453`; `constrain45` at `Canvas.tsx:67-78` |
 | TL-07 | Pen `P` | Click places a corner, drag pulls handles, click first point closes, ⏎ ends open, ⌫ removes last | All five | parity | `Canvas.tsx:386-412`, key handling `:310-328` |
@@ -215,7 +216,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-21 | ⇧⌘H / ⇧⌘L hide, lock | Yes | Yes | parity | `Editor.tsx:615-624` |
 | K-22 | ⌫ / ⌦ delete | Yes | Yes | parity | `Editor.tsx:626-631` |
 | K-23 | Arrow nudge 1px, ⇧arrow 10px | Yes | Yes | parity | `Editor.tsx:655-662` |
-| K-24 | Nudge reorders inside an auto-layout frame | Yes | No — always writes `x`/`y` | missing | `Editor.tsx:655-662` |
+| K-24 | Nudge reorders inside an auto-layout frame | Yes | parity | missing — **fixed `87820bc`**. Along the flow axis only; the cross axis is the layout's. | `Editor.tsx:655-662` |
 | K-25 | ⇧1 fit, ⇧2 fit selection, ⇧0 100% | Yes | Yes, and also accepts ⌘ | parity | `Editor.tsx:678-695`; tests `editor.spec.ts:2843,2860` |
 | K-26 | `+` / `−` zoom about the canvas centre | Yes | Yes | parity | `Editor.tsx:667-676`; `ui.ts:396-401`; test `editor.spec.ts:2823` |
 | K-27 | ⌘\ hide UI | Yes | Yes | parity | `Editor.tsx:351-355`; test `features.spec.ts:1451` |
@@ -229,8 +230,8 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-35 | Held shortcuts fire once | Yes | Yes — `ONE_SHOT` guard | parity | `Editor.tsx:282-287`; test `editor.spec.ts:125` |
 | K-36 | Shortcuts do not fire while typing | Yes | Yes, plus a belt-and-braces `ui.editing` guard | parity | `Editor.tsx:58-62,280,291` |
 | K-37 | ⌥T copy as Tailwind | *(Figma has no equivalent)* | Present | deliberate | `Editor.tsx:373-379` |
-| K-38 | ⇧⌘K place image | Opens a file picker and places the image | Absent | missing | no `ShiftK`/place-image handler in `Editor.tsx` |
-| K-39 | `N` / ⇧N next / previous frame | Zooms to the next frame on the page | Absent | missing | no `KeyN` in `Editor.tsx` |
+| K-38 | ⇧⌘K place image | Opens a file picker and places the image | parity | missing — **fixed `1dd7696`**. Lands in the middle of the view; Figma hands it to the cursor to click-place. | no `ShiftK`/place-image handler in `Editor.tsx` |
+| K-39 | `N` / ⇧N next / previous frame | **Unverified.** `N` is Figma's next-frame key *in Present*; that it is bound on the editor canvas is my claim and I could not confirm it | Absent | missing | no `KeyN` in `Editor.tsx`. **Do not implement until someone confirms the binding** — a wrong shortcut is worse than a missing one |
 
 ## Layers panel (`LeftPanel.tsx`)
 
@@ -293,7 +294,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | I-02 | Spacing to neighbours | Yes | Yes | parity | `Inspect.tsx:161-180,253` |
 | I-03 | Variables used by the layer | Yes | Yes | parity | `Inspect.tsx:184-193` |
 | I-04 | Dev status (ready / built) and annotations | Yes | Yes | parity | `Inspect.tsx:75-128`; `Overlay.tsx:432-447` |
-| I-05 | Code in several languages (iOS/Android) | Figma offers Swift/XML | React / HTML / Tailwind / JSON / CSS only | missing | `ContextMenu.tsx:274-294`; `ExportDialog.tsx:19` |
+| I-05 | Code in several languages (iOS/Android) | Figma offers Swift/XML | parity | missing — **fixed `7058bee`**. SwiftUI and Android XML; Compose and UIKit are not offered. | `ContextMenu.tsx:274-294`; `ExportDialog.tsx:19` |
 
 ## Text
 
@@ -360,7 +361,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | X-04 | Export suffix, contents-only | Yes | Yes | parity | `ExportDialog.tsx:22-24`; test `editor.spec.ts:1530` |
 | <a id="x-05"></a>X-05 | PDF | Yes | partial | missing — **fixed `21b79ec`**. The page is the layer's size in points; the artwork inside is a raster, not vector — see the commit for why. | `types.ts:457` |
 | X-06 | Slices export the region under them | Yes | Yes | parity | test `features.spec.ts:526` |
-| X-07 | JPG export | Yes | Absent | missing | `types.ts:457` |
+| X-07 | JPG export | Yes | parity | missing — **fixed `6743ce0`**. | `types.ts:457` |
 | X-08 | One source of style for canvas and export | — | `nodeStyle()` feeds both | parity (invariant) | `document/css.ts`; `export/toCode.ts` |
 
 ## Collaboration and file management
@@ -391,39 +392,40 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 
 ---
 
-## Still open
+## Waiting on an answer
 
-The ranked twenty are closed. These are what is left, and where a next session
-should start. Frequencies are guesses until someone watches a real user.
+Both of these need someone who can check Figma. Implementing either on my own
+reading would be exactly the mistake the campaign is set up to avoid.
 
-**Turned up while fixing the twenty — highest confidence, already scoped:**
+- **K-39 — `N` / ⇧N for the next frame.** `N` is Figma's next-frame key *in
+  Present*. That it is also bound on the editor canvas is my claim from Phase 1
+  and I could not confirm it. A wrong shortcut is worse than a missing one, so
+  the row stands `missing` with the uncertainty written into it.
+- **S-12 — marquee inside a frame.** Pressing on a frame's background always
+  hits the frame, so there is no way to rubber-band its children even after
+  drilling in. What I do not know is whether Figma marquees there or moves the
+  frame — I believe dragging a frame's background moves the frame, in which case
+  this is `parity` and the row should be closed as such rather than "fixed".
+  `Canvas.tsx` — the `!stack.length` guard.
 
-- **Dropping into an auto-layout frame appends** rather than inserting at the
-  pointer. C-14 reparents; the ordering is C-15's model applied to a drop.
-  `Canvas.tsx` — the `dropInto` call in the move-drag release.
-- **A multi-selection inside an auto layout still moves the container.** C-15
-  handles a single flowed child; two or more fall through to the old path.
-  `Canvas.tsx` — the `nextSelection.length === 1` guard.
-- **`tabs.spec.ts:98` is flaky** — a pre-existing missing `ready()` guard. See
-  *Three things Phase 3 turned up* above. A test fix, not a behaviour fix.
-- **Group resize mixes coordinate spaces for a nested selection.** `a59cdfa`
-  fixed the pan offset, but `source.x` is parent-local while the group box is
-  world, so scaling a selection of nested layers is still wrong.
-  `Overlay.tsx` — `startGroupResize`.
-- **Marquee cannot start inside a frame.** Pressing on a frame's background
-  always hits the frame, so there is no way to rubber-band its children even
-  after drilling in. `Canvas.tsx` — the `!stack.length` guard.
-- **A press on an already-selected nested layer re-selects its artboard.**
-  `resolveClick` returns the top-level ancestor without consulting the current
-  selection, so dragging a layer you had selected from the panel picks up the
-  board instead. `selection.ts:54-76`. Reachable today only via ⌘ or drilling
-  in — and a plausible `wrong` row worth ranking high next time.
+## Known limits, recorded rather than hidden
 
-**From the Phase 1 ledger, unranked and still true:**
+Real behaviour that is deliberately short of Figma. Each is a candidate row if
+anyone disagrees with the trade.
 
-- K-24 nudge does not reorder inside an auto layout · K-38 ⇧⌘K place image ·
-  K-39 `N` / ⇧N next frame · TL-04 frame-tool presets on a click · I-05 Swift /
-  XML in the Inspect tab · X-07 JPG export · SV-01 (argued, not a defect).
+- **PDF is a raster.** The page is the layer's size in points, but the artwork
+  inside is a JPEG. A vector PDF needs a second renderer walking the document,
+  which the style invariant exists to prevent. `X-05`, `21b79ec`.
+- **⇧⌘K places at the centre of the view**, where Figma hands the image to the
+  cursor and lets you click to drop it. `K-38`, `1dd7696`.
+- **SwiftUI and Android XML only.** Figma also offers Compose and UIKit.
+  Gradients, image fills and shaders emit a comment naming the CSS instead of a
+  colour, because they have no one colour to name. `I-05`, `7058bee`.
+- **A group resize of *rotated* members** scales each layer's w/h on its own
+  axes. Non-uniformly scaling a rotated box is not representable as w/h plus a
+  rotation, so this is an approximation rather than a bug — but it is one.
+- **Android has no gap.** A `LinearLayout` spaces children by their margins, so
+  a layout with a gap emits a comment saying so rather than silently losing it.
 
 **Deliberate — do not fix, argue here if you disagree:** M-06, M-07, T-11, T-12,
 V-07, and the four approximate adjustments. All six README limits stand.
@@ -439,3 +441,15 @@ V-07, and the four approximate adjustments. All six README limits stand.
   pre-existing test bent. Three ledger corrections recorded above; the C-10 edge
   anchor is the one place a model of Figma was reasoned to rather than known, and
   is flagged for challenge.
+- **2026-08-30, continued** — closed everything the ledger had left open. S-13
+  (a press keeps a layer you already selected) turned out to be the
+  highest-frequency `wrong` row in the file and had not been ranked at all,
+  because Phase 1 read `resolveClick` without asking what it did *after* a
+  selection existed. C-14b, C-15b, K-24, K-38, X-07, O-06, TL-04, I-05 closed;
+  SV-05 closed by S-05; the K-06 row repaired after a bulk edit mangled its
+  evidence cell. Two more pre-existing bugs surfaced on the way: `moveMany`
+  inserted movers one at a time, so a multi-row drag in the *layers panel* split
+  the selection around a layer it was passing; and the group resize was still
+  mixing parent-local x/y with a world-space anchor for anything nested. Suite
+  366 → 377. The flaky `tabs.spec.ts:98` was fixed only after it had been
+  reported in the previous update — never silently.
