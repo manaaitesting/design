@@ -18,7 +18,7 @@ import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
 import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
-import { ROOT_ID, pageOf, type BooleanOp, type Doc } from '../document/types';
+import { isInFlow, ROOT_ID, pageOf, type BooleanOp, type Doc } from '../document/types';
 import { firstChild, inverseOf, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
 import { canEditPoints } from '../document/geometry';
@@ -685,6 +685,21 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       // ── Nudge ──────────────────────────────────────────────────────────
       if (event.key.startsWith('Arrow') && selection.length) {
         event.preventDefault();
+
+        // A flowed child has no x/y to nudge, so the arrows move it along the
+        // order instead — and only along the axis the layout actually flows in,
+        // since the cross axis is the layout's to decide.
+        const first = doc[selection[0]];
+        if (first && isInFlow(first, doc)) {
+          const along: Record<string, 'forward' | 'backward'> =
+            doc[first.parent!]?.flex?.direction === 'row'
+              ? { ArrowRight: 'forward', ArrowLeft: 'backward' }
+              : { ArrowDown: 'forward', ArrowUp: 'backward' };
+          const where = along[event.key];
+          if (where) store.reorder(selection, where);
+          return;
+        }
+
         const step = event.shiftKey ? 10 : 1;
         const dx = event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0;
         const dy = event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0;

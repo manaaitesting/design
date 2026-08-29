@@ -138,6 +138,42 @@ test('two children of an auto layout reorder together, keeping their order', asy
   await removeNodes(page, [built.frame]);
 });
 
+test('the arrow keys move a flowed child along the order, not across the canvas', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'Row', x: 200, y: 500, w: 300, h: 100, fill: '#FFFFFF',
+      flex: {
+        mode: 'flex', direction: 'row', gap: 10, padding: [0, 0, 0, 0],
+        align: 'start', justify: 'start', wrap: false,
+      },
+    } as never);
+    const kid = (name: string) => store.create('rect', frame, { name, w: 60, h: 60, fill: '#4CC3F0' } as never);
+    const ids = [kid('X'), kid('Y'), kid('Z')];
+    store.commit();
+    return { frame, ids };
+  });
+  await select(page, [built.ids[1]]);
+  const order = async () => {
+    const nodes = await doc(page);
+    return nodes[built.frame].children.map((id: string) => nodes[id].name);
+  };
+
+  await page.keyboard.press('ArrowRight');
+  expect(await order()).toEqual(['X', 'Z', 'Y']);
+  await page.keyboard.press('ArrowLeft');
+  expect(await order()).toEqual(['X', 'Y', 'Z']);
+
+  // the cross axis belongs to the layout, so it does nothing — and in
+  // particular does not start writing a y the layout would ignore
+  const before = (await doc(page))[built.ids[1]].y;
+  await page.keyboard.press('ArrowDown');
+  expect(await order()).toEqual(['X', 'Y', 'Z']);
+  expect((await doc(page))[built.ids[1]].y).toBe(before);
+
+  await removeNodes(page, [built.frame]);
+});
+
 test('dropping into an auto layout lands where the pointer is, not at the end', async ({ page }) => {
   const built = await page.evaluate(() => {
     const store = window.paperlike!.store;
