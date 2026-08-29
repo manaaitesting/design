@@ -550,7 +550,7 @@ export function Canvas() {
     // ── Scale tool ───────────────────────────────────────────────────────
     if (tool === 'scale') {
       const stack = hitStack(event.clientX, event.clientY, doc);
-      const resolved = resolveClick(stack, doc, entered, 'normal');
+      const resolved = resolveClick(stack, doc, entered, 'normal', selection);
       const ids = resolved
         ? selection.includes(resolved.id)
           ? selection
@@ -654,6 +654,7 @@ export function Canvas() {
       doc,
       entered,
       event.metaKey || event.ctrlKey ? 'deep' : 'normal',
+      selection,
     );
     if (!resolved) return;
     const targetId = resolved.id;
@@ -864,7 +865,7 @@ export function Canvas() {
           setPenCursor([world.x, world.y]);
         }
         const stack = hitStack(e.clientX, e.clientY, doc);
-        const preview = resolveClick(stack, doc, entered, e.metaKey || e.ctrlKey ? 'deep' : 'normal');
+        const preview = resolveClick(stack, doc, entered, e.metaKey || e.ctrlKey ? 'deep' : 'normal', useUI.getState().selection);
         setHover(preview?.id ?? null);
       }}
       onPointerLeave={() => {
@@ -907,7 +908,7 @@ export function Canvas() {
       onContextMenu={(e) => {
         e.preventDefault();
         const stack = hitStack(e.clientX, e.clientY, doc);
-        const resolved = resolveClick(stack, doc, entered, 'normal');
+        const resolved = resolveClick(stack, doc, entered, 'normal', selection);
         if (resolved && !selection.includes(resolved.id)) select([resolved.id]);
         setContextMenu({ x: e.clientX, y: e.clientY, stack });
       }}

@@ -197,7 +197,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-03 | ⌘C / ⌘X / ⌘V / ⇧⌘V | Copy, cut, paste, paste in place | All four; plain text on the clipboard becomes a text layer | parity | `Editor.tsx:510-539`; test `editor.spec.ts:153` |
 | K-04 | ⌘D duplicate | Yes | Yes | parity | `Editor.tsx:580-584` |
 | K-05 | `]` / `[` bring to front / send to back | Yes | Yes | parity | `Editor.tsx:651-652`; `store.ts:1095-1108`; test `editor.spec.ts:1196` |
-| <a id="k-06"></a>K-06 | ⌘] / ⌘\[ bring forward / send backward one step | Yes | parity | 'back'`; there is no single-step path and no key bound. — **fixed `dfec129`**. | missing | `store.ts:1095`; `Editor.tsx:651-652`; menu at `ContextMenu.tsx:395-396` |
+| <a id="k-06"></a>K-06 | ⌘] / ⌘\[ bring forward / send backward one step | Yes | Both, one place at a time | parity | `store.ts:1095` reorder takes forward/backward; `Editor.tsx:651-660`; menu at `ContextMenu.tsx:395-398` — **fixed `dfec129`** |
 | <a id="k-07"></a>K-07 | Digit keys set opacity (`5` → 50%, `55` typed quickly → 55%, `0` → 100%) | Yes | parity | missing — **fixed `21141fe`**. | `Editor.tsx:677-695`; no `opacity` handler in the key effect |
 | K-08 | ⌘G / ⇧⌘G group, ungroup | Yes | Yes | parity | `Editor.tsx:542-555` |
 | K-09 | ⌥⌘G frame selection | Yes | Yes | parity | `Editor.tsx:326-331` |
@@ -387,7 +387,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | SV-02 | MCP stays batched | `edit_design` runs ops through a ref table; `write_html` builds a screen in one call | Both present | parity | `server/mcp.ts`; `server/mcp-html.ts`; `mcp.spec.ts` |
 | SV-03 | Comments outside the undo scope | Yes | Yes | parity | `store.ts:868-899` |
 | SV-04 | Curves only in `geometry.ts`, booleans only in `clipper.ts` | Yes | Yes | parity | `document/geometry.ts`; `document/clipper.ts` |
-| SV-05 | Selection rules only in `selection.ts` | Yes | Mostly — but `Canvas.tsx` builds the marquee's geometry itself instead of measuring the DOM (see S-05) | partial | `Canvas.tsx:620-626` |
+| SV-05 | Selection rules only in `selection.ts` | Yes | Yes — the marquee now injects a DOM-measuring `rectOf` rather than building geometry itself | parity | `Canvas.tsx` marquee release; `selection.ts:132-149` — **fixed `d770604`** |
 
 ---
 

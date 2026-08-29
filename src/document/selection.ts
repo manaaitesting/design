@@ -56,6 +56,8 @@ export function resolveClick(
   doc: Doc,
   entered: string | null,
   mode: ClickMode,
+  /** what is selected now — a press on it keeps it rather than starting again */
+  selection: string[] = [],
 ): { id: string; entered: string | null } | null {
   const deepest = stack[0];
   if (!deepest) return null;
@@ -63,6 +65,17 @@ export function resolveClick(
   if (mode === 'deep') {
     const parent = doc[deepest]?.parent ?? null;
     return { id: deepest, entered: parent && doc[parent]?.type !== 'page' ? parent : null };
+  }
+
+  // A layer you have already selected stays selected when you press it. Without
+  // this, picking a buried layer — in the panel, or by drilling in — and then
+  // reaching for it on the canvas hands you its artboard instead, and the drag
+  // moves the whole board. Deepest first, so pressing a selected child of a
+  // selected frame takes the child.
+  const held = stack.find((id) => selection.includes(id));
+  if (held) {
+    const parent = doc[held]?.parent ?? null;
+    return { id: held, entered: parent && doc[parent]?.type !== 'page' ? parent : entered };
   }
 
   if (entered && doc[entered]) {

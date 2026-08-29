@@ -320,6 +320,30 @@ test('a marquee inside a frame you have drilled into catches the right layers', 
 });
 
 /**
+ * A layer you have already selected stays selected when you press it. Picking a
+ * buried layer in the panel and then reaching for it on the canvas used to hand
+ * you its artboard instead — and the drag then moved the whole board.
+ */
+test('pressing a layer that is already selected drags it, not its artboard', async ({ page }) => {
+  const cover = await nodeNamed(page, 'Cover');
+  const board = await nodeNamed(page, 'Fixture Board');
+  // selected from the panel, the way you would reach a nested layer
+  await page.locator(`.fig-layer[data-layer-id="${board!.id}"] .fig-caret, .fig-layer[data-layer-id="${board!.id}"]`).first().click();
+  await select(page, [cover!.id]);
+
+  const box = await page.locator(`[data-node-id="${cover!.id}"]`).boundingBox();
+  await dragBy(page, { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }, { x: 40, y: 0 });
+
+  const after = await doc(page);
+  // the layer moved, and the board it sits on did not
+  expect(after[cover!.id].x).toBe(cover!.x + 40);
+  expect(after[board!.id].x).toBe(board!.x);
+  expect(await selection(page)).toEqual([cover!.id]);
+
+  await page.evaluate(([id, x]) => window.paperlike!.store.update(id as string, { x: x as number }), [cover!.id, cover!.x] as const);
+});
+
+/**
  * Searching the layers panel. Assets and Variables each had a search field;
  * Layers, which is the list you actually have to find things in, did not.
  */
