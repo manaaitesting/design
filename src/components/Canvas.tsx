@@ -662,18 +662,56 @@ export function Canvas() {
             // two picked the wrong layers the moment you had drilled into a
             // frame — and a hug-sized layer's stored size can lag what is on
             // screen in any case. The browser has already laid all of it out.
-            const canvasRect = rootRef.current!.getBoundingClientRect();
-            const vpNow = useUI.getState().viewport;
-            const caught = nodesInBox(final, doc, level, (id) => {
-              const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
-              if (!el) return null;
-              const r = el.getBoundingClientRect();
-              const topLeft = toWorld(vpNow, r.left - canvasRect.left, r.top - canvasRect.top);
-              return { x: topLeft.x, y: topLeft.y, w: r.width / vpNow.zoom, h: r.height / vpNow.zoom };
-            });
+            const caught = marqueeIn(final, level, doc, rootRef.current!, useUI.getState().viewport);
             select(additive ? [...new Set([...kept, ...caught])] : caught);
           }
           setMarquee(null);
+        },
+      );
+      return;
+    }
+
+    // ── A frame's own background ─────────────────────────────────────────
+    // Figma's rule: if the frame is already selected, dragging its background
+    // moves it; if it is not, dragging marquees what is inside it. A press that
+    // never moves is a click either way, and a click picks the frame. This is
+    // why a frame's name label matters — it is how you take hold of a board you
+    // have not selected yet.
+    const under = doc[stack[0]];
+    const onBackground = !!under && (under.type === 'frame' || under.type === 'section');
+    if (onBackground && !selection.includes(under.id) && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      const container = under.id;
+      const kept = event.shiftKey ? [...selection] : [];
+      let box: Draft | null = null;
+      drag(
+        store,
+        event,
+        (e) => {
+          const current = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
+          box = {
+            type: 'rect',
+            x: Math.min(start.x, current.x),
+            y: Math.min(start.y, current.y),
+            w: Math.abs(current.x - start.x),
+            h: Math.abs(current.y - start.y),
+          };
+          setMarquee(box);
+        },
+        () => {
+          const final = box;
+          setMarquee(null);
+          if (final && final.w > 3 && final.h > 3) {
+            select([...new Set([...kept, ...marqueeIn(final, container, doc, rootRef.current!, vp)])]);
+            // you are now working inside it, as you would be after drilling in
+            setEntered(container);
+            return;
+          }
+          // never moved: an ordinary click, which picks the board
+          const clicked = resolveClick(stack, doc, entered, 'normal', selection);
+          if (clicked) {
+            select([clicked.id]);
+            setEntered(clicked.entered);
+          }
         },
       );
       return;
@@ -1200,6 +1238,32 @@ function containerAt(
     current = current.parent ? doc[current.parent] : undefined;
   }
   return current?.id ?? null;
+}
+
+/**
+ * The layers at one level that a marquee has swept up.
+ *
+ * Measured, not read off the document. A node's x/y is local to its parent
+ * while the marquee is in world coordinates, so comparing the two picked the
+ * wrong layers the moment you had drilled into a frame — and a hug-sized
+ * layer's stored size can lag what is on screen in any case. The browser has
+ * already laid all of it out.
+ */
+function marqueeIn(
+  box: { x: number; y: number; w: number; h: number },
+  level: string,
+  doc: Doc,
+  root: HTMLElement,
+  vp: { x: number; y: number; zoom: number },
+): string[] {
+  const canvasRect = root.getBoundingClientRect();
+  return nodesInBox(box, doc, level, (id) => {
+    const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const topLeft = toWorld(vp, r.left - canvasRect.left, r.top - canvasRect.top);
+    return { x: topLeft.x, y: topLeft.y, w: r.width / vp.zoom, h: r.height / vp.zoom };
+  });
 }
 
 /**

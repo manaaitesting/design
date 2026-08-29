@@ -18,7 +18,7 @@ import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
 import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
-import { isInFlow, ROOT_ID, pageOf, type BooleanOp, type Doc } from '../document/types';
+import { isInFlow, ROOT_ID, pageOf, topLevelOf, type BooleanOp, type Doc } from '../document/types';
 import { firstChild, inverseOf, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
 import { canEditPoints } from '../document/geometry';
@@ -728,6 +728,33 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
           run.length > 1 ? Number(run.slice(-2)) : Number(run) === 0 ? 100 : Number(run) * 10;
         store.updateMany(selection, { opacity: Math.min(100, Math.max(0, percent)) / 100 });
         store.commit();
+        return;
+      }
+
+      // ── Walking the boards ─────────────────────────────────────────────
+      // N and ⇧N, which Figma files under Zoom: the next or previous frame on
+      // the page, in canvas order — left to right, then top to bottom, which is
+      // the order Figma reads a page in rather than the stacking order.
+      if (!mod && !event.altKey && event.code === 'KeyN') {
+        event.preventDefault();
+        const boards = (doc[ui.page]?.children ?? [])
+          .filter((id) => doc[id]?.type === 'frame' || doc[id]?.type === 'section')
+          .sort((a, b) => doc[a].x - doc[b].x || doc[a].y - doc[b].y);
+        if (!boards.length) return;
+
+        const here = selection.length ? boards.indexOf(topLevelOf(selection[0], doc)) : -1;
+        const next =
+          here < 0
+            ? event.shiftKey
+              ? boards.length - 1
+              : 0
+            : (here + (event.shiftKey ? -1 : 1) + boards.length) % boards.length;
+
+        const id = boards[next];
+        select([id]);
+        const bounds = selectionBounds([id], doc);
+        const fitted = bounds && fitBounds(bounds, leftPanel, ui.leftWidth, ui.rightWidth);
+        if (fitted) ui.setViewport(fitted);
         return;
       }
 

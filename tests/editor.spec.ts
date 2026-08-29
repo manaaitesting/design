@@ -160,6 +160,84 @@ test('the Frame tool offers presets, and one of them makes the board', async ({ 
   await removeNodes(page, [made.id]);
 });
 
+/**
+ * N and ⇧N — which Figma files under Zoom, not under navigation. The order is
+ * the page's reading order, left to right and then top to bottom, rather than
+ * the stacking order the layers panel shows.
+ */
+test('N walks the boards in canvas order, and ⇧N walks back', async ({ page }) => {
+  const ids = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    // made out of order on purpose: the walk is by position, not by stacking
+    const made = [
+      store.create('frame', 'root', { name: 'Middle', x: 900, y: 500, w: 200, h: 150, flex: null } as never),
+      store.create('frame', 'root', { name: 'Right', x: 1300, y: 500, w: 200, h: 150, flex: null } as never),
+      store.create('frame', 'root', { name: 'Left', x: 700, y: 500, w: 200, h: 150, flex: null } as never),
+    ];
+    store.commit();
+    window.paperlike!.ui.getState().select([]);
+    return made;
+  });
+  const name = async () => {
+    const nodes = await doc(page);
+    return nodes[(await selection(page))[0]]?.name;
+  };
+
+  await page.keyboard.press('n');
+  // the Fixture Board is at x 0, so it comes before any of these
+  expect(await name()).toBe('Fixture Board');
+  await page.keyboard.press('n');
+  expect(await name()).toBe('Left');
+  await page.keyboard.press('n');
+  expect(await name()).toBe('Middle');
+  await page.keyboard.press('Shift+n');
+  expect(await name()).toBe('Left');
+
+  // and it framed what it landed on rather than only selecting it
+  const view = await page.evaluate(() => window.paperlike!.ui.getState().viewport);
+  const box = await page.locator(`[data-node-id="${ids[2]}"]`).boundingBox();
+  expect(box).not.toBeNull();
+  expect(view.zoom).toBeGreaterThan(0);
+
+  await removeNodes(page, ids);
+});
+
+/**
+ * Figma's rule for a frame's own background: a selected frame is moved by it,
+ * an unselected one is marqueed inside. It is why a frame's name label matters
+ * — that is how you take hold of a board you have not selected yet.
+ */
+test('dragging an unselected frame background marquees inside it, selected moves it', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'Board', x: 200, y: 500, w: 400, h: 250, fill: '#FFFFFF', flex: null,
+    } as never);
+    const a = store.create('rect', frame, { name: 'Chip', x: 20, y: 20, w: 60, h: 60, fill: '#4CC3F0' } as never);
+    store.commit();
+    window.paperlike!.ui.getState().select([]);
+    return { frame, a };
+  });
+
+  // unselected: a drag across its background sweeps up what is inside
+  const box = await page.locator(`[data-node-id="${built.frame}"]`).boundingBox();
+  await dragBy(page, { x: box!.x + 200, y: box!.y + 200 }, { x: -180, y: -180 });
+  expect(await selection(page)).toEqual([built.a]);
+  expect((await doc(page))[built.frame].x).toBe(200);
+
+  // selected: the same drag moves the board
+  await select(page, [built.frame]);
+  await dragBy(page, { x: box!.x + 200, y: box!.y + 200 }, { x: 40, y: 0 });
+  expect((await doc(page))[built.frame].x).toBe(240);
+
+  // and a press that never moves is still just a click
+  await select(page, []);
+  await page.mouse.click(box!.x + 240, box!.y + 200);
+  expect(await selection(page)).toEqual([built.frame]);
+
+  await removeNodes(page, [built.frame]);
+});
+
 test('⇧⌘K opens a picker and places the image it is given', async ({ page }) => {
   const chooser = page.waitForEvent('filechooser');
   await page.keyboard.press('Shift+Meta+k');
