@@ -146,6 +146,58 @@ test('dragging a child inside an auto layout reorders it, and leaves the frame a
   await removeNodes(page, [built.frame]);
 });
 
+test('a ⇧ marquee adds to the selection instead of replacing it', async ({ page }) => {
+  const kept = await makeNode(page, 'rect', { name: 'Kept', x: 700, y: 500, w: 60, h: 60, fill: '#4CC3F0' });
+  const swept = await makeNode(page, 'rect', { name: 'Swept', x: 700, y: 620, w: 60, h: 60, fill: '#F2637F' });
+  await select(page, [kept]);
+
+  // a marquee from empty canvas that covers Swept and nothing else. Kept sits
+  // 120 world units above Swept, so a box that starts 20 above it cannot reach.
+  const box = await page.locator(`[data-node-id="${swept}"]`).boundingBox();
+  await dragBy(page, { x: box!.x + 20, y: box!.y + 120 }, { x: 60, y: -140 }, ['Shift']);
+
+  const nodes = await doc(page);
+  expect((await selection(page)).map((id) => nodes[id].name).sort()).toEqual(['Kept', 'Swept']);
+  await removeNodes(page, [kept, swept]);
+});
+
+/**
+ * A marquee is measured against what is on screen, not against the numbers in
+ * the document. Once you have drilled into a frame those numbers are local to
+ * that frame while the marquee is in world coordinates, and comparing the two
+ * selects whatever happens to overlap by coincidence.
+ */
+test('a marquee inside a frame you have drilled into catches the right layers', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const outer = store.create('frame', 'root', {
+      name: 'Outer', x: 700, y: 0, w: 400, h: 300, fill: '#FFFFFF', flex: null,
+    } as never);
+    const near = store.create('frame', outer, {
+      name: 'Near', x: 20, y: 20, w: 60, h: 60, fill: '#4CC3F0', flex: null,
+    } as never);
+    const far = store.create('frame', outer, {
+      name: 'Far', x: 20, y: 120, w: 60, h: 60, fill: '#F2637F', flex: null,
+    } as never);
+    store.commit();
+    return { outer, near, far };
+  });
+
+  // double-click drills in: Near is selected and Outer is the level we are at
+  await page.locator(`[data-node-id="${built.near}"]`).click();
+  await page.locator(`[data-node-id="${built.near}"]`).dblclick();
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().entered)).toBe(built.outer);
+
+  // ⇧ keeps that level while a marquee sweeps Far, whose stored x/y (20, 120)
+  // are nothing like its world position
+  const box = await page.locator(`[data-node-id="${built.far}"]`).boundingBox();
+  await dragBy(page, { x: box!.x - 70, y: box!.y + 130 }, { x: 150, y: -140 }, ['Shift']);
+
+  const nodes = await doc(page);
+  expect((await selection(page)).map((id) => nodes[id].name).sort()).toEqual(['Far', 'Near']);
+  await removeNodes(page, [built.outer]);
+});
+
 /**
  * The resize modifiers. Both are muscle memory rather than features: ⌥ holds the
  * centre, ⇧ holds the proportion, and between them they are most of what sizing
@@ -3053,3 +3105,4 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 });
+

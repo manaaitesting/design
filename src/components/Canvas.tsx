@@ -594,7 +594,11 @@ export function Canvas() {
     }
 
     if (!stack.length) {
-      if (!event.shiftKey) {
+      // ⇧ makes a marquee additive, as it does everywhere else in Figma: what
+      // it sweeps up joins the selection instead of replacing it
+      const additive = event.shiftKey;
+      const kept = additive ? [...selection] : [];
+      if (!additive) {
         select([]);
         setEntered(null);
       }
@@ -618,12 +622,21 @@ export function Canvas() {
           if (final && final.w > 3 && final.h > 3) {
             // marquee works at whatever level you're in, like Figma
             const level = entered && doc[entered] ? entered : page.id;
-            select(
-              nodesInBox(final, doc, level, (id) => {
-                const n = doc[id];
-                return n ? { x: n.x, y: n.y, w: n.w, h: n.h } : null;
-              }),
-            );
+            // Measured, not read off the document. A node's x/y is local to its
+            // parent while the marquee is in world coordinates, so comparing the
+            // two picked the wrong layers the moment you had drilled into a
+            // frame — and a hug-sized layer's stored size can lag what is on
+            // screen in any case. The browser has already laid all of it out.
+            const canvasRect = rootRef.current!.getBoundingClientRect();
+            const vpNow = useUI.getState().viewport;
+            const caught = nodesInBox(final, doc, level, (id) => {
+              const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              const topLeft = toWorld(vpNow, r.left - canvasRect.left, r.top - canvasRect.top);
+              return { x: topLeft.x, y: topLeft.y, w: r.width / vpNow.zoom, h: r.height / vpNow.zoom };
+            });
+            select(additive ? [...new Set([...kept, ...caught])] : caught);
           }
           setMarquee(null);
         },
