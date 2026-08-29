@@ -577,6 +577,37 @@ test('a resize snaps its edge to a sibling, as a move does', async ({ page }) =>
   await removeNodes(page, [mover, anchor]);
 });
 
+/**
+ * A group resize has to work in one space. The layers' x/y are local to their
+ * parent while the group box is in world coordinates, so scaling one against
+ * the other threw a nested selection clear across the page.
+ */
+test('resizing a group of nested layers scales them inside their frame', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'Holder', x: 200, y: 500, w: 400, h: 200, fill: '#FFFFFF', flex: null,
+    } as never);
+    const near = store.create('rect', frame, { name: 'Near', x: 20, y: 20, w: 60, h: 60, fill: '#4CC3F0' } as never);
+    const far = store.create('rect', frame, { name: 'Far', x: 200, y: 20, w: 60, h: 60, fill: '#F2637F' } as never);
+    store.commit();
+    return { frame, near, far };
+  });
+  await select(page, [built.near, built.far]);
+
+  const handle = await page.locator('[data-group-handle="e"]').boundingBox();
+  await dragBy(page, { x: handle!.x + handle!.width / 2, y: handle!.y + handle!.height / 2 }, { x: 120, y: 0 });
+
+  const nodes = await doc(page);
+  // 240 wide about a west edge at world 220, taken to 360: everything keeps its
+  // place inside Holder, and nothing leaves it
+  expect([nodes[built.near].x, nodes[built.near].w]).toEqual([20, 90]);
+  expect([nodes[built.far].x, nodes[built.far].w]).toEqual([290, 90]);
+  expect([nodes[built.near].y, nodes[built.near].h]).toEqual([20, 60]);
+
+  await removeNodes(page, [built.frame]);
+});
+
 test('⌥ on a multi-selection handle scales about the middle of the group', async ({ page }) => {
   const left = await makeNode(page, 'rect', { name: 'Left', x: 500, y: 600, w: 100, h: 100, fill: '#4CC3F0' });
   const right = await makeNode(page, 'rect', { name: 'Right', x: 640, y: 600, w: 100, h: 100, fill: '#F2637F' });

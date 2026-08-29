@@ -73,6 +73,25 @@ export function useRects(ids: string[], containerRef: RefObject<HTMLDivElement |
   return rects;
 }
 
+/**
+ * Where a parent's content starts, in world coordinates, measured.
+ *
+ * A node's x/y is local to its parent, so anything computed in world terms has
+ * to come back through this before it can be written. A page has no element of
+ * its own, and page-local already *is* world, so the origin is nothing.
+ */
+function parentOrigin(
+  id: string | null | undefined,
+  base: DOMRect,
+  vp: { x: number; y: number; zoom: number },
+): { x: number; y: number } {
+  if (!id) return { x: 0, y: 0 };
+  const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+  if (!el) return { x: 0, y: 0 };
+  const rect = el.getBoundingClientRect();
+  return toWorld(vp, rect.left - base.left, rect.top - base.top);
+}
+
 export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivElement | null> }) {
   const doc = useDoc();
   const store = useStore();
@@ -150,7 +169,22 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     // it — invisible only while the canvas sat at the origin.
     const corner = toWorld(viewport, bounds.x, bounds.y);
     const originWorld = { x: corner.x, y: corner.y, w: bounds.w / zoom, h: bounds.h / zoom };
-    const start = selection.map((id) => ({ id, node: doc[id] })).filter((entry) => entry.node);
+
+    // Each layer is pinned by where it *is* rather than by its stored x/y, which
+    // is local to its parent while the group box is in world coordinates —
+    // scaling one against the other threw a nested selection across the page.
+    // The middle is the right thing to measure: it survives a rotation, which
+    // the top-left corner of an axis-aligned measurement does not.
+    const base = containerRef.current?.getBoundingClientRect();
+    const start = selection
+      .map((id) => {
+        const node = doc[id];
+        const rect = rects[id];
+        if (!node || !rect || !base) return null;
+        const middle = toWorld(viewport, rect.x + rect.w / 2, rect.y + rect.h / 2);
+        return { id, node, middle, origin: parentOrigin(node.parent, base, viewport) };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => !!entry);
 
     const move = (e: PointerEvent) => {
       const dx = (e.clientX - event.clientX) / zoom;
@@ -187,15 +221,22 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           ? originWorld.y + originWorld.h
           : originWorld.y;
 
+      const sx = Math.max(scaleX, 0.01);
+      const sy = Math.max(scaleY, 0.01);
       store.updateMany(
         start.map((entry) => entry.id),
         (n) => {
-          const source = start.find((entry) => entry.id === n.id)!.node;
+          const from = start.find((entry) => entry.id === n.id)!;
+          // scale where the layer sits, then put it back in its parent's terms
+          const middleX = anchorX + (from.middle.x - anchorX) * sx;
+          const middleY = anchorY + (from.middle.y - anchorY) * sy;
+          const w = Math.max(1, Math.round(from.node.w * sx));
+          const h = Math.max(1, Math.round(from.node.h * sy));
           return {
-            x: Math.round(anchorX + (source.x - anchorX) * Math.max(scaleX, 0.01)),
-            y: Math.round(anchorY + (source.y - anchorY) * Math.max(scaleY, 0.01)),
-            w: Math.max(1, Math.round(source.w * Math.max(scaleX, 0.01))),
-            h: Math.max(1, Math.round(source.h * Math.max(scaleY, 0.01))),
+            x: Math.round(middleX - w / 2 - from.origin.x),
+            y: Math.round(middleY - h / 2 - from.origin.y),
+            w,
+            h,
             wMode: 'fixed' as const,
             hMode: 'fixed' as const,
           };
