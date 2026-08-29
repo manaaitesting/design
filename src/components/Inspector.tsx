@@ -5079,6 +5079,7 @@ function ExportSection({
             value={row.format}
             options={[
               { value: 'png', label: 'PNG' },
+              { value: 'jpg', label: 'JPG' },
               { value: 'pdf', label: 'PDF' },
               { value: 'svg', label: 'SVG' },
               { value: 'react', label: 'React', divider: true },

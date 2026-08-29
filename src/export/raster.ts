@@ -281,6 +281,25 @@ export async function nodeToPng(
 }
 
 /**
+ * Renders the node to a JPG at the requested pixel scale.
+ *
+ * JPEG has no alpha, so anything transparent in the layer comes out black
+ * unless something is painted behind it — which is exactly what Figma's JPG
+ * export does, and the reason PNG stays the default.
+ */
+export async function nodeToJpg(
+  nodeId: string,
+  zoom: number,
+  scale: number,
+  vars: Record<string, string> = {},
+  contentsOnly = false,
+): Promise<Blob> {
+  const serialised = nodeToSvg(nodeId, zoom, vars, contentsOnly);
+  if (!serialised) throw new Error('That layer is not on screen — scroll it into view and try again.');
+  return encode(await rasterise(serialised, scale), 'image/jpeg', 'Encoding the JPG failed.');
+}
+
+/**
  * Renders the node to a one-page PDF.
  *
  * The page is the layer's own size in points — PDF's unit is 1/72", which is

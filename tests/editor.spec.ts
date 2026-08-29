@@ -2103,6 +2103,25 @@ test.describe('panel controls that used to do nothing', () => {
     expect(settings![0].suffix).toBe('-dark');
   });
 
+  test('a layer exports as a JPG', async ({ page }) => {
+    const cover = await nodeNamed(page, 'Cover');
+    await select(page, [cover!.id]);
+
+    await page.getByRole('button', { name: 'Add export settings' }).click();
+    await page.getByTitle('Format').click();
+    await page.getByRole('listbox').getByRole('option', { name: 'JPG', exact: true }).click();
+
+    const wait = page.waitForEvent('download');
+    await page.locator('.fig-export').click();
+    const saved = await wait;
+    expect(saved.suggestedFilename()).toMatch(/^Cover@\dx\.jpg$/);
+
+    // JFIF: the two SOI bytes, and the marker that says what the rest is
+    const bytes = readFileSync((await saved.path())!);
+    expect([bytes[0], bytes[1]]).toEqual([0xff, 0xd8]);
+    expect(bytes.subarray(0, 12).toString('latin1')).toContain('JFIF');
+  });
+
   /**
    * PDF is the format a handoff asks for, and it was the one format the type
    * did not have. The page comes out the size of the layer in points, since a

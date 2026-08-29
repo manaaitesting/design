@@ -454,7 +454,7 @@ export interface ConstraintSpec {
 }
 
 /** What an export produces. Code formats ignore the scale. */
-export type ExportFormat = 'react' | 'html' | 'tailwind' | 'json' | 'png' | 'svg' | 'pdf';
+export type ExportFormat = 'react' | 'html' | 'tailwind' | 'json' | 'png' | 'jpg' | 'svg' | 'pdf';
 
 /**
  * One line of a layer's Export section.
