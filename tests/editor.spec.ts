@@ -109,6 +109,35 @@ test('dragging a layer clear of every frame returns it to the page', async ({ pa
   await removeNodes(page, [frame, id]);
 });
 
+test('two children of an auto layout reorder together, keeping their order', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'Shelf', x: 200, y: 500, w: 400, h: 100, fill: '#FFFFFF',
+      flex: {
+        mode: 'flex', direction: 'row', gap: 10, padding: [0, 0, 0, 0],
+        align: 'start', justify: 'start', wrap: false,
+      },
+    } as never);
+    const kid = (name: string, fill: string) =>
+      store.create('rect', frame, { name, w: 60, h: 60, fill } as never);
+    const ids = [kid('P', '#F2637F'), kid('Q', '#4CC3F0'), kid('R', '#9B7BF0'), kid('S', '#111111')];
+    store.commit();
+    return { frame, ids };
+  });
+  // P and Q, the first two, dragged past R together
+  await select(page, [built.ids[0], built.ids[1]]);
+
+  const box = await page.locator(`[data-node-id="${built.ids[0]}"]`).boundingBox();
+  await dragBy(page, { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }, { x: 150, y: 0 }, ['Meta']);
+
+  const nodes = await doc(page);
+  expect(nodes[built.frame].children.map((id: string) => nodes[id].name)).toEqual([
+    'R', 'P', 'Q', 'S',
+  ]);
+  await removeNodes(page, [built.frame]);
+});
+
 test('dropping into an auto layout lands where the pointer is, not at the end', async ({ page }) => {
   const built = await page.evaluate(() => {
     const store = window.paperlike!.store;

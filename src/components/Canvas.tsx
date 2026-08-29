@@ -682,9 +682,19 @@ export function Canvas() {
     // siblings. The reorder is applied live rather than previewed: the layout
     // reflowing under the pointer *is* Figma's insertion indicator, and drawing
     // a second one over a layout that had not moved would be the lie.
-    if (nextSelection.length === 1 && isInFlow(doc[nextSelection[0]], doc)) {
-      const childId = nextSelection[0];
-      const parentId = doc[childId].parent!;
+    const flowParent = nextSelection.length && doc[nextSelection[0]]
+      ? doc[nextSelection[0]].parent
+      : null;
+    const reordering =
+      !!flowParent &&
+      nextSelection.every((id) => doc[id] && isInFlow(doc[id], doc) && doc[id].parent === flowParent);
+    if (reordering) {
+      const parentId = flowParent!;
+      // moved as a block, in the order they are stacked, so a multi-selection
+      // keeps its own order wherever it lands
+      const kids = [...nextSelection].sort(
+        (a, b) => doc[parentId].children.indexOf(a) - doc[parentId].children.indexOf(b),
+      );
       let shifted = false;
       drag(
         store,
@@ -697,25 +707,25 @@ export function Canvas() {
           if (!parent?.flex) return;
           // outside the frame this is a drop, not a reorder — the release
           // handler below hands it to the same code the free canvas uses
-          const want = flowPositionAt(parent, childId, e.clientX, e.clientY);
-          const at = parent.children.indexOf(childId);
+          const slot = flowSlotAt(parent, kids, e.clientX, e.clientY);
+          if (!slot) return;
+          const others = parent.children.filter((id) => !kids.includes(id));
+          const next = [...others.slice(0, slot.position), ...kids, ...others.slice(slot.position)];
           // the list already reads this way — a write here would be a no-op
           // that still costs every sibling a re-render
-          if (want === null || want === at) return;
-          // `moveMany` takes the layer out before inserting, so an index past
-          // where it currently sits has to account for its own removal
-          store.moveMany([childId], parentId, want >= at ? want + 1 : want);
+          if (next.join() === parent.children.join()) return;
+          store.moveMany(kids, parentId, slot.index);
         },
         (e) => {
           if (!shifted) return;
           const now = store.getSnapshot();
-          const skip = new Set([childId, ...descendants(childId, now)]);
+          const skip = new Set(kids.flatMap((id) => [id, ...descendants(id, now)]));
           const target = containerAt(e.clientX, e.clientY, now, skip) ?? page.id;
-          if (target === now[childId]?.parent) return;
+          if (target === now[kids[0]]?.parent) return;
           dropInto(
             store,
             now,
-            [childId],
+            kids,
             target,
             page.id,
             rootRef.current!.getBoundingClientRect(),
@@ -727,8 +737,8 @@ export function Canvas() {
       return;
     }
 
-    // Anything else that flows — a multi-selection inside a layout — still moves
-    // the nearest absolutely-placed ancestor, while selection stays on the child.
+    // Anything left flows only partly, or not at all: dragging it moves the
+    // nearest absolutely-placed ancestor, while selection stays on the child.
     const movers = [...new Set(nextSelection.map((id) => draggableTarget(id, doc)))];
     // read positions from the live snapshot: duplicates were only just created
     const snapshot = store.getSnapshot();
@@ -1163,29 +1173,30 @@ function containerAt(
 }
 
 /**
- * Where a pointer sits among an auto layout's children, counted over the
- * siblings the dragged layer is *not* — so the answer is a position in that
- * list, not an index into the parent's children.
+ * Where a pointer sits among an auto layout's children.
+ *
+ * Counted over the siblings that are *not* being dragged, and returned both as
+ * a position in that list and as the index `moveMany` needs to land them there.
  *
  * The siblings are measured rather than computed: the browser has already
  * flowed them, and after a wrap or a grid track their positions are not
  * something the document can be asked for. Returns null when nothing could be
  * measured, which is the caller's signal to leave the order alone.
  */
-function flowPositionAt(
+function flowSlotAt(
   parent: SceneNode,
-  childId: string,
+  exclude: string[],
   clientX: number,
   clientY: number,
-): number | null {
-  const others = parent.children.filter((id) => id !== childId);
+): { position: number; index: number } | null {
+  const others = parent.children.filter((id) => !exclude.includes(id));
   if (!others.length) return null;
   // a wrapping row and a grid both read left-to-right, top-to-bottom; a plain
   // row or column has only its own axis to compare along
   const wrapping = !!parent.flex && (parent.flex.mode === 'grid' || parent.flex.wrap);
   const horizontal = parent.flex?.direction === 'row';
 
-  let seen = 0;
+  let position = 0;
   let measured = false;
   for (const id of others) {
     const rect = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`)?.getBoundingClientRect();
@@ -1200,10 +1211,16 @@ function flowPositionAt(
       : horizontal
         ? clientX > rect.left + rect.width / 2
         : clientY > rect.top + rect.height / 2;
-    if (past) seen++;
+    if (past) position++;
   }
   if (!measured) return null;
-  return seen;
+
+  // `moveMany` takes the layers out before putting them back, so the index it
+  // wants is one into the *original* list that lands them at `position` once
+  // they are gone. The child now standing at that position is that index.
+  const index =
+    position < others.length ? parent.children.indexOf(others[position]) : parent.children.length;
+  return { position, index };
 }
 
 /**
@@ -1251,8 +1268,8 @@ function dropInto(
     // layer is not a child yet, so a position among the existing children is
     // already the index to insert at.
     const target = doc[parentId];
-    const at = target?.flex ? flowPositionAt(target, id, pointer.x, pointer.y) : null;
-    store.reparent(id, parentId, at ?? undefined);
+    const slot = target?.flex ? flowSlotAt(target, [id], pointer.x, pointer.y) : null;
+    store.reparent(id, parentId, slot?.index);
     store.update(id, local);
   }
 }

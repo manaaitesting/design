@@ -1069,8 +1069,13 @@ export class DocStore {
         const at = order.indexOf(id);
         return at >= 0 && at < index;
       }).length;
-      let at = Math.max(0, index - before);
+      const at = Math.max(0, index - before);
 
+      // Every mover comes out before any goes back in. Detaching and inserting
+      // one at a time shifts the list under the movers still to come, so two
+      // layers dragged together from the same parent used to end up either side
+      // of a layer they were both supposed to pass.
+      const lifted: string[] = [];
       for (const id of movers) {
         const node = this.snap[id];
         const ymap = this.nodes.get(id);
@@ -1085,9 +1090,10 @@ export class DocStore {
           ymap.set('x', Math.round(node.x + (from.x ?? 0) - (to.x ?? 0)));
           ymap.set('y', Math.round(node.y + (from.y ?? 0) - (to.y ?? 0)));
         }
-        target.insert(Math.min(at, target.length), [id]);
-        at++;
+        lifted.push(id);
       }
+      // as one block, so they keep the order they were given
+      if (lifted.length) target.insert(Math.min(at, target.length), lifted);
     });
   }
 
