@@ -1091,8 +1091,14 @@ export class DocStore {
     });
   }
 
-  /** `]` bring to front · `[` send to back — z-order is document order. */
-  reorder(ids: string[], where: 'front' | 'back'): void {
+  /**
+   * `]` bring to front · `[` send to back · `⌘]` forward · `⌘[` backward.
+   *
+   * Z-order is document order, last child in front. The stepping pair moves one
+   * place rather than all the way, which is the difference between nudging a
+   * layer past the one above it and losing where it was in the stack.
+   */
+  reorder(ids: string[], where: 'front' | 'back' | 'forward' | 'backward'): void {
     this.transact(() => {
       for (const id of ids) {
         const parentId = this.snap[id]?.parent;
@@ -1101,8 +1107,19 @@ export class DocStore {
         if (!siblings) continue;
         const index = siblings.toArray().indexOf(id);
         if (index < 0) continue;
+        // the insertion point is read against the list with this layer already
+        // taken out of it, which is one shorter
+        const last = siblings.length - 1;
+        const to =
+          where === 'front'
+            ? last
+            : where === 'back'
+              ? 0
+              : where === 'forward'
+                ? Math.min(index + 1, last)
+                : Math.max(index - 1, 0);
         siblings.delete(index, 1);
-        siblings.insert(where === 'front' ? siblings.length : 0, [id]);
+        siblings.insert(to, [id]);
       }
     });
   }

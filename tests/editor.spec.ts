@@ -162,6 +162,40 @@ test('a ⇧ marquee adds to the selection instead of replacing it', async ({ pag
 });
 
 /**
+ * Figma splits the bracket keys: bare goes all the way, ⌘ steps one place. Only
+ * the first pair existed, so a layer could be sent to the front or the back and
+ * nowhere in between.
+ */
+test('⌘] and ⌘[ move a layer one place, not all the way', async ({ page }) => {
+  const ids = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const made = ['A', 'B', 'C', 'D'].map((name, i) =>
+      store.create('rect', 'root', { name, x: 700 + i * 70, y: 500, w: 60, h: 60, fill: '#4CC3F0' } as never),
+    );
+    store.commit();
+    return made;
+  });
+  const order = async () => {
+    const nodes = await doc(page);
+    return nodes.root.children.filter((id: string) => ids.includes(id)).map((id: string) => nodes[id].name);
+  };
+  expect(await order()).toEqual(['A', 'B', 'C', 'D']);
+
+  await select(page, [ids[1]]);
+  await page.keyboard.press('Meta+BracketRight');
+  expect(await order()).toEqual(['A', 'C', 'B', 'D']);
+
+  await page.keyboard.press('Meta+BracketLeft');
+  expect(await order()).toEqual(['A', 'B', 'C', 'D']);
+
+  // and the bare key still goes the whole way
+  await page.keyboard.press('BracketRight');
+  expect(await order()).toEqual(['A', 'C', 'D', 'B']);
+
+  await removeNodes(page, ids);
+});
+
+/**
  * A marquee is measured against what is on screen, not against the numbers in
  * the document. Once you have drilled into a frame those numbers are local to
  * that frame while the marquee is in world coordinates, and comparing the two

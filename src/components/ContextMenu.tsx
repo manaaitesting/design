@@ -393,6 +393,8 @@ function Menu({ menu }: { menu: OpenMenu }) {
     },
 
     { label: 'Bring to front', shortcut: ']', divider: true, disabled: !has, run: () => store.reorder(selection, 'front') },
+    { label: 'Bring forward', shortcut: '⌘]', disabled: !has, run: () => store.reorder(selection, 'forward') },
+    { label: 'Send backward', shortcut: '⌘[', disabled: !has, run: () => store.reorder(selection, 'backward') },
     { label: 'Send to back', shortcut: '[', disabled: !has, run: () => store.reorder(selection, 'back') },
 
     {

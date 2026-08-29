@@ -648,8 +648,15 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         if (id) select([id]);
         return;
       }
-      if (event.key === ']' && selection.length) return store.reorder(selection, 'front');
-      if (event.key === '[' && selection.length) return store.reorder(selection, 'back');
+      // bare brackets go all the way, ⌘ steps one place — Figma's split
+      if (event.key === ']' && selection.length) {
+        event.preventDefault();
+        return store.reorder(selection, mod ? 'forward' : 'front');
+      }
+      if (event.key === '[' && selection.length) {
+        event.preventDefault();
+        return store.reorder(selection, mod ? 'backward' : 'back');
+      }
 
       // ── Nudge ──────────────────────────────────────────────────────────
       if (event.key.startsWith('Arrow') && selection.length) {
