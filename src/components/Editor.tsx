@@ -116,6 +116,15 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
   // effect sets it, to say the canvas has already been pointed somewhere.
   const framed = useRef(false);
 
+  /**
+   * The last digit typed, for Figma's opacity shortcut.
+   *
+   * A single digit is tens — 5 is 50% — but a second one typed straight after
+   * refines the first rather than replacing it, so 4 then 5 is 45% and not 50%.
+   * That only works if the keys remember each other for a moment.
+   */
+  const opacityKeys = useRef({ at: 0, digits: '' });
+
   // A copied link carries `?page=` and, when it points at one layer, `?node=`.
   // Both are honoured once the document has actually loaded, rather than on
   // whatever arrived first — and `node` wins, since a link to a layer says
@@ -665,6 +674,30 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         const dx = event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0;
         const dy = event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0;
         store.updateMany(selection, (n) => ({ x: n.x + dx, y: n.y + dy }));
+        return;
+      }
+
+      // ── Opacity ────────────────────────────────────────────────────────
+      // Figma's digits: 5 is 50%, 0 is 100%, and a second digit typed straight
+      // after refines the first — 4 then 5 is 45%. The zoom shortcuts below
+      // take the same digits behind ⌘ or ⇧, which is why these want neither.
+      if (
+        !mod &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.repeat &&
+        selection.length &&
+        /^[0-9]$/.test(event.key)
+      ) {
+        event.preventDefault();
+        const now = Date.now();
+        const run =
+          now - opacityKeys.current.at < 700 ? opacityKeys.current.digits + event.key : event.key;
+        opacityKeys.current = { at: now, digits: run.slice(-2) };
+        const percent =
+          run.length > 1 ? Number(run.slice(-2)) : Number(run) === 0 ? 100 : Number(run) * 10;
+        store.updateMany(selection, { opacity: Math.min(100, Math.max(0, percent)) / 100 });
+        store.commit();
         return;
       }
 

@@ -162,6 +162,38 @@ test('a ⇧ marquee adds to the selection instead of replacing it', async ({ pag
 });
 
 /**
+ * The digits set opacity. The editor's own comment named them as Figma's
+ * opacity shortcut — as the reason the zoom keys need a modifier — and then
+ * never handled them, so pressing 5 did nothing at all.
+ */
+test('the digit keys set opacity, and two in a row read as one number', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Fader', x: 700, y: 500, w: 60, h: 60, fill: '#4CC3F0' });
+  await select(page, [id]);
+  const opacity = async () => (await doc(page))[id].opacity;
+
+  await page.keyboard.press('5');
+  expect(await opacity()).toBeCloseTo(0.5, 5);
+
+  // 0 is 100%, not nothing
+  await page.waitForTimeout(800);
+  await page.keyboard.press('0');
+  expect(await opacity()).toBeCloseTo(1, 5);
+
+  // 4 then 5, straight after, is 45% — not 40% and then 50%
+  await page.waitForTimeout(800);
+  await page.keyboard.press('4');
+  await page.keyboard.press('5');
+  expect(await opacity()).toBeCloseTo(0.45, 5);
+
+  // …and once the run has lapsed, a digit starts again
+  await page.waitForTimeout(800);
+  await page.keyboard.press('2');
+  expect(await opacity()).toBeCloseTo(0.2, 5);
+
+  await removeNodes(page, [id]);
+});
+
+/**
  * Figma splits the bracket keys: bare goes all the way, ⌘ steps one place. Only
  * the first pair existed, so a layer could be sent to the front or the back and
  * nowhere in between.
