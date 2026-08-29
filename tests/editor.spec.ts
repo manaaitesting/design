@@ -45,6 +45,70 @@ test('dragging moves a layer', async ({ page }) => {
 });
 
 /**
+ * Figma decides a layer's parent by where you drop it. Moving a layer onto a
+ * frame makes it a child of that frame, and moving it off every frame gives it
+ * back to the page — in both directions without the layer appearing to move,
+ * which is the whole point: the drop changes the tree, not the picture.
+ */
+test('dropping a layer on a frame makes it a child of that frame', async ({ page }) => {
+  // a frame away from the origin, so a parent-local coordinate is not the same
+  // number as the world one and a wrong conversion cannot pass by accident
+  const frame = await makeNode(page, 'frame', {
+    name: 'Adopter', x: 700, y: 0, w: 300, h: 300, fill: '#FFFFFF', flex: null,
+  });
+  const id = await makeNode(page, 'rect', {
+    name: 'Adoptee', x: 700, y: 400, w: 100, h: 60, fill: '#F2637F',
+  });
+  await select(page, [id]);
+
+  const before = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+  await dragBy(page, { x: before!.x + before!.width / 2, y: before!.y + before!.height / 2 }, { x: 80, y: -270 });
+
+  const after = (await doc(page))[id];
+  expect(after.parent).toBe(frame);
+  // world (780, 130) inside a frame at (700, 0)
+  expect([after.x, after.y]).toEqual([80, 130]);
+
+  // and it did not jump on screen: the box is where the drag left it
+  const moved = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+  expect(moved!.x).toBeCloseTo(before!.x + 80, 0);
+  expect(moved!.y).toBeCloseTo(before!.y - 270, 0);
+
+  await removeNodes(page, [frame, id]);
+});
+
+test('dragging a layer clear of every frame returns it to the page', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'Releaser', x: 700, y: 0, w: 300, h: 300, fill: '#FFFFFF', flex: null,
+  });
+  const id = await page.evaluate((parent) => {
+    const made = window.paperlike!.store.create('rect', parent, {
+      name: 'Escapee', x: 20, y: 20, w: 80, h: 60, fill: '#7B61FF',
+    });
+    window.paperlike!.store.commit();
+    return made;
+  }, frame);
+  await select(page, [id]);
+
+  const before = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+  // ⌘ takes the layer under the pointer rather than the frame around it, which
+  // is the only way to get hold of a child without drilling in first
+  await dragBy(
+    page,
+    { x: before!.x + before!.width / 2, y: before!.y + before!.height / 2 },
+    { x: 0, y: 580 },
+    ['Meta'],
+  );
+
+  const nodes = await doc(page);
+  expect(nodes[id].parent).toBe(nodes[frame].parent);
+  // local (20, 20) in a frame at (700, 0), dragged 580 down, is world (720, 600)
+  expect([nodes[id].x, nodes[id].y]).toEqual([720, 600]);
+
+  await removeNodes(page, [frame, id]);
+});
+
+/**
  * The size readout is the only feedback during a draw, so it has to track the
  * pointer — a number that only appears on release is a number you cannot draw
  * to.

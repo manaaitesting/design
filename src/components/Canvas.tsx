@@ -24,7 +24,7 @@ import { VectorEdit } from './VectorEdit';
 import { useDoc, useSession, useStore, useTokenVars } from './Session';
 import type { DocStore } from '../document/store';
 import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
-import { isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
+import { descendants, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
 import { snap, snapCandidates } from '../document/snapping';
 import { fitOnCanvas, imageFilesFrom, readImageFile } from '../lib/images';
 import { ARROW, CROSSHAIR } from '../lib/cursors';
@@ -711,7 +711,25 @@ export function Canvas() {
           return { x: place(origin.x + dx), y: place(origin.y + dy) };
         });
       },
-      () => setGuides([]),
+      (e) => {
+        setGuides([]);
+        // a click that never moved is a selection, not a drop
+        if (!moved) return;
+        const now = store.getSnapshot();
+        // the dragged layers are under the pointer for the whole gesture, so
+        // they and everything inside them are invisible to the drop test
+        const skip = new Set(movers.flatMap((id) => [id, ...descendants(id, now)]));
+        const target = containerAt(e.clientX, e.clientY, now, skip) ?? page.id;
+        dropInto(
+          store,
+          now,
+          movers,
+          target,
+          page.id,
+          rootRef.current!.getBoundingClientRect(),
+          useUI.getState().viewport,
+        );
+      },
     );
   };
 
@@ -1051,15 +1069,70 @@ function drag(
   window.addEventListener('pointerup', onUp);
 }
 
-/** The frame a new node should be dropped into, if the pointer is over one. */
-function containerAt(clientX: number, clientY: number, doc: Doc): string | null {
-  const hit = hitStack(clientX, clientY, doc)[0];
+/**
+ * The frame a node should be dropped into, if the pointer is over one.
+ *
+ * `skip` is for a drag: the layers being dragged are under the pointer the whole
+ * time, so hit-testing without excluding them would only ever find the parent
+ * they already have.
+ */
+function containerAt(
+  clientX: number,
+  clientY: number,
+  doc: Doc,
+  skip?: Set<string>,
+): string | null {
+  const stack = hitStack(clientX, clientY, doc);
+  const hit = skip ? stack.find((id) => !skip.has(id)) : stack[0];
   if (!hit || isLocked(hit, doc)) return null;
   let current: SceneNode | undefined = doc[hit];
   while (current && current.type !== 'frame' && current.type !== 'section') {
     current = current.parent ? doc[current.parent] : undefined;
   }
   return current?.id ?? null;
+}
+
+/**
+ * Figma's drop: a layer dragged over a frame becomes a child of that frame, and
+ * one dragged off every frame goes back to the page — in both cases without
+ * appearing to move.
+ *
+ * The position is read off the DOM rather than computed. A node's x/y is local
+ * to its parent, so rebasing it arithmetically only works while the two parents
+ * are siblings; asking the browser where the layer actually is works at any
+ * depth, and the browser has already laid it out.
+ */
+function dropInto(
+  store: DocStore,
+  doc: Doc,
+  movers: string[],
+  parentId: string,
+  pageId: string,
+  canvasRect: DOMRect,
+  vp: { x: number; y: number; zoom: number },
+): void {
+  // insert back-to-front so a multi-layer drop keeps its stacking
+  const ordered = [...movers].sort(
+    (a, b) =>
+      (doc[doc[a]?.parent ?? '']?.children.indexOf(a) ?? 0) -
+      (doc[doc[b]?.parent ?? '']?.children.indexOf(b) ?? 0),
+  );
+
+  for (const id of ordered) {
+    const node = doc[id];
+    if (!node || node.parent === parentId) continue;
+    const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+    if (!el) continue;
+    const rect = el.getBoundingClientRect();
+    const world = toWorld(vp, rect.left - canvasRect.left, rect.top - canvasRect.top);
+    // measured before the move, while the old tree is still on screen
+    const local =
+      parentId === pageId
+        ? { x: Math.round(world.x), y: Math.round(world.y) }
+        : localOffset(parentId, world.x, world.y, doc, canvasRect, vp);
+    store.reparent(id, parentId);
+    store.update(id, local);
+  }
 }
 
 /** World point → coordinates local to `parentId`'s padding box. */
