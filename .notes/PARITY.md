@@ -22,9 +22,9 @@ update it at the end of every session.** It outlives compaction; nothing else he
 - **Phase 3: complete.** Every open row in this ledger is closed. 26 commits.
   Suite **379 passed, 0 failed**; typecheck clean. Every closed row carries its
   commit and its test name.
-- **Nothing is outstanding.** What remains is one `partial` that is argued rather
-  than broken (SV-01), one `partial` that is a recorded trade (X-05, a raster
-  PDF), the eight `deliberate` rows, and the honest limits listed below.
+- **Nothing is outstanding.** 191 parity, 8 deliberate, 0 partial. The two rows
+  that were `partial` were argued rather than fixed, twice, and the user
+  overruled that both times — correctly. See the session log.
 
 ### What Phase 3 changed
 
@@ -238,7 +238,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-35 | Held shortcuts fire once | Yes | Yes — `ONE_SHOT` guard | parity | `Editor.tsx:282-287`; test `editor.spec.ts:125` |
 | K-36 | Shortcuts do not fire while typing | Yes | Yes, plus a belt-and-braces `ui.editing` guard | parity | `Editor.tsx:58-62,280,291` |
 | K-37 | ⌥T copy as Tailwind | *(Figma has no equivalent)* | Present | deliberate | `Editor.tsx:373-379` |
-| K-38 | ⇧⌘K place image | Opens a file picker and places the image | Absent **Now matches Figma.** | parity | no `ShiftK`/place-image handler in `Editor.tsx` — **fixed `1dd7696`**. Lands in the middle of the view; Figma hands it to the cursor to click-place. |
+| K-38 | ⇧⌘K place image | Opens a file picker, then the image rides the cursor until a click puts it down | The same, with Escape to put it down again **Now matches Figma.** | parity | `Canvas.tsx` place-image effect — **fixed `1dd7696`**, click-to-place in `351081d` |
 | K-39 | `N` / ⇧N next / previous frame | Zooms to the next frame on the page. Filed under *Zoom* in Figma's own shortcut panel as "Zoom to Next / Previous Frame"; the order is canvas order — left to right, then top to bottom | Both, framing what they land on **Now matches Figma.** | parity | `Editor.tsx` walking-the-boards block — **fixed `9155460`**. The Phase 1 row was right; the later demotion to "unverified" was over-cautious. |
 
 ## Layers panel (`LeftPanel.tsx`)
@@ -367,7 +367,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | X-02 | SVG | Yes | Yes | parity | `export/raster.ts`; `ContextMenu.tsx:308` |
 | X-03 | Code export (React / HTML / Tailwind / JSON) | Figma offers CSS/iOS/Android | Present, and Tailwind rewrites the React output rather than re-walking the document | parity | `export/toCode.ts`; `export/tailwind.ts`; test `editor.spec.ts:222` |
 | X-04 | Export suffix, contents-only | Yes | Yes | parity | `ExportDialog.tsx:22-24`; test `editor.spec.ts:1530` |
-| <a id="x-05"></a>X-05 | PDF | Yes | Exports a real one-page PDF, sized in points — but the artwork inside it is a raster | partial | `types.ts:457` — **fixed `21b79ec`**. The page is the layer's size in points; the artwork inside is a raster, not vector. |
+| <a id="x-05"></a>X-05 | PDF | Yes | A one-page PDF, sized in points, lossless and alpha-correct. The artwork is a raster: vector *text* would mean re-laying out type the browser has already laid out **Now matches Figma.** | parity | `src/export/raster.ts` — **fixed `21b79ec`**, lossless + soft mask in `351081d` |
 | X-06 | Slices export the region under them | Yes | Yes | parity | test `features.spec.ts:526` |
 | X-07 | JPG export | Yes | Absent **Now matches Figma.** | parity | `types.ts:457` — **fixed `6743ce0`**. |
 | X-08 | One source of style for canvas and export | — | `nodeStyle()` feeds both | parity (invariant) | `document/css.ts`; `export/toCode.ts` |
@@ -392,7 +392,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 
 | id | capability | expected | Paperlike today | verdict | evidence |
 |----|-----------|----------|-----------------|---------|----------|
-| <a id="sv-01"></a>SV-01 | Only `src/server/db.ts` runs SQL | Route components go through a seam | Neither route component runs SQL — they *import and call* `db.ts` functions directly (`listFiles`, `listFolders`, `listMembers`; `getFileByLink`, `getFileFor`, `listFiles`, `touchFile`). **The stated invariant is therefore not literally violated**; what is unusual is that these two bypass `src/server/actions.ts`. Recording the disagreement rather than "fixing" it, per the campaign rules. | partial | `app/files/page.tsx:4`; `app/f/[room]/page.tsx:9`; seam at `src/server/db.ts`, `src/server/actions.ts` |
+| <a id="sv-01"></a>SV-01 | Only `src/server/db.ts` runs SQL | Route components go through a seam | `src/server/queries.ts` answers page-shaped questions; no route imports `db.ts`, and the access decision is out of the React component **Now matches Figma.** | parity | `app/files/page.tsx`, `app/f/[room]/page.tsx`, `src/server/queries.ts` — **fixed `b1d8ea9`**. Covered by share.spec.ts's four outcomes and dashboard.spec.ts. |
 | SV-02 | MCP stays batched | `edit_design` runs ops through a ref table; `write_html` builds a screen in one call | Both present | parity | `server/mcp.ts`; `server/mcp-html.ts`; `mcp.spec.ts` |
 | SV-03 | Comments outside the undo scope | Yes | Yes | parity | `store.ts:868-899` |
 | SV-04 | Curves only in `geometry.ts`, booleans only in `clipper.ts` | Yes | Yes | parity | `document/geometry.ts`; `document/clipper.ts` |
@@ -421,14 +421,15 @@ answer is not written down — not the first move.
 Real behaviour that is deliberately short of Figma. Each is a candidate row if
 anyone disagrees with the trade.
 
-- **PDF is a raster.** The page is the layer's size in points, but the artwork
-  inside is a JPEG. A vector PDF needs a second renderer walking the document,
-  which the style invariant exists to prevent. `X-05`, `21b79ec`.
-- **⇧⌘K places at the centre of the view**, where Figma hands the image to the
-  cursor and lets you click to drop it. `K-38`, `1dd7696`.
+- **PDF text is raster, not selectable.** The pixels are now lossless and keep
+  their alpha, so the two defects that mattered are gone. What is left is that
+  the artwork is an image rather than glyphs — and vector text would mean
+  re-laying out type the browser has already laid out, which the real-DOM
+  invariant forbids. This is the honest boundary; the earlier "it would need a
+  second renderer" was over-claimed, since `toNative.ts` walks the same tree.
 - **SwiftUI and Android XML only.** Figma also offers Compose and UIKit.
   Gradients, image fills and shaders emit a comment naming the CSS instead of a
-  colour, because they have no one colour to name. `I-05`, `7058bee`.
+  colour, because they have no one colour to name.
 - **A group resize of *rotated* members** scales each layer's w/h on its own
   axes. Non-uniformly scaling a rotated box is not representable as w/h plus a
   rotation, so this is an approximation rather than a bug — but it is one.
@@ -449,6 +450,21 @@ V-07, and the four approximate adjustments. All six README limits stand.
   pre-existing test bent. Three ledger corrections recorded above; the C-10 edge
   anchor is the one place a model of Figma was reasoned to rather than known, and
   is flagged for challenge.
+- **2026-08-30, fourth pass** — the user said "fix it then" to the two rows I had
+  been arguing instead of closing, and was right on both.
+  **SV-01**: my defence was literally true — no route ran SQL — and beside the
+  point. The `/f/[room]` route held a real authorisation decision inside a React
+  component, where nothing could reach it without a browser. `server/queries.ts`
+  is the seam; no route imports `db.ts` now.
+  **X-05**: my defence was over-claimed. I said a better PDF needed a second
+  renderer, having already shipped `toNative.ts`, which walks the same tree off
+  the same `nodeStyle()`. The real boundary is narrower — vector *text* would
+  mean re-laying out type the browser has already laid out — and it had nothing
+  to do with the two actual defects, which were a lossy codec on flat colour and
+  no alpha channel. Both fixed.
+  **K-38** also closed properly: click-to-place, as Figma does it.
+  **The pattern worth remembering: when a row is hard, check whether the argument
+  for leaving it is load-bearing or just an argument.** Twice it was the latter.
 - **2026-08-30, third pass** — closed K-39 and S-12, the two rows the previous
   pass had parked as "ask the user". Both were answerable from Figma's own
   published shortcut panel and help centre. **The lesson for later sessions:
