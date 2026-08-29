@@ -147,6 +147,64 @@ test('dragging a child inside an auto layout reorders it, and leaves the frame a
 });
 
 /**
+ * The resize modifiers. Both are muscle memory rather than features: ⌥ holds the
+ * centre, ⇧ holds the proportion, and between them they are most of what sizing
+ * a layer by hand actually is.
+ */
+test.describe('resize modifiers', () => {
+  /** Presses the handle sitting on one corner or edge of the selected layer. */
+  const handleAt = async (page: import('@playwright/test').Page, id: string, cx: number, cy: number) => {
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    return { x: box!.x + box!.width * cx, y: box!.y + box!.height * cy };
+  };
+
+  test('⌥ resizes about the centre, so the far edge moves too', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'AltSize', x: 700, y: 500, w: 100, h: 100, fill: '#4CC3F0' });
+    await select(page, [id]);
+
+    await dragBy(page, await handleAt(page, id, 1, 1), { x: 50, y: 0 }, ['Alt']);
+
+    const after = (await doc(page))[id];
+    // 50 to the right of the east edge, and 50 to the left of the west one
+    expect([after.w, after.x]).toEqual([200, 650]);
+    // the axis that was not dragged is untouched
+    expect([after.h, after.y]).toEqual([100, 500]);
+    await removeNodes(page, [id]);
+  });
+
+  test('⇧ keeps the proportion on an edge handle, not only a corner', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'EdgeRatio', x: 700, y: 500, w: 100, h: 50, fill: '#F2637F' });
+    await select(page, [id]);
+
+    await dragBy(page, await handleAt(page, id, 1, 0.5), { x: 50, y: 0 }, ['Shift']);
+
+    const after = (await doc(page))[id];
+    // 2:1 held: the height follows the width the edge handle never touches
+    expect([after.w, after.h]).toEqual([150, 75]);
+    expect([after.x, after.y]).toEqual([700, 500]);
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * The one that was actually broken: the anchor used to be worked out from the
+   * un-ratioed size, so a ⇧-drag on a north or west handle scaled the box *and*
+   * slid it. The corner you are not holding has to stay where it is.
+   */
+  test('⇧ on a corner keeps the opposite corner pinned', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'CornerRatio', x: 700, y: 500, w: 100, h: 50, fill: '#9B7BF0' });
+    await select(page, [id]);
+
+    await dragBy(page, await handleAt(page, id, 0, 0), { x: -40, y: 0 }, ['Shift']);
+
+    const after = (await doc(page))[id];
+    expect([after.w, after.h]).toEqual([140, 70]);
+    // the south-east corner was at (800, 550) and is still there
+    expect([after.x + after.w, after.y + after.h]).toEqual([800, 550]);
+    await removeNodes(page, [id]);
+  });
+});
+
+/**
  * The size readout is the only feedback during a draw, so it has to track the
  * pointer — a number that only appears on release is a number you cannot draw
  * to.

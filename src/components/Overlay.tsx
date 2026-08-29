@@ -198,25 +198,56 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     const startW = rect?.w ? rect.w / viewport.zoom : node.w;
     const startH = rect?.h ? rect.h / viewport.zoom : node.h;
 
+    const ratio = startH ? startW / startH : 1;
+
     const move = (e: PointerEvent) => {
       const dx = (e.clientX - event.clientX) / viewport.zoom;
       const dy = (e.clientY - event.clientY) / viewport.zoom;
-      const patch: Partial<SceneNode> = { wMode: 'fixed', hMode: 'fixed' };
+      // which way each axis grows: away from the far edge, or back from the near
+      // one. A middle handle contributes nothing on its cross axis.
+      const ex = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
+      const ey = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
+      // ⌥ resizes about the centre, which means each edge takes the whole delta
+      // and the opposite edge takes it too
+      const reach = e.altKey ? 2 : 1;
 
-      if (handle.includes('e')) patch.w = Math.max(1, Math.round(startW + dx));
-      if (handle.includes('s')) patch.h = Math.max(1, Math.round(startH + dy));
-      if (handle.includes('w')) {
-        patch.w = Math.max(1, Math.round(startW - dx));
-        patch.x = Math.round(origin.x + (startW - patch.w!));
+      let w = ex ? startW + ex * dx * reach : startW;
+      let h = ey ? startH + ey * dy * reach : startH;
+
+      // ⇧ keeps the proportion — on an edge handle as well as a corner, which is
+      // where this used to give up
+      if (e.shiftKey || node.aspectLocked) {
+        if (ex && ey) {
+          // a corner follows whichever axis was pulled harder, so the box does
+          // not lurch when the drag is mostly along one of them
+          if (Math.abs(w / startW - 1) >= Math.abs(h / startH - 1)) h = w / ratio;
+          else w = h * ratio;
+        } else if (ex) h = w / ratio;
+        else if (ey) w = h * ratio;
       }
-      if (handle.includes('n')) {
-        patch.h = Math.max(1, Math.round(startH - dy));
-        patch.y = Math.round(origin.y + (startH - patch.h!));
-      }
-      if ((e.shiftKey || node.aspectLocked) && patch.w && patch.h) {
-        const ratio = startW / startH;
-        patch.h = Math.round(patch.w / ratio);
-      }
+      w = Math.max(1, Math.round(w));
+      h = Math.max(1, Math.round(h));
+
+      // The point the box grows away from, decided *after* the size is final —
+      // computing it first is what made a ⇧-drag on a north or west handle slide
+      // the box while it scaled.
+      const x = e.altKey
+        ? Math.round(origin.x + (startW - w) / 2)
+        : ex < 0
+          ? Math.round(origin.x + (startW - w))
+          : origin.x;
+      const y = e.altKey
+        ? Math.round(origin.y + (startH - h) / 2)
+        : ey < 0
+          ? Math.round(origin.y + (startH - h))
+          : origin.y;
+
+      const patch: Partial<SceneNode> = { w, h, wMode: 'fixed', hMode: 'fixed' };
+      // only write a coordinate that actually moved: a no-op write still pins
+      // the field as an override on a layer inside an instance
+      const live = store.getSnapshot()[id];
+      if (live && live.x !== x) patch.x = x;
+      if (live && live.y !== y) patch.y = y;
       store.update(id, patch);
     };
     const up = () => {
