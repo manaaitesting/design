@@ -161,6 +161,25 @@ test('a ⇧ marquee adds to the selection instead of replacing it', async ({ pag
   await removeNodes(page, [kept, swept]);
 });
 
+/**
+ * A wheel mouse has one axis. Without ⇧ turning it sideways there is no way to
+ * pan the canvas horizontally with a wheel at all — only a trackpad, which
+ * sends a deltaX of its own, could go across.
+ */
+test('⇧ with the wheel pans across, not down', async ({ page }) => {
+  const before = await page.evaluate(() => window.paperlike!.ui.getState().viewport);
+
+  await page.mouse.move(700, 500);
+  await page.keyboard.down('Shift');
+  await page.mouse.wheel(0, 120);
+  await page.keyboard.up('Shift');
+
+  const after = await page.evaluate(() => window.paperlike!.ui.getState().viewport);
+  expect(after.x).toBe(before.x - 120);
+  expect(after.y).toBe(before.y);
+  expect(after.zoom).toBe(before.zoom);
+});
+
 test('⏎ opens a selected text layer for editing', async ({ page }) => {
   const caption = await nodeNamed(page, 'Caption');
   await select(page, [caption!.id]);

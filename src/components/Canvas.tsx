@@ -192,6 +192,11 @@ export function Canvas() {
           // keep the point under the cursor pinned
           return { zoom, x: px - (px - vp.x) * scale, y: py - (py - vp.y) * scale };
         });
+      } else if (event.shiftKey) {
+        // ⇧ turns the wheel sideways. A trackpad sends deltaX of its own, but a
+        // wheel mouse has only one axis, and this is the whole of its
+        // horizontal pan — without it the canvas can only be scrolled up.
+        setViewport((vp) => ({ ...vp, x: vp.x - (event.deltaX || event.deltaY) }));
       } else {
         setViewport((vp) => ({ ...vp, x: vp.x - event.deltaX, y: vp.y - event.deltaY }));
       }
