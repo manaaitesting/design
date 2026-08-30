@@ -97,11 +97,17 @@ function Panel({
     });
   }, [x, y, items]);
 
+  // A panel with more rows than the window is tall cannot be clamped onto the
+  // screen — the arithmetic above pins it to the top and the rest hangs off the
+  // bottom, unreachable. Scrolling is what Figma does with a long menu, and it
+  // is the only answer that does not hide a command.
+  const fit = { maxHeight: 'calc(100vh - 16px)', overflowY: 'auto' as const };
+
   return (
     <div
       ref={ref}
       className="ctx"
-      style={{ left: at.left, top: at.top, width, visibility: at.ready ? 'visible' : 'hidden' }}
+      style={{ left: at.left, top: at.top, width, ...fit, visibility: at.ready ? 'visible' : 'hidden' }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
       role="menu"
