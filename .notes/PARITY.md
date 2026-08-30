@@ -37,8 +37,7 @@ update it at the end of every session.** It outlives compaction; nothing else he
   worked one at a time, plus a bug sweep. Now **17 rows: 16 parity, 1 partial**
   (`MO-02`, which is eleven properties against Figma's longer list). Two new
   rows, `MO-16` and `MO-17`, for behaviour the sweep turned up rather than for
-  anything Figma publishes. The work is in the working tree and not yet
-  committed, so these rows cite tests rather than hashes.
+  anything Figma publishes. All seventeen are in `d85ee70`.
 
 ### What Phase 3 changed
 
@@ -317,8 +316,9 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 
 Figma Motion is a different thing from the Prototype tab above: a transition
 animates the step *between* two frames, a timeline animates what happens
-*inside* one. Added this session; the commit is pending, so the rows carry test
-names rather than hashes (see the session log).
+*inside* one. Every row below landed in `d85ee70`, on the `motion` branch; the
+evidence column carries the file and the test rather than repeating the hash
+seventeen times.
 
 | id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
 |----|-----------|-------------------|-----------------|---------|----------|
@@ -557,8 +557,10 @@ V-07, and the four approximate adjustments. All six README limits stand.
   (MO-14) — both are real Figma behaviour and both are recorded as `missing`
   rather than argued away. The custom-curve editor (MO-04) is `partial` for the
   same reason: the model takes a bezier or a spring, the panel has no editor.
-  **Left uncommitted**, at the working tree, because the user did not ask for a
-  commit — the MO rows should take the hash when it lands.
+  **Landed in `d85ee70`** on the `motion` branch, together with the seventh
+  pass below — the two passes are one commit because the second rewrote the
+  compiler the first had written, and splitting them afterwards would have been
+  a fiction.
 - **2026-08-30, seventh pass — the rest of Motion, and a bug sweep.** The user
   asked for the unfinished rows one at a time and for the bugs to be found
   first. Suite **455 → 477 passing**, typecheck clean.
