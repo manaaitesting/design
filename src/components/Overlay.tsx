@@ -181,8 +181,17 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const slices = Object.values(doc)
     .filter((node) => node.type === 'slice' && node.visible)
     .map((node) => node.id);
+  /**
+   * A dev status is a flag on the canvas, and a flag has to be there when
+   * nothing is selected — that is the whole point of it. Sparse, like the
+   * slices above, so measuring them all costs nothing.
+   */
+  const flagged = Object.values(doc)
+    .filter((node) => node.devStatus && node.devStatus !== 'none' && node.visible)
+    .map((node) => node.id);
   const tracked = [...new Set([
     ...selection,
+    ...flagged,
     ...(hover ? [hover] : []),
     ...(entered ? [entered] : []),
     ...(lockedHint ? [lockedHint] : []),

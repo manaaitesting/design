@@ -928,6 +928,16 @@ function Menu({ menu }: { menu: OpenMenu }) {
       run: () => store.update(pageId, { thumbnailOf: selection[0] }),
     },
     {
+      // Figma marks work ready from the right-click menu as well as the panel,
+      // because the person doing the marking is looking at the canvas
+      label: first?.devStatus === 'ready' ? 'Mark as draft' : 'Mark as ready for dev',
+      disabled: !has,
+      run: () =>
+        store.updateMany(selection, {
+          devStatus: first?.devStatus === 'ready' ? 'none' : 'ready',
+        }),
+    },
+    {
       // Figma's menu says which way it will go, rather than offering both
       label: first?.flex ? 'Remove auto layout' : 'Add auto layout',
       shortcut: '⇧A',

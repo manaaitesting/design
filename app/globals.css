@@ -3829,3 +3829,29 @@ select {
 .mo-field-row .mo-num {
   width: 62px;
 }
+
+/* Dev Mode's index of what is ready to build. */
+.fig-ready {
+  display: flex;
+  flex-direction: column;
+}
+
+.fig-ready-row {
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+.fig-ready-row:hover {
+  background: var(--fig-hover, rgb(127 127 127 / 0.12));
+}
+
+.fig-ready-row[data-on='true'] {
+  color: var(--color-select, #0d99ff);
+  font-weight: 550;
+}
