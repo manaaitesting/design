@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { dragBy, doc, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
+import { guidesOf } from '../src/document/types';
 
 test.beforeEach(async ({ page }) => {
   await openEditor(page);
@@ -1653,6 +1654,42 @@ test('constraints reposition children when their frame resizes', async ({ page }
   await removeNodes(page, [frame]);
 });
 
+test('the constraint diagram pins an edge, stretches, and centres', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'PinFrame', x: 700, y: 40, w: 400, h: 200, fill: '#FFFFFF', flex: null,
+  });
+  const child = await page.evaluate(
+    (parent) =>
+      window.paperlike!.store.create('rect', parent, {
+        name: 'Pinned', x: 40, y: 40, w: 60, h: 40, fill: '#DDDDDD',
+      }),
+    frame,
+  );
+  await select(page, [child]);
+
+  const widget = page.getByRole('group', { name: 'Constraints' });
+  // the diagram reads the state out without a dropdown having to be opened
+  await expect(widget.getByLabel('Pin left')).toHaveAttribute('aria-pressed', 'true');
+  await expect(widget.getByLabel('Pin right')).toHaveAttribute('aria-pressed', 'false');
+
+  // the opposite bar as well as the one already pinned is Left and right
+  await widget.getByLabel('Pin right').click();
+  expect((await doc(page))[child].constraints!.h).toBe('stretch');
+  await expect(page.getByTitle('Horizontal constraint')).toHaveText(/Left and right/);
+
+  // and taking the first one off again leaves the layer pinned to the right
+  await widget.getByLabel('Pin left').click();
+  expect((await doc(page))[child].constraints!.h).toBe('end');
+
+  // the crossing four pixels belong to both lines, so press the vertical one clear of it
+  await widget.getByLabel('Center horizontally').click({ position: { x: 2, y: 3 } });
+  expect((await doc(page))[child].constraints!.h).toBe('center');
+  await widget.getByLabel('Center vertically').click({ position: { x: 3, y: 2 } });
+  expect((await doc(page))[child].constraints!.v).toBe('center');
+
+  await removeNodes(page, [frame]);
+});
+
 test('export produces React, HTML and JSON', async ({ page }) => {
   const artboard = await nodeNamed(page, 'Fixture Board');
   await select(page, [artboard!.id]);
@@ -1849,6 +1886,33 @@ test('the fill row matches Figma: one field holding swatch, hex and opacity', as
   const row = page.locator('.fig-paint').first().locator('..');
   await expect(row.locator('input[type="checkbox"][aria-label="Toggle visibility"]')).toHaveCount(1);
   await expect(row.locator('button[title="Remove"]')).toHaveCount(1);
+
+  await removeNodes(page, [id]);
+});
+
+test('\u21e7 makes a label-scrub step by ten, and \u2325 by a tenth', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Scrubbed', x: 40, y: 500, w: 100, h: 100, fill: '#d9d9d9' });
+  await select(page, [id]);
+
+  const glyph = page.getByTitle('Width').locator('.glyph');
+  const box = (await glyph.boundingBox())!;
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+  await dragBy(page, at, { x: 20, y: 0 });
+  expect((await doc(page))[id].w).toBe(120);
+
+  await dragBy(page, at, { x: 20, y: 0 }, ['Shift']);
+  expect((await doc(page))[id].w).toBe(320);
+
+  // a tenth-grain drag has to be able to land between the whole numbers
+  await dragBy(page, at, { x: 2, y: 0 }, ['Alt']);
+  expect((await doc(page))[id].w).toBeCloseTo(320.2, 3);
+
+  // the paint row's % handle takes the same accelerator
+  const percent = page.locator('.fig-paint-percent').first();
+  const pbox = (await percent.boundingBox())!;
+  await dragBy(page, { x: pbox.x + pbox.width / 2, y: pbox.y + pbox.height / 2 }, { x: -10, y: 0 }, ['Shift']);
+  expect((await doc(page))[id].fills![0].opacity).toBeCloseTo(0.5, 2);
 
   await removeNodes(page, [id]);
 });
@@ -2084,6 +2148,31 @@ test.describe('paint picker', () => {
 
     await page.getByRole('option', { name: 'Plus lighter' }).click();
     expect((await doc(page))[cover!.id].blend).toBe('plus-lighter');
+  });
+
+  test('a frame passes blending through until you set it to Normal', async ({ page }) => {
+    const frame = await makeNode(page, 'frame', { name: 'Isolator', x: 700, y: 40, w: 200, h: 200, fill: '#FFFFFF' });
+    await page.evaluate((id) => {
+      const store = window.paperlike!.store;
+      store.create('rect', id, { name: 'Darkener', x: 20, y: 20, w: 80, h: 80, blend: 'multiply' });
+      store.commit();
+    }, frame);
+    await select(page, [frame]);
+
+    // a frame starts pass-through, so the Multiply child reaches the page behind it
+    expect((await doc(page))[frame].blend).toBe('pass-through');
+    await expect(page.locator(`[data-node-id="${frame}"]`)).toHaveCSS('isolation', 'auto');
+
+    await page.getByRole('button', { name: /Apply blend mode/ }).click();
+    const list = page.getByRole('listbox', { name: 'Blend mode' });
+    await expect(list.getByRole('option')).toHaveCount(19);
+    await expect(list.getByRole('option').first()).toHaveText('Pass through');
+
+    await list.getByRole('option', { name: 'Normal', exact: true }).click();
+    expect((await doc(page))[frame].blend).toBe('normal');
+    await expect(page.locator(`[data-node-id="${frame}"]`)).toHaveCSS('isolation', 'isolate');
+
+    await removeNodes(page, [frame]);
   });
 
   test('the format dropdown round-trips a typed value', async ({ page }) => {
@@ -3552,6 +3641,39 @@ test.describe('effects', () => {
     await removeNodes(page, [id]);
   });
 
+  test("effects the selected layers disagree on read Mixed, not the first layer's list", async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'Dropped', x: 700, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      const b = store.create('rect', 'root', { name: 'Blurred', x: 800, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      const c = store.create('rect', 'root', { name: 'Dropped too', x: 900, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      store.commit();
+      return [a, b, c];
+    });
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Effects$/ }),
+    });
+
+    await select(page, [ids[0]]);
+    await addEffect(page, 'Drop shadow');
+    await select(page, [ids[1]]);
+    await addEffect(page, 'Layer blur');
+    await select(page, [ids[2]]);
+    await addEffect(page, 'Drop shadow');
+
+    await select(page, [ids[0], ids[1]]);
+    await expect(section).toContainText('Click + to replace mixed content');
+    // with no row there is nothing to nudge, so the blur is still a blur
+    await expect(section.getByTitle('Drop shadow settings')).toHaveCount(0);
+    expect((await doc(page))[ids[1]].effects![0].type).toBe('layer-blur');
+
+    // two shadows built the same way are the same shadow, whatever their ids
+    await select(page, [ids[0], ids[2]]);
+    await expect(section.getByTitle('Drop shadow settings')).toBeVisible();
+
+    await removeNodes(page, ids);
+  });
+
   test('the eye keeps an effect but takes it off the layer', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'Hidden', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
     await select(page, [id]);
@@ -4541,12 +4663,42 @@ test.describe('layout grid and text blocks', () => {
     await page.getByTitle('Column width').locator('input').fill('40');
     await page.keyboard.press('Enter');
 
-    const guides = (await doc(page))[board!.id].guides!;
+    // the frame was given a lone spec, as a document written before the stack has
+    const [guides] = guidesOf((await doc(page))[board!.id]);
     expect(guides.align).toBe('end');
     expect(guides.width).toBe(40);
 
     const track = page.locator(`[data-node-id="${board!.id}"] > div`).last().locator('> div').first();
     await expect(track).toHaveCSS('width', '40px');
+  });
+
+  test('a frame carries columns and a square grid at once, each with its own eye', async ({ page }) => {
+    const frame = await makeNode(page, 'frame', { name: 'Template', x: 700, y: 40, w: 400, h: 300, fill: '#FFFFFF' });
+    await select(page, [frame]);
+
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Layout grid$/ }),
+    });
+    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    // the + stays once there is one, because the second grid is not a replacement
+    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    await section.getByRole('button', { name: 'Grid', exact: true }).nth(1).click();
+
+    const guides = guidesOf((await doc(page))[frame]);
+    expect(guides.map((guide) => guide.type)).toEqual(['columns', 'grid']);
+    const overlays = page.locator(`[data-node-id="${frame}"] > div`);
+    await expect(overlays).toHaveCount(2);
+
+    // each grid's eye takes its own overlay off, and leaves the other one
+    await section.locator('input[aria-label="Toggle visibility"]').first().click();
+    expect(guidesOf((await doc(page))[frame]).map((guide) => guide.visible)).toEqual([false, true]);
+    await expect(overlays).toHaveCount(1);
+
+    // and each row's minus removes that grid alone
+    await section.getByRole('button', { name: 'Remove' }).first().click();
+    expect(guidesOf((await doc(page))[frame]).map((guide) => guide.type)).toEqual(['grid']);
+
+    await removeNodes(page, [frame]);
   });
 
   test('paragraph spacing and lists turn the lines into real blocks', async ({ page }) => {
@@ -4567,6 +4719,41 @@ test.describe('layout grid and text blocks', () => {
 
     await removeNodes(page, [id]);
   });
+});
+
+test("a stroke's opacity reaches the canvas, and its eye keeps the weight", async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Hairline', x: 700, y: 40, w: 160, h: 100, fill: '#FFFFFF' });
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, {
+      border: { width: 8, color: '#000000', style: 'solid', position: 'inside' },
+    });
+  }, id);
+  await select(page, [id]);
+
+  const section = page
+    .locator('.fig-section')
+    .filter({ has: page.getByRole('heading', { name: 'Stroke', exact: true }) });
+  await section.locator('input[aria-label="Opacity"]').fill('20');
+
+  expect((await doc(page))[id].border!.opacity).toBeCloseTo(0.2);
+  await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS(
+    'box-shadow',
+    /rgba\(0, 0, 0, 0\.2\)/,
+  );
+
+  // the eye hides the stroke; the weight is still 8 when it comes back
+  await section.locator('input[aria-label="Toggle visibility"]').click();
+  let border = (await doc(page))[id].border!;
+  expect(border.visible).toBe(false);
+  expect(border.width).toBe(8);
+  await expect(page.locator(`[data-node-id="${id}"]`)).not.toHaveCSS('box-shadow', /rgba/);
+
+  await section.locator('input[aria-label="Toggle visibility"]').click();
+  border = (await doc(page))[id].border!;
+  expect(border.visible).toBe(true);
+  expect(border.width).toBe(8);
+
+  await removeNodes(page, [id]);
 });
 
 test('the stroke-style menu opens inside the panel, with its own glyph', async ({ page }) => {

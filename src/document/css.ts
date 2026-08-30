@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import { effectStyle, effectsOf } from './effects';
+import { isContainer } from './layers';
 import { pathOfRegions, seededRegions, vectorRegions } from './regions';
 import {
   fillRuleOf,
@@ -276,13 +277,21 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
   const opacityName = opacityToken ? varNames[opacityToken] : undefined;
   if (opacityName) style.opacity = `calc(var(--${opacityName}) / 100)`;
   else if (node.opacity !== 1) style.opacity = node.opacity;
-  if (node.blend !== 'normal') style.mixBlendMode = node.blend as CSSProperties['mixBlendMode'];
+  // Figma's "Normal" on a group is CSS's isolation — a Multiply child blends
+  // against its siblings and stops at the group's edge — and "Pass through" is
+  // the absence of it, which is what a plain element does anyway.
+  if (node.blend === 'normal') {
+    if (isContainer(node)) style.isolation = 'isolate';
+  } else if (node.blend !== 'pass-through') {
+    style.mixBlendMode = node.blend as CSSProperties['mixBlendMode'];
+  }
 
   // Border, inner shadow and drop shadow all share `box-shadow`; the order here
   // is what stacks them correctly — insets first, drop last.
   const shadows: string[] = [];
-  if (node.border && !pathPainted) {
-    const { width, color, style: lineStyle, position, sides } = node.border;
+  if (node.border && node.border.visible !== false && !pathPainted) {
+    const { width, style: lineStyle, position, sides } = node.border;
+    const color = withAlpha(node.border.color, node.border.opacity ?? 1);
     if (sides) {
       // Individual strokes have to be real borders: a box-shadow ring cannot
       // have four different widths, which is the whole point of the control.
@@ -715,9 +724,9 @@ export function shapePaint(node: SceneNode): ShapePaint | null {
 
   const border = node.border;
   const stroke: ShapeStroke | null =
-    border && border.width > 0
+    border && border.visible !== false && border.width > 0
       ? {
-          color: border.color,
+          color: withAlpha(border.color, border.opacity ?? 1),
           width: border.width,
           dash: dashOf(border),
           cap: border.cap ?? 'butt',

@@ -141,6 +141,20 @@ export function effectsOf(node: SceneNode): Effect[] {
   return list;
 }
 
+/**
+ * Do two layers carry the same effects?
+ *
+ * The id is skipped: two shadows built the same way on two layers are the same
+ * effect to the person looking at them, and saying "Mixed" because a random
+ * suffix differs would be a lie about the design.
+ */
+export function sameEffects(a: Effect[], b: Effect[]): boolean {
+  if (a.length !== b.length) return false;
+  const shape = (effect: Effect) =>
+    JSON.stringify(Object.entries(effect).filter(([key]) => key !== 'id').sort());
+  return a.every((effect, index) => shape(effect) === shape(b[index]));
+}
+
 /** `rgba(0,0,0,0.25)` and `#RRGGBBAA` both read back as a hex and an alpha. */
 export function splitColor(value: string): { color: string; opacity: number } {
   const rgba = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+))?\s*\)$/i.exec(value.trim());
