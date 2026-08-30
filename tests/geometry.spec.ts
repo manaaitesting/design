@@ -254,12 +254,47 @@ test.describe('the boolean kernel', () => {
   });
 
   test('a stroke becomes the region a round pen sweeps', () => {
-    const line = strokeRegion([[[0, 0], [100, 0]]], 10, false);
+    const line = strokeRegion([[[0, 0], [100, 0]]], 10, false, { cap: 'round' });
     const ideal = 1000 + Math.PI * 25; // a 100×10 body with a half-disc each end
     // the caps are polygons, so the area lands just under the true circle — a
     // fraction of a percent, and the same trade every renderer makes
     expect(area(line)).toBeGreaterThan(ideal * 0.99);
     expect(area(line)).toBeLessThanOrEqual(ideal);
+  });
+
+  test('a butt cap stops at the end of the line and a square cap runs past it', () => {
+    const butt = strokeRegion([[[0, 0], [100, 0]]], 10, false, { cap: 'butt' });
+    expect(area(butt)).toBeCloseTo(1000, 2);
+    expect(regionBounds(butt)?.maxX).toBeCloseTo(100, 4);
+
+    const square = strokeRegion([[[0, 0], [100, 0]]], 10, false, { cap: 'square' });
+    // half a width of overhang at each end, which is what the canvas draws
+    expect(area(square)).toBeCloseTo(1100, 2);
+    expect(regionBounds(square)?.maxX).toBeCloseTo(105, 4);
+  });
+
+  test('a mitred corner keeps its spike until the miter angle gives up on it', () => {
+    const elbow: Region = [[[0, 0], [100, 0], [100, 100]]];
+    const miter = strokeRegion(elbow, 10, false, { cap: 'butt', join: 'miter' });
+    // the spike fills the corner square the two arms leave open
+    expect(inside([104, -4], miter)).toBe(true);
+    expect(area(miter)).toBeCloseTo(2000, 2);
+
+    const bevel = strokeRegion(elbow, 10, false, { cap: 'butt', join: 'bevel' });
+    expect(inside([104, -4], bevel)).toBe(false);
+    expect(area(bevel)).toBeCloseTo(1987.5, 2);
+
+    // a 90° corner is well inside the default 28.96°, so raising the angle past
+    // it is what makes the mitre give up and bevel instead
+    const given = strokeRegion(elbow, 10, false, { cap: 'butt', join: 'miter', miterAngle: 120 });
+    expect(area(given)).toBeCloseTo(area(bevel), 4);
+  });
+
+  test('a dashed stroke outlines into one shape per dash', () => {
+    const dashes = strokeRegion([[[0, 0], [100, 0]]], 10, false, { cap: 'butt', dash: 10, gap: 10 });
+    // 10 on, 10 off along 100: five marks, and the last one ends on the point
+    expect(dashes).toHaveLength(5);
+    expect(area(dashes)).toBeCloseTo(500, 2);
   });
 
   test('stroking a closed path leaves a ring with a hole in it', () => {

@@ -47,7 +47,7 @@ export default defineConfig({
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
     {
       name: 'editor',
-      testMatch: /(editor|features|motion-ui|tabs|share|dashboard|shaders)\.spec\.ts/,
+      testMatch: /(editor|features|motion-ui|tabs|share|dashboard|shaders|vector)\.spec\.ts/,
       dependencies: ['setup'],
       use: {
         ...devices['Desktop Chrome'],

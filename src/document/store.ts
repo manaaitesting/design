@@ -2094,7 +2094,7 @@ export class DocStore {
           ? variableWidthRegion(subpathsOf(node), node.border.width, node.smooth ?? 0)
           : null;
       if (!varied && !outline.length) continue;
-      const band = varied ?? strokeRegion(outline, node.border.width, closed);
+      const band = varied ?? strokeRegion(outline, node.border.width, closed, node.border);
       const region =
         varied || !closed || node.border.position === 'center'
           ? band
