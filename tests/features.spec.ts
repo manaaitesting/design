@@ -421,6 +421,45 @@ test.describe('rich text', () => {
     await removeNodes(page, [id]);
   });
 
+  /**
+   * ⇧⌥⌘V — paste without formatting.
+   *
+   * The text has to reach the *model*, for the same reason ⌘B does: what a
+   * `contentEditable` pastes is markup this editor treats as a view of the
+   * runs, so anything the model did not learn is gone the next time the spans
+   * are rebuilt. The text lands wearing whatever the caret was wearing.
+   */
+  test('\u21e7\u2325\u2318V pastes plain text at the caret, in the caret\'s style', async ({ page }) => {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const id = await seed(page);
+    await enter(page, id);
+    // 'brave' is bold, so the caret inside it is bold: the paste joins that run
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Meta+b');
+    await page.waitForTimeout(120);
+
+    await page.evaluate(() => navigator.clipboard.writeText('BOLD'));
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Shift+Alt+Meta+v');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.bold ? '*' : ''}`))
+      .toEqual(['hello ', 'BOLD*', ' new world']);
+    await removeNodes(page, [id]);
+  });
+
+  test('\u21e7\u2325\u2318V with the caret collapsed inserts rather than replaces', async ({ page }) => {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const id = await seed(page);
+    await enter(page, id);
+    await page.evaluate(() => navigator.clipboard.writeText('very '));
+    await selectRange(page, 6, 6);
+    await page.keyboard.press('Shift+Alt+Meta+v');
+
+    await expect.poll(async () => (await doc(page))[id].text).toBe('hello very brave new world');
+    await removeNodes(page, [id]);
+  });
+
   test('\u2318I and \u21e7\u2318X reach the runs as well', async ({ page }) => {
     const id = await seed(page);
     await enter(page, id);

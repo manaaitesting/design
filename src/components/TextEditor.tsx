@@ -11,6 +11,7 @@ import {
   plainText,
   replaceRange,
   runStyle,
+  styleAt,
   runsOf,
   styleOfRange,
   type RunPatch,
@@ -128,6 +129,42 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
     requestAnimationFrame(() => restore(editorRef.current, start, end));
   };
 
+  /**
+   * ⇧⌥⌘V — paste without formatting.
+   *
+   * The text goes in at the caret wearing whatever the caret was wearing, which
+   * is what `replaceRange` does with an insertion: it takes the style of the run
+   * it lands in. Going through the model rather than letting the browser paste
+   * is the same reason ⌘B does — a `contentEditable` pastes markup this editor
+   * treats as a view of the runs, so anything the model did not learn is gone
+   * the next time the spans are rebuilt.
+   */
+  const pastePlain = async () => {
+    const text = (await navigator.clipboard.readText()).replace(/\r\n/g, '\n');
+    if (!text) return;
+    const { start, end } = selection;
+
+    // `replaceRange` gives an insertion the style of the character *before* it,
+    // which is the right rule for typing and the wrong one for replacing a
+    // range: paste over a bold word and the result should be bold, not the
+    // colour of the space in front of it. So the style of what is being
+    // replaced is read first and put back on afterwards — every key the
+    // insertion would otherwise have inherited is cleared, or an unwanted bold
+    // would survive the overlay.
+    const wanted = end > start ? styleOfRange(runs.current, start, end) : null;
+    const inherited = styleAt(runs.current, Math.max(0, start - 1));
+    runs.current = replaceRange(runs.current, start, end, text);
+    if (wanted) {
+      const patch: RunPatch = {};
+      for (const key of Object.keys(inherited)) (patch as Record<string, unknown>)[key] = undefined;
+      runs.current = applyToRange(runs.current, start, start + text.length, { ...patch, ...wanted });
+    }
+    store.update(node.id, { runs: runs.current, text: plainText(runs.current) });
+    setGeneration((value) => value + 1);
+    const caret = start + text.length;
+    requestAnimationFrame(() => restore(editorRef.current, caret, caret));
+  };
+
   const current = styleOfRange(runs.current, selection.start, selection.end);
   const hasRange = selection.end > selection.start;
 
@@ -149,6 +186,15 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           }
           const mod = event.metaKey || event.ctrlKey;
           if (!mod) return;
+
+          // ⇧⌥⌘V drops whatever the clipboard was wearing and takes the
+          // caret's style instead. Claimed before the ⌥ guard below, which
+          // exists for the marks and would swallow it.
+          if (event.altKey && event.shiftKey && event.code === 'KeyV') {
+            event.preventDefault();
+            void pastePlain();
+            return;
+          }
 
           // ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J and ⇧⌘< / ⇧⌘> are properties of the layer
           // rather than of a run, and Figma keeps them working with the caret
