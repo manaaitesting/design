@@ -454,6 +454,24 @@ test.describe('rich text', () => {
     await removeNodes(page, [id]);
   });
 
+  /**
+   * The layer-wide type shortcuts keep working with the caret inside the layer,
+   * which is a second path: the text editor claims the key before the window
+   * handler can see it.
+   */
+  test('\u21e7\u2318> steps the size while the caret is inside the layer', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    const before = (await doc(page))[id].font!.size;
+    await selectRange(page, 2, 2);
+    await page.keyboard.press('Shift+Meta+Period');
+
+    await expect.poll(async () => (await doc(page))[id].font!.size).toBe(before + 1);
+    // and the layer is still being edited, not dropped out of
+    await expect(page.locator('[contenteditable]')).toBeVisible();
+    await removeNodes(page, [id]);
+  });
+
   test('typing inside a styled run keeps its styling', async ({ page }) => {
     const id = await seed(page);
     await page.evaluate((target) => {

@@ -23,7 +23,16 @@ import { firstChild, inverseOf, parentOf, siblingOf } from '../document/selectio
 import { openingFrame } from '../document/prototype';
 import { canEditPoints } from '../document/geometry';
 import { readNodes, writeNodes } from '../lib/clipboard';
-import { copyAsPng, copyProperties, flip, pasteAt, pasteProperties } from '../lib/actions';
+import {
+  alignText,
+  copyAsPng,
+  copyProperties,
+  flip,
+  pasteAt,
+  pasteProperties,
+  stepFontSize,
+  TEXT_ALIGN_KEYS,
+} from '../lib/actions';
 import { download, safeFilename } from '../export/raster';
 import { toTailwind } from '../export/tailwind';
 
@@ -481,6 +490,23 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         event.preventDefault();
         pasteProperties(store, selection);
         return;
+      }
+      // ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J — text alignment, which is a layer property here
+      // and so belongs on the selection rather than on a run
+      if (mod && event.altKey && !event.shiftKey && TEXT_ALIGN_KEYS[event.code] && selection.length) {
+        if (alignText(store, selection, TEXT_ALIGN_KEYS[event.code])) {
+          event.preventDefault();
+          return;
+        }
+      }
+      // ⇧⌘< / ⇧⌘> — one point of type at a time. `<` is ⇧, so the key underneath
+      // is the comma; matching the character would need the shift back off it.
+      if (mod && event.shiftKey && !event.altKey && selection.length) {
+        const step = event.code === 'Comma' ? -1 : event.code === 'Period' ? 1 : 0;
+        if (step && stepFontSize(store, selection, step)) {
+          event.preventDefault();
+          return;
+        }
       }
       if (!mod && event.shiftKey && event.code === 'KeyR') {
         event.preventDefault();

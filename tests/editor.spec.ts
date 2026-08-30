@@ -2642,6 +2642,60 @@ test.describe('effects', () => {
  * They are matched on the physical key because ⌥ rewrites the character on
  * macOS — ⌥A arrives as "å".
  */
+/**
+ * Figma's type shortcuts act on the layer rather than on a run: ⌥⌘L/T/R/J set
+ * the alignment, ⇧⌘< and ⇧⌘> step the size a point at a time. They work with a
+ * text layer selected and with the caret inside it, so both paths run the same
+ * two functions.
+ */
+test.describe('text shortcuts', () => {
+  const seedText = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => {
+      const id = window.paperlike!.store.create('text', 'root', {
+        name: 'Shortcut copy', x: 40, y: 700, w: 260, h: 40, text: 'align me',
+      });
+      window.paperlike!.store.commit();
+      return id;
+    });
+
+  test('\u2325\u2318R aligns the text, \u2325\u2318L puts it back', async ({ page }) => {
+    const id = await seedText(page);
+    await select(page, [id]);
+
+    await page.keyboard.press('Alt+Meta+r');
+    expect((await doc(page))[id].font?.align).toBe('right');
+    await page.keyboard.press('Alt+Meta+j');
+    expect((await doc(page))[id].font?.align).toBe('justify');
+    await page.keyboard.press('Alt+Meta+l');
+    expect((await doc(page))[id].font?.align).toBe('left');
+
+    await removeNodes(page, [id]);
+  });
+
+  test('\u21e7\u2318> and \u21e7\u2318< step the size one point at a time', async ({ page }) => {
+    const id = await seedText(page);
+    await select(page, [id]);
+    const before = (await doc(page))[id].font!.size;
+
+    await page.keyboard.press('Shift+Meta+Period');
+    await page.keyboard.press('Shift+Meta+Period');
+    expect((await doc(page))[id].font!.size).toBe(before + 2);
+
+    await page.keyboard.press('Shift+Meta+Comma');
+    expect((await doc(page))[id].font!.size).toBe(before + 1);
+
+    await removeNodes(page, [id]);
+  });
+
+  test('a selection with no text in it is left alone', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'NotText', x: 40, y: 800, w: 80, h: 40, fill: '#F2637F' });
+    await select(page, [id]);
+    await page.keyboard.press('Alt+Meta+r');
+    expect((await doc(page))[id].font).toBeUndefined();
+    await removeNodes(page, [id]);
+  });
+});
+
 test.describe('alignment shortcuts', () => {
   const ragged = (page: import('@playwright/test').Page) =>
     page.evaluate(() => {

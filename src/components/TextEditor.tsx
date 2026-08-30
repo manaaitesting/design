@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from './Session';
 import { useUI } from '../state/ui';
+import { alignText, stepFontSize, TEXT_ALIGN_KEYS } from '../lib/actions';
 import {
   applyToRange,
   diffText,
@@ -146,6 +147,27 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
             (event.currentTarget as HTMLElement).blur();
             return;
           }
+          const mod = event.metaKey || event.ctrlKey;
+          if (!mod) return;
+
+          // ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J and ⇧⌘< / ⇧⌘> are properties of the layer
+          // rather than of a run, and Figma keeps them working with the caret
+          // inside it. Changing `node.font` re-seeds the spans, so the caret has
+          // to be put back where it was.
+          const layer =
+            event.altKey && !event.shiftKey && TEXT_ALIGN_KEYS[event.code]
+              ? () => alignText(store, [node.id], TEXT_ALIGN_KEYS[event.code])
+              : !event.altKey && event.shiftKey && (event.code === 'Comma' || event.code === 'Period')
+                ? () => stepFontSize(store, [node.id], event.code === 'Period' ? 1 : -1)
+                : null;
+          if (layer) {
+            event.preventDefault();
+            const { start, end } = selection;
+            layer();
+            requestAnimationFrame(() => restore(editorRef.current, start, end));
+            return;
+          }
+
           // ⌘B / ⌘I / ⌘U / ⇧⌘X, as Figma binds them.
           //
           // These have to be claimed rather than left to the browser: a
@@ -154,8 +176,7 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           // plain text is unchanged, so `onInput` sees nothing, the model never
           // learns, and the styling disappears the next time the spans are
           // rebuilt. Doing it ourselves is the only way it survives.
-          const mod = event.metaKey || event.ctrlKey;
-          if (!mod || event.altKey) return;
+          if (event.altKey) return;
           const key = event.key.toLowerCase();
           const mark =
             !event.shiftKey && key === 'b'

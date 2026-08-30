@@ -1,7 +1,8 @@
 'use client';
 
 import { nodeStyle, styleToCss } from '../document/css';
-import type { Doc, SceneNode } from '../document/types';
+import type { Doc, FontSpec, SceneNode } from '../document/types';
+import { DEFAULT_FONT } from '../document/defaults';
 import type { DocStore } from '../document/store';
 import { nodeToPng, nodeToSvg } from '../export/raster';
 import { toWorld, type Viewport } from '../state/ui';
@@ -170,4 +171,45 @@ export function pasteAt(
 
 export function flip(store: DocStore, selection: string[], axis: 'h' | 'v'): void {
   store.updateMany(selection, (n) => (axis === 'h' ? { flipH: !n.flipH } : { flipV: !n.flipV }));
+}
+
+/**
+ * Figma's text shortcuts, which act on the layer rather than on a run.
+ *
+ * ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J set the alignment and ⇧⌘< / ⇧⌘> step the size, and both
+ * are reached from two places — the canvas with a text layer selected, and the
+ * text editor with the caret inside one. They live here so there is one mapping
+ * rather than two that can drift apart.
+ */
+export const TEXT_ALIGN_KEYS: Record<string, FontSpec['align']> = {
+  KeyL: 'left',
+  KeyT: 'center',
+  KeyR: 'right',
+  KeyJ: 'justify',
+};
+
+/** The text layers in a selection — the rest of it has no type to set. */
+function textNodes(store: DocStore, ids: string[]): string[] {
+  const doc = store.getSnapshot();
+  return ids.filter((id) => doc[id]?.type === 'text');
+}
+
+export function alignText(store: DocStore, ids: string[], align: FontSpec['align']): boolean {
+  const texts = textNodes(store, ids);
+  if (!texts.length) return false;
+  store.updateMany(texts, (n) => ({ font: { ...(n.font ?? DEFAULT_FONT), align } }));
+  store.commit();
+  return true;
+}
+
+/** One point at a time, as Figma steps it, and never down through zero. */
+export function stepFontSize(store: DocStore, ids: string[], by: number): boolean {
+  const texts = textNodes(store, ids);
+  if (!texts.length) return false;
+  store.updateMany(texts, (n) => {
+    const font = n.font ?? DEFAULT_FONT;
+    return { font: { ...font, size: Math.max(1, font.size + by) } };
+  });
+  store.commit();
+  return true;
 }
