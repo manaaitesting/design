@@ -8,9 +8,11 @@ import {
   applyToRange,
   diffText,
   isPlain,
+  LINE_BREAK,
   listBoxStyle,
   plainText,
   replaceRange,
+  runSegments,
   runStyle,
   styleAt,
   runsOf,
@@ -71,18 +73,27 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
     // The same blocks the canvas draws: editing is in place, so a bulleted list
     // has to stay bulleted and a paragraph gap has to stay open while the caret
     // is in it, or the text jumps the moment you double-click it.
+    // a soft break is a <br> inside the paragraph; an empty paragraph gets one
+    // too, because a block with no height cannot be clicked into
+    const fill = (line: TextRun[]): Node[] => {
+      const out: Node[] = [];
+      runSegments(line).forEach((segment, at) => {
+        if (at) out.push(document.createElement('br'));
+        for (const run of segment) out.push(paint(run));
+      });
+      return out.length ? out : [document.createElement('br')];
+    };
+
     const blocks = textBlocks(runs.current, node.font);
     if (!blocks) {
-      el.replaceChildren(...runs.current.map(paint));
+      el.replaceChildren(...fill(runs.current));
       return;
     }
 
     const lines = blocks.lines.map((line, at) => {
       const box = document.createElement(blocks.list ? 'li' : 'div');
       if (at && blocks.spacing) box.style.marginTop = `${blocks.spacing}px`;
-      // an empty paragraph has no text to give it a height, and a block with no
-      // height cannot be clicked into
-      box.replaceChildren(...(line.length ? line.map(paint) : [document.createElement('br')]));
+      box.replaceChildren(...fill(line));
       return box;
     });
     if (!blocks.list) {
@@ -162,10 +173,41 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
    * the only answer that is never a no-op, and a shortcut that silently does
    * nothing is worse than one that is missing.
    */
-  const targetRange = () =>
-    selection.end > selection.start
-      ? { start: selection.start, end: selection.end }
+  /**
+   * Where the caret is *now*.
+   *
+   * `selection` is a render behind: it is set from `selectionchange`, and a key
+   * pressed in the same frame as the click that moved the caret would act on
+   * where the caret was. The DOM always knows, so it is asked.
+   */
+  const liveRange = (): { start: number; end: number } => {
+    const el = editorRef.current;
+    const live = window.getSelection();
+    if (!el || !live || live.rangeCount === 0) return selection;
+    const range = live.getRangeAt(0);
+    if (!el.contains(range.startContainer)) return selection;
+    return {
+      start: offsetOf(el, range.startContainer, range.startOffset),
+      end: offsetOf(el, range.endContainer, range.endOffset),
+    };
+  };
+
+  const targetRange = () => {
+    const range = liveRange();
+    return range.end > range.start
+      ? range
       : { start: 0, end: plainText(runs.current).length };
+  };
+
+  /** Puts a string in at the caret, through the model rather than the DOM. */
+  const insert = (text: string) => {
+    const { start, end } = liveRange();
+    runs.current = replaceRange(runs.current, start, end, text);
+    store.update(node.id, { runs: runs.current, text: plainText(runs.current) });
+    setGeneration((value) => value + 1);
+    const caret = start + text.length;
+    requestAnimationFrame(() => restore(editorRef.current, caret, caret));
+  };
 
   const applyStyle = (patch: RunPatch) => {
     const { start, end } = targetRange();
@@ -238,6 +280,16 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
             (event.currentTarget as HTMLElement).blur();
             return;
           }
+          // ⏎ starts a paragraph and ⇧⏎ breaks the line inside one. Both are
+          // claimed rather than left to the browser, which spells them with
+          // whichever of a <div> and a <br> it feels like and gives the model no
+          // way to tell the two apart afterwards.
+          if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            event.preventDefault();
+            insert(event.shiftKey ? LINE_BREAK : '\n');
+            return;
+          }
+
           const mod = event.metaKey || event.ctrlKey;
           if (!mod) return;
 
@@ -297,7 +349,7 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           applyStyle({ [mark]: on ? undefined : true });
         }}
         onInput={(event) => {
-          const after = (event.currentTarget as HTMLElement).innerText ?? '';
+          const after = readText(event.currentTarget as HTMLElement);
           const before = plainText(runs.current);
           if (after === before) return;
           const { start, end, inserted } = diffText(before, after);
@@ -315,7 +367,7 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           const next = event.relatedTarget as HTMLElement | null;
           if (next?.closest?.('.fig-range-bar, .fig')) return;
 
-          const text = (event.currentTarget as HTMLElement).innerText ?? '';
+          const text = readText(event.currentTarget as HTMLElement);
           const before = plainText(runs.current);
           if (text !== before) {
             const { start, end, inserted } = diffText(before, text);
@@ -462,8 +514,8 @@ function walkText(
   root: HTMLElement,
   onText: (node: Text, from: number) => boolean | void,
   onChild?: (parent: Node, index: number, at: number) => void,
-): number {
-  let total = 0;
+): string {
+  let out = '';
   // a block owes a newline only once something is already in front of it
   let emitted = false;
   let done = false;
@@ -471,36 +523,52 @@ function walkText(
   const step = (node: Node): void => {
     if (node.nodeType === Node.TEXT_NODE) {
       const text = node as Text;
-      if (onText(text, total)) done = true;
-      total += text.data.length;
+      if (onText(text, out.length)) done = true;
+      out += text.data;
       if (text.data.length) emitted = true;
       return;
     }
     if (node.nodeName === 'BR') {
-      total += 1;
-      emitted = true;
+      // the lone <br> that gives an empty block a height is furniture, not a
+      // break — the browser puts one there too, for the same reason
+      if (node.parentNode?.childNodes.length !== 1) {
+        out += LINE_BREAK;
+        emitted = true;
+      }
       return;
     }
     const element = node as HTMLElement;
     const block = BLOCK.has(element.nodeName);
-    if (block && emitted) total += 1;
+    if (block && emitted) out += '\n';
     for (let i = 0; i < element.childNodes.length; i++) {
-      onChild?.(element, i, total);
+      onChild?.(element, i, out.length);
       if (done) return;
       step(element.childNodes[i]);
     }
-    onChild?.(element, element.childNodes.length, total);
+    onChild?.(element, element.childNodes.length, out.length);
     if (block) emitted = true;
   };
 
   step(root);
-  return total;
+  return out;
+}
+
+/**
+ * The editable's text, as the model spells it.
+ *
+ * `innerText` cannot be used for this: it renders a soft break and a paragraph
+ * break as the same `\n`, so a ⇧⏎ would turn back into a ⏎ on the very next
+ * keystroke. Reading the DOM with the same walk the offsets use keeps the two
+ * apart, and keeps the reading and the positions from ever disagreeing.
+ */
+function readText(root: HTMLElement): string {
+  return walkText(root, () => false);
 }
 
 /** A DOM position as a character offset in the element's text. */
 function offsetOf(root: HTMLElement, container: Node, offset: number): number {
   let answer: number | null = null;
-  const total = walkText(
+  const text = walkText(
     root,
     (text, from) => {
       if (text !== container) return false;
@@ -511,7 +579,7 @@ function offsetOf(root: HTMLElement, container: Node, offset: number): number {
       if (answer === null && parent === container && index === offset) answer = at;
     },
   );
-  return answer ?? total;
+  return answer ?? text.length;
 }
 
 /** Puts a selection back after the spans have been rebuilt. */

@@ -307,15 +307,33 @@ export function textBlocks(
   return { list: kind ? (kind === 'number' ? 'ol' : 'ul') : null, spacing, lines: runLines(runs) };
 }
 
-/** Splits runs into one list per line, so paragraphs and lists still work. */
-export function runLines(runs: TextRun[]): TextRun[][] {
-  const lines: TextRun[][] = [[]];
+/**
+ * The soft line break.
+ *
+ * ⏎ starts a paragraph and ⇧⏎ breaks a line inside one, and the two have to be
+ * different characters or paragraph spacing opens up between every line and a
+ * two-line list item becomes two items. U+2028 LINE SEPARATOR is what Unicode
+ * has for exactly this, so it is what the model stores.
+ */
+export const LINE_BREAK = '\u2028';
+
+function splitRuns(runs: TextRun[], at: string): TextRun[][] {
+  const parts: TextRun[][] = [[]];
   for (const run of runs) {
-    const parts = run.text.split('\n');
-    parts.forEach((part, index) => {
-      if (index > 0) lines.push([]);
-      if (part) lines[lines.length - 1].push({ ...run, text: part });
+    run.text.split(at).forEach((piece, index) => {
+      if (index > 0) parts.push([]);
+      if (piece) parts[parts.length - 1].push({ ...run, text: piece });
     });
   }
-  return lines;
+  return parts;
+}
+
+/** Splits runs into one list per paragraph, so spacing and lists still work. */
+export function runLines(runs: TextRun[]): TextRun[][] {
+  return splitRuns(runs, '\n');
+}
+
+/** Splits one paragraph at its soft breaks — each piece is one drawn line. */
+export function runSegments(line: TextRun[]): TextRun[][] {
+  return splitRuns(line, LINE_BREAK);
 }

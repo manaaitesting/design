@@ -21,7 +21,16 @@ import type { CSSProperties } from 'react';
 import type { Doc, SceneNode, ShaderSpec } from '../document/types';
 import { DEFAULT_COLLECTION, type Collection } from '../document/variables';
 import { fontFaceCss, googleHref, webFontsIn, type CustomFont } from '../lib/fonts';
-import { isPlain, listBoxStyle, plainText, runLines, runStyle, runsOf } from '../document/text';
+import {
+  isPlain,
+  LINE_BREAK,
+  listBoxStyle,
+  plainText,
+  runLines,
+  runSegments,
+  runStyle,
+  runsOf,
+} from '../document/text';
 import { compose, defaultParams, SHADER_BY_ID } from '../webgl/shaders';
 import type { Token } from '../document/store';
 
@@ -127,21 +136,27 @@ function textMarkup(
   const runs = runsOf(node);
   const plain = isPlain(runs);
 
-  if (plain && !spacing && !list) return escape(plainText(runs));
+  const text = plainText(runs);
+  if (plain && !spacing && !list && !text.includes(LINE_BREAK)) return escape(text);
 
   // a styled run becomes a span carrying only what it overrides — the rest is
-  // still inherited from the layer's own rule, as it is on the canvas
+  // still inherited from the layer's own rule, as it is on the canvas, and a
+  // soft break is a <br> rather than a paragraph of its own
   const body = (line: typeof runs): string =>
-    plain
-      ? escape(line.map((run) => run.text).join(''))
-      : line
-          .map((run) => {
-            const style = runStyle(run, font) as Record<string, string | number>;
-            const inner = escape(run.text);
-            if (!Object.keys(style).length) return inner;
-            return `<span ${inlineStyle(style)}>${inner}</span>`;
-          })
-          .join('');
+    runSegments(line)
+      .map((segment) =>
+        plain
+          ? escape(segment.map((run) => run.text).join(''))
+          : segment
+              .map((run) => {
+                const style = runStyle(run, font) as Record<string, string | number>;
+                const inner = escape(run.text);
+                if (!Object.keys(style).length) return inner;
+                return `<span ${inlineStyle(style)}>${inner}</span>`;
+              })
+              .join(''),
+      )
+      .join('<br>');
 
   const lines = runLines(runs);
   const gap = (index: number) => (index && spacing ? ` ${inlineStyle({ marginTop: spacing })}` : '');

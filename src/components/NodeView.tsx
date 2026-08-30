@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, memo, useContext, useEffect, useRef } from 'react';
+import { createContext, Fragment, memo, useContext, useEffect, useRef } from 'react';
 import { nodeStyle, shaderSurface } from '../document/css';
 import { effectLayers, effectsOf } from '../document/effects';
 import { ShaderSurface } from './ShaderSurface';
@@ -25,9 +25,11 @@ import { modeVars } from '../document/variables';
 import { ensureFont } from '../lib/fonts';
 import {
   isPlain,
+  LINE_BREAK,
   listBoxStyle,
   plainText,
   runLines,
+  runSegments,
   runStyle,
   runsOf,
   textBlocks,
@@ -112,21 +114,28 @@ function TextBody({ node }: { node: SceneNode }) {
   const plain = isPlain(runs);
   const blocks = textBlocks(runs, font);
 
-  if (plain && !blocks) return <>{plainText(runs)}</>;
+  const text = plainText(runs);
+  if (plain && !blocks && !text.includes(LINE_BREAK)) return <>{text}</>;
 
   const lines = blocks?.lines ?? runLines(runs);
-  const body = (line: TextRun[]) =>
-    plain ? (
-      line.map((run) => run.text).join('')
-    ) : (
-      <>
-        {line.map((run, index) => (
-          <span key={index} style={runStyle(run, font)}>
-            {run.text}
-          </span>
-        ))}
-      </>
-    );
+  // a soft break is a line inside the paragraph, so it becomes a <br> and takes
+  // none of the paragraph spacing with it
+  const body = (line: TextRun[]) => (
+    <>
+      {runSegments(line).map((segment, index) => (
+        <Fragment key={index}>
+          {index ? <br /> : null}
+          {plain
+            ? segment.map((run) => run.text).join('')
+            : segment.map((run, at) => (
+                <span key={at} style={runStyle(run, font)}>
+                  {run.text}
+                </span>
+              ))}
+        </Fragment>
+      ))}
+    </>
+  );
 
   if (!blocks) {
     // styled, but a single flowing block: the spans carry the styling and the

@@ -523,6 +523,37 @@ test.describe('rich text', () => {
   });
 
   /**
+   * ⏎ starts a paragraph and ⇧⏎ breaks a line inside one. The model used to
+   * have a single delimiter, so paragraph spacing opened up between every line
+   * and every line of a bulleted layer became its own bullet — an address
+   * block or a two-line list item could not be written at all.
+   */
+  test('⇧⏎ breaks the line inside the paragraph rather than starting one', async ({ page }) => {
+    const id = await seedTyped(page, 'OneTwo', {});
+    await enter(page, id);
+    await selectRange(page, 3, 3);
+    await page.keyboard.press('Shift+Enter');
+
+    await expect.poll(async () => (await doc(page))[id].text).toBe('One\u2028Two');
+    await removeNodes(page, [id]);
+  });
+
+  test('a soft break is a line in the paragraph, not a bullet and not a gap', async ({ page }) => {
+    const id = await seedTyped(page, 'One\u2028Two\nThree', {
+      list: 'bullet',
+      paragraphSpacing: 12,
+    });
+
+    // two bullets, not three: the ⇧⏎ line rides inside the first item
+    const items = page.locator(`[data-node-id="${id}"] li`);
+    await expect(items).toHaveCount(2);
+    await expect(items.first().locator('br')).toHaveCount(1);
+    const gaps = await items.evaluateAll((els) => els.map((el) => getComputedStyle(el).marginTop));
+    expect(gaps).toEqual(['0px', '12px']);
+    await removeNodes(page, [id]);
+  });
+
+  /**
    * Figma's Text panel belongs to the selected characters whenever there are
    * any — that is how a price gets a small currency symbol — so the size field
    * has to write the range and read it back, Mixed included, rather than
