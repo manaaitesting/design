@@ -1,5 +1,5 @@
-import { PANEL } from '../state/ui';
-import { ROOT_ID, type Doc } from '../document/types';
+import { PANEL, useUI } from '../state/ui';
+import { pageOf, pagePoint, ROOT_ID, type Doc } from '../document/types';
 
 /**
  * Framing the canvas.
@@ -87,4 +87,33 @@ export function viewCentre(
     x: Math.round((width / 2 - viewport.x) / viewport.zoom - inset.w / 2),
     y: Math.round((height / 2 - viewport.y) / viewport.zoom - inset.h / 2),
   };
+}
+
+/**
+ * Puts a layer on screen: its page, selected, framed.
+ *
+ * The order matters — the page has to change before the selection, or the
+ * selection lands on a page nobody is looking at. The box is measured in page
+ * space rather than off `node.x`, because a layer worth jumping to is often
+ * nested: a variant main lives inside its component set, and framing it by its
+ * parent-local coordinates would land on empty canvas.
+ */
+export function revealNode(id: string, doc: Doc): boolean {
+  const node = doc[id];
+  const home = pageOf(id, doc);
+  if (!node || !home) return false;
+
+  const ui = useUI.getState();
+  ui.setPage(home);
+  ui.select([id]);
+
+  const at = pagePoint(id, doc);
+  const fitted = fitBounds(
+    { minX: at.x, minY: at.y, maxX: at.x + node.w, maxY: at.y + node.h },
+    ui.leftPanel,
+    ui.leftWidth,
+    ui.rightWidth,
+  );
+  if (fitted) ui.setViewport(fitted);
+  return true;
 }

@@ -421,6 +421,118 @@ test.describe('rich text', () => {
     await removeNodes(page, [id]);
   });
 
+  /**
+   * ⇧⌥⌘V — paste without formatting.
+   *
+   * The text has to reach the *model*, for the same reason ⌘B does: what a
+   * `contentEditable` pastes is markup this editor treats as a view of the
+   * runs, so anything the model did not learn is gone the next time the spans
+   * are rebuilt. The text lands wearing whatever the caret was wearing.
+   */
+  /**
+   * Type on a path.
+   *
+   * The ledger called this deliberate on the grounds that Figma did not have it
+   * either. Figma Draw shipped it in 2025, so the reason went away and the row
+   * was left standing on nothing.
+   *
+   * SVG lays the glyphs out, which is the only version of this that keeps the
+   * invariant: the browser is still the renderer, and the export is still the
+   * same description of the same thing rather than a second opinion about it.
+   */
+  test('text put on a path follows it, and comes back off it again', async ({ page }) => {
+    const { text, circle } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const shape = store.create('ellipse', 'root', { name: 'Ring', x: 700, y: 500, w: 200, h: 200 });
+      const label = store.create('text', 'root', {
+        name: 'Round', x: 40, y: 900, w: 300, h: 40, text: 'around we go',
+      });
+      store.commit();
+      return { text: label, circle: shape };
+    });
+
+    expect(
+      await page.evaluate(
+        ({ a, b }) => {
+          const ok = window.paperlike!.store.attachToPath(a, b);
+          window.paperlike!.store.commit();
+          return ok;
+        },
+        { a: text, b: circle },
+      ),
+    ).toBe(true);
+
+    const attached = (await doc(page))[text];
+    // the text takes the shape's box, which is what makes the outline's own
+    // coordinates mean the same thing in both
+    expect([attached.x, attached.y, attached.w, attached.h]).toEqual([700, 500, 200, 200]);
+    expect(attached.textPath?.source).toBe(circle);
+
+    // and the canvas draws it as type on a path, not as a box of text
+    const svg = page.locator(`[data-node-id="${text}"] svg textPath`);
+    await expect(svg).toHaveCount(1);
+    await expect(svg).toHaveText('around we go');
+
+    await page.evaluate((id) => {
+      window.paperlike!.store.detachFromPath(id);
+      window.paperlike!.store.commit();
+    }, text);
+    await expect(page.locator(`[data-node-id="${text}"] svg textPath`)).toHaveCount(0);
+
+    await removeNodes(page, [text, circle]);
+  });
+
+  test('a text layer cannot be put on a frame, which has no outline to offer', async ({ page }) => {
+    const { text, frame } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const box = store.create('frame', 'root', { name: 'NotAPath', x: 700, y: 500, w: 200, h: 200 });
+      const label = store.create('text', 'root', { name: 'Nope', x: 40, y: 900, w: 200, h: 40, text: 'no' });
+      store.commit();
+      return { text: label, frame: box };
+    });
+
+    expect(
+      await page.evaluate(
+        ({ a, b }) => window.paperlike!.store.attachToPath(a, b),
+        { a: text, b: frame },
+      ),
+    ).toBe(false);
+    expect((await doc(page))[text].textPath ?? null).toBeNull();
+
+    await removeNodes(page, [text, frame]);
+  });
+
+  test('\u21e7\u2325\u2318V pastes plain text at the caret, in the caret\'s style', async ({ page }) => {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const id = await seed(page);
+    await enter(page, id);
+    // 'brave' is bold, so the caret inside it is bold: the paste joins that run
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Meta+b');
+    await page.waitForTimeout(120);
+
+    await page.evaluate(() => navigator.clipboard.writeText('BOLD'));
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Shift+Alt+Meta+v');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.bold ? '*' : ''}`))
+      .toEqual(['hello ', 'BOLD*', ' new world']);
+    await removeNodes(page, [id]);
+  });
+
+  test('\u21e7\u2325\u2318V with the caret collapsed inserts rather than replaces', async ({ page }) => {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const id = await seed(page);
+    await enter(page, id);
+    await page.evaluate(() => navigator.clipboard.writeText('very '));
+    await selectRange(page, 6, 6);
+    await page.keyboard.press('Shift+Alt+Meta+v');
+
+    await expect.poll(async () => (await doc(page))[id].text).toBe('hello very brave new world');
+    await removeNodes(page, [id]);
+  });
+
   test('\u2318I and \u21e7\u2318X reach the runs as well', async ({ page }) => {
     const id = await seed(page);
     await enter(page, id);

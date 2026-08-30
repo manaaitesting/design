@@ -25,6 +25,12 @@ declare global {
         setFlowStart(id: string, name: string | null): void;
         createInstance(main: string, parent: string, at?: { x: number; y: number }): string | null;
         detachInstance(id: string): void;
+        attachToPath(textId: string, sourceId: string): boolean;
+        detachFromPath(textId: string): void;
+        rasterize(id: string, src: string): string | null;
+        resetInstance(id: string): void;
+        pushToMain(instanceId: string): boolean;
+        restoreComponent(instanceId: string): string | null;
         addComponentProp(main: string, prop: Record<string, unknown>): string | null;
         removeComponentProp(main: string, propId: string): void;
         bindProp(layer: string, binding: Record<string, unknown> | null): void;
@@ -32,7 +38,7 @@ declare global {
         combineAsVariants(ids: string[]): string | null;
         swapInstance(id: string, mainId: string): string | null;
         commit(): void;
-        addToken(token: { name: string; type: string; value: string }): string;
+        addToken(token: { name: string; type: string; value: string; collection?: string }): string;
         addStyle(style: { name: string; kind: string; value: unknown }): string;
         updateStyle(id: string, patch: Record<string, unknown>): void;
         removeStyle(id: string): void;
@@ -77,6 +83,7 @@ declare global {
         addPage(name?: string): string;
         duplicatePage(id: string): string | null;
         removePage(id: string): void;
+        moveToPage(ids: string[], pageId: string): string[];
         undo(): void;
         redo(): void;
       };

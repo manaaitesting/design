@@ -19,6 +19,7 @@ import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
 import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
+import { boardsOf } from '../document/layers';
 import { isInFlow, ROOT_ID, pageOf, topLevelOf, type BooleanOp, type Doc } from '../document/types';
 import { firstChild, inverseOf, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
@@ -54,6 +55,9 @@ const TOOL_KEYS: Record<string, Tool> = {
 /** Tools that need ⇧ — Figma puts the arrow behind the line this way. */
 const SHIFT_TOOL_KEYS: Record<string, Tool> = {
   l: 'arrow',
+  // ⇧S arms the Section tool. Wrapping a selection in one is ⌘S, which is a
+  // different command on a different key — see the handler below.
+  s: 'section',
 };
 /**
  * Figma's alignment shortcuts, by physical key.
@@ -730,7 +734,10 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         if (id) select([id]);
         return;
       }
-      if (event.shiftKey && event.key.toLowerCase() === 's' && selection.length) {
+      // ⌘S wraps the selection in a section. Figma binds it here, not on ⇧S —
+      // ⇧S arms the tool — and intercepts the browser's Save to do it, which is
+      // the same trade every canvas app in a tab makes.
+      if (mod && !event.shiftKey && !event.altKey && event.code === 'KeyS' && selection.length) {
         event.preventDefault();
         const id = store.wrapInSection(selection);
         if (id) select([id]);
@@ -807,9 +814,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       // the order Figma reads a page in rather than the stacking order.
       if (!mod && !event.altKey && event.code === 'KeyN') {
         event.preventDefault();
-        const boards = (doc[ui.page]?.children ?? [])
-          .filter((id) => doc[id]?.type === 'frame' || doc[id]?.type === 'section')
-          .sort((a, b) => doc[a].x - doc[b].x || doc[a].y - doc[b].y);
+        const boards = boardsOf(doc, ui.page);
         if (!boards.length) return;
 
         const here = selection.length ? boards.indexOf(topLevelOf(selection[0], doc)) : -1;

@@ -595,7 +595,7 @@ export type StyleKind = 'paint' | 'text' | 'effect' | 'grid';
 export interface Token {
   id: string;
   name: string;
-  type: 'color' | 'number' | 'text';
+  type: 'color' | 'number' | 'text' | 'boolean';
   value: string;
   /** the collection this variable belongs to; absent means the default one */
   collection?: string;
@@ -635,6 +635,22 @@ export type NumericField =
   | 'fontWeight'
   | 'lineHeight'
   | 'letterSpacing';
+
+/**
+ * The boolean fields a boolean variable can drive.
+ *
+ * Figma has one, and it is the reason boolean variables exist: a design system
+ * ships a feature flag by binding the layers it hides to a single variable, and
+ * switching a mode turns the whole feature off in one place.
+ */
+export type BooleanField = 'visible';
+
+/** Everything a variable can be bound to, whatever its type. */
+export type BoundField = NumericField | BooleanField;
+
+export function isBooleanField(field: BoundField): field is BooleanField {
+  return field === 'visible';
+}
 
 /** The bound fields that are a property of `font` rather than of the node. */
 export const FONT_FIELDS = {
@@ -830,6 +846,26 @@ export interface SceneNode {
    * migrating when they arrived. See `document/text`.
    */
   runs?: TextRun[];
+  /**
+   * Figma Draw's "Type on a path": the text runs along another layer's outline
+   * instead of sitting in a box.
+   *
+   * `source` is the layer whose outline is followed. Attaching gives the text
+   * layer that layer's box, so the outline — which is drawn in its own local
+   * coordinates — means the same thing in both, and the glyphs land on the line
+   * rather than beside it.
+   *
+   * A path holds one line: `offset` is how far along it the text starts, as a
+   * percentage, and `side` is which side of the line the glyphs sit on. This is
+   * a relationship between two layers rather than a property of the type, which
+   * is why it is here and not on `font` — a text style or a copied set of
+   * properties must not carry another layer's id onto a second layer.
+   */
+  textPath?: {
+    source: string;
+    offset: number;
+    side: 'top' | 'bottom';
+  } | null;
   font?: FontSpec;
   vAlign?: 'top' | 'middle' | 'bottom';
   underline?: UnderlineSpec | null;
@@ -969,7 +1005,7 @@ export interface SceneNode {
    * what makes the rendered CSS a `var()`, and what the store re-resolves when
    * the variable moves.
    */
-  vars?: Partial<Record<NumericField, string>>;
+  vars?: Partial<Record<BoundField, string>>;
   /**
    * Properties edited locally inside an instance. Propagation from the main
    * skips these, which is what makes an instance useful rather than a copy.
@@ -1125,6 +1161,28 @@ export function pageOf(id: string, doc: Doc): string | null {
     cur = parent;
   }
   return null;
+}
+
+/**
+ * Where a node sits in the space of its page, with every ancestor added back on.
+ *
+ * `x`/`y` are parent-local, so a layer three frames deep says nothing about
+ * where it is on the board until the frames between it and the page have been
+ * added back. Anything that has to reason across that boundary — moving a layer
+ * to another page, framing one on screen — needs this rather than `node.x`.
+ */
+export function pagePoint(id: string, doc: Doc): { x: number; y: number } {
+  let x = 0;
+  let y = 0;
+  let node = doc[id];
+  while (node?.parent) {
+    x += node.x ?? 0;
+    y += node.y ?? 0;
+    const parent = doc[node.parent];
+    if (!parent || parent.type === 'page') break;
+    node = parent;
+  }
+  return { x, y };
 }
 
 /** The outermost ancestor that still sits on the page — what a single click selects. */

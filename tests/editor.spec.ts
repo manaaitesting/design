@@ -927,6 +927,180 @@ test('the size readout counts up while a shape is being drawn', async ({ page })
   await removeNodes(page, [drawn.id]);
 });
 
+/**
+ * ⇧ and ⌥ while drawing.
+ *
+ * Neither is in Figma's shortcut panel — they are drawing modifiers, not
+ * shortcuts — which is why they went unnoticed for so long. They are also the
+ * first thing a hand reaches for: ⇧ for a circle, ⌥ to drop one on a point.
+ */
+test('⇧ while drawing gives a square, sized by the axis you pulled furthest', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('ellipse'));
+  await dragBy(page, { x: 500, y: 600 }, { x: 150, y: 60 }, ['Shift']);
+  const wide = (await doc(page))[(await selection(page))[0]];
+  expect([wide.w, wide.h]).toEqual([150, 150]);
+
+  // and pulling back up the other way keeps the press on the far corner
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('ellipse'));
+  await dragBy(page, { x: 700, y: 700 }, { x: -150, y: -60 }, ['Shift']);
+  const back = (await doc(page))[(await selection(page))[0]];
+  expect([back.w, back.h]).toEqual([150, 150]);
+  expect([back.x + back.w, back.y + back.h]).toEqual([wide.x + 200, wide.y + 100]);
+
+  await removeNodes(page, [wide.id, back.id]);
+});
+
+test('⌥ draws the shape out from the press point as its centre', async ({ page }) => {
+  // the same gesture twice, from the same press, with the first shape cleared
+  // away in between — a layer left on the canvas puts its own chrome under the
+  // second press, and the comparison stops being about ⌥
+  const draw = async (modifiers: string[]) => {
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+    await dragBy(page, { x: 500, y: 600 }, { x: 60, y: 40 }, modifiers);
+    const drawn = (await doc(page))[(await selection(page))[0]];
+    await removeNodes(page, [drawn.id]);
+    await select(page, []);
+    return drawn;
+  };
+
+  const corner = await draw([]);
+  const centred = await draw(['Alt']);
+
+  // twice the box, and the press is in the middle of it rather than at a corner
+  expect([centred.w, centred.h]).toEqual([corner.w * 2, corner.h * 2]);
+  expect([centred.x, centred.y]).toEqual([corner.x - corner.w, corner.y - corner.h]);
+});
+
+test('⇧ pressed mid-draw squares the box without waiting for the pointer', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+  const badge = page.locator('text=/^\\d+ × \\d+$/').first();
+
+  await page.mouse.move(500, 600);
+  await page.mouse.down();
+  await page.mouse.move(650, 660);
+  await expect(badge).toHaveText('150 × 60');
+
+  // the pointer never moves again — the key alone reshapes the box, and
+  // releasing it puts the box back
+  await page.keyboard.down('Shift');
+  await expect(badge).toHaveText('150 × 150');
+  await page.keyboard.up('Shift');
+  await expect(badge).toHaveText('150 × 60');
+  await page.mouse.up();
+
+  const drawn = (await doc(page))[(await selection(page))[0]];
+  expect([drawn.w, drawn.h]).toEqual([150, 60]);
+  await removeNodes(page, [drawn.id]);
+});
+
+test('Space while drawing walks the box without resizing it', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+  const badge = page.locator('text=/^\\d+ × \\d+$/').first();
+
+  await page.mouse.move(500, 600);
+  await page.mouse.down();
+  await page.mouse.move(600, 660);
+  await expect(badge).toHaveText('100 × 60');
+
+  // held down, the pointer carries the whole box rather than one corner of it
+  await page.keyboard.down('Space');
+  await page.mouse.move(700, 760);
+  await expect(badge).toHaveText('100 × 60');
+  await page.keyboard.up('Space');
+
+  // and letting go of Space leaves the far corner where the pointer now is
+  await page.mouse.move(750, 790);
+  await expect(badge).toHaveText('150 × 90');
+  await page.mouse.up();
+
+  const drawn = (await doc(page))[(await selection(page))[0]];
+  expect([drawn.w, drawn.h]).toEqual([150, 90]);
+  // the press was at world (97, 460); Space moved the origin 100 across and down
+  expect([drawn.x, drawn.y]).toEqual([197, 560]);
+  await removeNodes(page, [drawn.id]);
+});
+
+/**
+ * Move to page.
+ *
+ * The layers land at canvas level on the destination — a layer three frames
+ * deep has no meaning on a page that does not have those frames — so the test
+ * that matters is the rebase: it has to come out where it looked like it was.
+ */
+test('a layer moved to another page keeps the position it looked like it had', async ({ page }) => {
+  const outer = await makeNode(page, 'frame', { name: 'MTP Outer', x: 200, y: 300, w: 400, h: 400, fill: '#FFFFFF', flex: null });
+  const [inner, shallow, deep] = await page.evaluate((parent) => {
+    const store = window.paperlike!.store;
+    const mid = store.create('frame', parent, { name: 'MTP Inner', x: 10, y: 20, w: 200, h: 200, flex: null });
+    const near = store.create('rect', parent, { name: 'MTP Shallow', x: 40, y: 50, w: 30, h: 30 });
+    const far = store.create('rect', mid, { name: 'MTP Deep', x: 5, y: 5, w: 20, h: 20 });
+    store.commit();
+    return [mid, near, far];
+  }, outer);
+
+  const other = await page.evaluate(() => {
+    const id = window.paperlike!.store.addPage('Elsewhere');
+    window.paperlike!.store.commit();
+    return id;
+  });
+
+  const moved = await page.evaluate(
+    ({ ids, to }) => {
+      const list = window.paperlike!.store.moveToPage(ids, to);
+      window.paperlike!.store.commit();
+      return list;
+    },
+    { ids: [shallow, deep], to: other },
+  );
+  expect(moved).toEqual([shallow, deep]);
+
+  const after = await doc(page);
+  // one frame deep: 200 + 40 across, 300 + 50 down
+  expect([after[shallow].x, after[shallow].y, after[shallow].parent]).toEqual([240, 350, other]);
+  // two frames deep, so both ancestors have to be added back on
+  expect([after[deep].x, after[deep].y, after[deep].parent]).toEqual([215, 325, other]);
+  // and they left the page they came from
+  expect(after[outer].children).not.toContain(shallow);
+  expect(after[inner].children).not.toContain(deep);
+
+  await page.evaluate((id) => window.paperlike!.store.removePage(id), other);
+  await removeNodes(page, [outer]);
+});
+
+test('moving a frame carries its children, and nothing moves twice', async ({ page }) => {
+  const board = await makeNode(page, 'frame', { name: 'MTP Board', x: 100, y: 100, w: 300, h: 300, fill: '#FFFFFF', flex: null });
+  const child = await page.evaluate((parent) => {
+    const id = window.paperlike!.store.create('rect', parent, { name: 'MTP Rider', x: 20, y: 30, w: 40, h: 40 });
+    window.paperlike!.store.commit();
+    return id;
+  }, board);
+
+  const other = await page.evaluate(() => {
+    const id = window.paperlike!.store.addPage('Second');
+    window.paperlike!.store.commit();
+    return id;
+  });
+
+  // both are named, and the child is inside the frame: only the frame moves
+  const moved = await page.evaluate(
+    ({ ids, to }) => {
+      const list = window.paperlike!.store.moveToPage(ids, to);
+      window.paperlike!.store.commit();
+      return list;
+    },
+    { ids: [board, child], to: other },
+  );
+  expect(moved).toEqual([board]);
+
+  const after = await doc(page);
+  expect(after[board].parent).toBe(other);
+  // the child rode along inside it and kept its place in the frame
+  expect(after[child].parent).toBe(board);
+  expect([after[child].x, after[child].y]).toEqual([20, 30]);
+
+  await page.evaluate((id) => window.paperlike!.store.removePage(id), other);
+});
+
 test('dragging snaps to a sibling edge', async ({ page }) => {
   const anchor = await makeNode(page, 'rect', { name: 'SnapAnchor', x: 40, y: 500, w: 120, h: 80, fill: '#4CC3F0' });
   const mover = await makeNode(page, 'rect', { name: 'SnapMover', x: 40, y: 620, w: 120, h: 80, fill: '#F2637F' });
@@ -1057,6 +1231,235 @@ test('an instance follows its main until a property is overridden', async ({ pag
   expect((await doc(page))[instance!].fill).toBe('#00CC44');
 
   await removeNodes(page, [main, instance!]);
+});
+
+/**
+ * Push changes to main.
+ *
+ * The point of the command is the *other* instances: fixing a button on one
+ * instance and having every other one follow is the difference between an edit
+ * and a design system.
+ */
+test('pushing an override to the main carries it to every other instance', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'PushMain', x: 40, y: 500, w: 140, h: 44, fill: '#111111', radius: 8,
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const [edited, other] = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const a = store.createInstance(id, 'root', { x: 40, y: 600 });
+    const b = store.createInstance(id, 'root', { x: 240, y: 600 });
+    store.commit();
+    return [a!, b!];
+  }, main);
+
+  // one instance is changed away from the main, and only that one changes
+  await page.evaluate((id) => window.paperlike!.store.update(id, { fill: '#00CC44' }), edited);
+  await page.waitForTimeout(300);
+  expect((await doc(page))[other].fill).toBe('#111111');
+
+  const pushed = await page.evaluate((id) => {
+    const ok = window.paperlike!.store.pushToMain(id);
+    window.paperlike!.store.commit();
+    return ok;
+  }, edited);
+  expect(pushed).toBe(true);
+
+  await expect.poll(async () => (await doc(page))[other].fill).toBe('#00CC44');
+  const after = await doc(page);
+  expect(after[main].fill).toBe('#00CC44');
+  // the override is spent: the instance is following again, not pinned
+  expect(after[edited].overridden ?? []).toEqual([]);
+  expect(after[edited].fill).toBe('#00CC44');
+
+  await removeNodes(page, [main, edited, other]);
+});
+
+test('an override on a layer inside the instance pushes too', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'PushDeepMain', x: 40, y: 500, w: 160, h: 60, fill: '#FFFFFF', flex: null,
+  });
+  const mainLabel = await page.evaluate((parent) => {
+    const id = window.paperlike!.store.create('text', parent, { name: 'Label', x: 8, y: 8, w: 100, h: 20, text: 'Buy' });
+    window.paperlike!.store.createComponent(parent);
+    window.paperlike!.store.commit();
+    return id;
+  }, main);
+
+  const [edited, other] = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const a = store.createInstance(id, 'root', { x: 40, y: 620 });
+    const b = store.createInstance(id, 'root', { x: 260, y: 620 });
+    store.commit();
+    return [a!, b!];
+  }, main);
+
+  const child = (await doc(page))[edited].children[0];
+  await page.evaluate((id) => window.paperlike!.store.update(id, { text: 'Buy now' }), child);
+  await page.waitForTimeout(300);
+
+  await page.evaluate((id) => {
+    window.paperlike!.store.pushToMain(id);
+    window.paperlike!.store.commit();
+  }, edited);
+
+  await expect
+    .poll(async () => {
+      const after = await doc(page);
+      return after[after[other].children[0]].text;
+    })
+    .toBe('Buy now');
+  expect((await doc(page))[mainLabel].text).toBe('Buy now');
+
+  await removeNodes(page, [main, edited, other]);
+});
+
+test('an instance whose main has gone can rebuild it, and the orphans follow', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'GoneMain', x: 40, y: 500, w: 120, h: 40, fill: '#0D99FF', radius: 4,
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const [orphan, sibling] = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const a = store.createInstance(id, 'root', { x: 40, y: 600 });
+    const b = store.createInstance(id, 'root', { x: 240, y: 600 });
+    store.commit();
+    return [a!, b!];
+  }, main);
+
+  await removeNodes(page, [main]);
+  await page.waitForTimeout(200);
+  // the instances are still on the canvas, following nothing
+  expect((await doc(page))[orphan].instanceOf).toBe(main);
+
+  const restored = await page.evaluate((id) => {
+    const made = window.paperlike!.store.restoreComponent(id);
+    window.paperlike!.store.commit();
+    return made;
+  }, orphan);
+  expect(restored).toBeTruthy();
+
+  const after = await doc(page);
+  expect(after[restored!].isComponent).toBe(true);
+  expect(after[restored!].fill).toBe('#0D99FF');
+  // every orphan of the same main is repointed, not only the one asked
+  expect(after[orphan].instanceOf).toBe(restored);
+  expect(after[sibling].instanceOf).toBe(restored);
+  // and it sits beside the instance rather than on top of it
+  expect(after[restored!].x).toBe(after[orphan].x + after[orphan].w + 40);
+
+  // restoring again would make a second main, so it refuses
+  expect(
+    await page.evaluate((id) => window.paperlike!.store.restoreComponent(id), orphan),
+  ).toBeNull();
+
+  await removeNodes(page, [restored!, orphan, sibling]);
+});
+
+/**
+ * Boolean variables.
+ *
+ * The type existed for colours, numbers and text but not for the fourth thing
+ * Figma has one for — and the fourth is the one that drives *visibility*, which
+ * is how a design system ships a feature behind a flag.
+ */
+test('a boolean variable drives a layer\'s visibility, in both directions', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'FlagLayer', x: 40, y: 500, w: 80, h: 80, fill: '#0D99FF' });
+  const flag = await page.evaluate(() => {
+    const made = window.paperlike!.store.addToken({ name: 'promo', type: 'boolean', value: 'true' });
+    window.paperlike!.store.commit();
+    return made;
+  });
+
+  await page.evaluate(({ node, token }) => {
+    window.paperlike!.store.bindVariable([node], 'visible', token);
+    window.paperlike!.store.commit();
+  }, { node: id, token: flag });
+  expect((await doc(page))[id].visible).toBe(true);
+
+  // the flag goes off, and the layer goes with it
+  await page.evaluate((token) => {
+    window.paperlike!.store.updateToken(token, { value: 'false' });
+    window.paperlike!.store.commit();
+  }, flag);
+  await expect.poll(async () => (await doc(page))[id].visible).toBe(false);
+
+  // and back on again
+  await page.evaluate((token) => {
+    window.paperlike!.store.updateToken(token, { value: 'true' });
+    window.paperlike!.store.commit();
+  }, flag);
+  await expect.poll(async () => (await doc(page))[id].visible).toBe(true);
+
+  // detaching leaves the layer where the variable left it, and stops following
+  await page.evaluate((node) => {
+    window.paperlike!.store.bindVariable([node], 'visible', null);
+    window.paperlike!.store.commit();
+  }, id);
+  await page.evaluate((token) => {
+    window.paperlike!.store.updateToken(token, { value: 'false' });
+    window.paperlike!.store.commit();
+  }, flag);
+  await page.waitForTimeout(300);
+  expect((await doc(page))[id].visible).toBe(true);
+
+  await page.evaluate((token) => window.paperlike!.store.removeToken(token), flag);
+  await removeNodes(page, [id]);
+});
+
+test('a bound layer\'s eye is greyed, because the variable owns it', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'BoundEye', x: 40, y: 500, w: 80, h: 80, fill: '#0D99FF' });
+  await select(page, [id]);
+
+  const eye = page.locator('.fig-btn[aria-label="Hide"], .fig-btn[aria-label="Show"]').first();
+  await expect(eye).toBeEnabled();
+
+  const flag = await page.evaluate((node) => {
+    const store = window.paperlike!.store;
+    const token = store.addToken({ name: 'shown', type: 'boolean', value: 'true' });
+    store.bindVariable([node], 'visible', token);
+    store.commit();
+    return token;
+  }, id);
+
+  // toggling it by hand would be undone the next time the mode changed, so the
+  // control says so rather than letting you try
+  await expect(eye).toBeDisabled();
+  await expect(page.locator('.fig-btn[aria-label="Visibility follows shown"]')).toBeVisible();
+
+  await page.evaluate((token) => window.paperlike!.store.removeToken(token), flag);
+  await removeNodes(page, [id]);
+});
+
+test('a frame that sets a mode hides what that mode says to hide', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'ModeFrame', x: 40, y: 500, w: 200, h: 200, fill: '#FFFFFF', flex: null,
+  });
+  const { child, flag, collection, off } = await page.evaluate((parent) => {
+    const store = window.paperlike!.store;
+    const set = store.addCollection('Flags');
+    const dark = store.addMode(set, 'Off')!;
+    const token = store.addToken({ name: 'promo', type: 'boolean', value: 'true', collection: set });
+    store.setTokenValue(token, dark, 'false');
+    const rect = store.create('rect', parent, { name: 'ModeChild', x: 10, y: 10, w: 40, h: 40, fill: '#0D99FF' });
+    store.bindVariable([rect], 'visible', token);
+    store.commit();
+    return { child: rect, flag: token, collection: set, off: dark };
+  }, frame);
+
+  // the default mode says true, so the layer is on
+  expect((await doc(page))[child].visible).toBe(true);
+
+  // the frame switches mode, and the layer inside it follows — a number would
+  // have got this from the CSS cascade, but `visible` is not a var()
+  await page.evaluate(({ id, set, mode }) => {
+    window.paperlike!.store.setNodeMode(id, set, mode);
+    window.paperlike!.store.commit();
+  }, { id: frame, set: collection, mode: off });
+  await expect.poll(async () => (await doc(page))[child].visible).toBe(false);
+
+  await page.evaluate((token) => window.paperlike!.store.removeToken(token), flag);
+  await removeNodes(page, [frame]);
 });
 
 test('constraints reposition children when their frame resizes', async ({ page }) => {
@@ -2004,6 +2407,87 @@ test('right-clicking a layer row opens the same menu and acts on that row', asyn
   await removeNodes(page, [a, b]);
 });
 
+test('Go to main component crosses to the page the main is on', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'CtxMain', x: 40, y: 500, w: 120, h: 40, fill: '#0D99FF',
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const instance = await page.evaluate((id) => {
+    const made = window.paperlike!.store.createInstance(id, 'root', { x: 260, y: 560 });
+    window.paperlike!.store.commit();
+    return made!;
+  }, main);
+
+  // the main goes to another page; selecting it there is not the same as
+  // going to it, which is what the panel button used to do
+  const other = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const made = store.addPage('Main Lives Here');
+    store.moveToPage([id], made);
+    store.commit();
+    return made;
+  }, main);
+
+  await select(page, [instance]);
+  await runOnSelection(page, 'Go to main component');
+
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(other);
+  expect(await selection(page)).toEqual([main]);
+
+  await page.evaluate((p) => window.paperlike!.store.removePage(p), other);
+  await removeNodes(page, [instance]);
+});
+
+test('Push and Restore grey out when there is nothing for them to do', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'CtxPush', x: 40, y: 500, w: 120, h: 40, fill: '#0D99FF',
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const instance = await page.evaluate((id) => {
+    const made = window.paperlike!.store.createInstance(id, 'root', { x: 260, y: 560 });
+    window.paperlike!.store.commit();
+    return made!;
+  }, main);
+
+  await openMenu(page, instance);
+  // an instance that matches its main has nothing to push, and a main that is
+  // still there has nothing to restore
+  await expect(row(page, 'Push changes to main component')).toBeDisabled();
+  await expect(row(page, 'Restore component')).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  await page.evaluate((id) => window.paperlike!.store.update(id, { fill: '#FF00AA' }), instance);
+  await page.waitForTimeout(300);
+  await openMenu(page, instance);
+  await expect(row(page, 'Push changes to main component')).toBeEnabled();
+  await row(page, 'Push changes to main component').click();
+
+  await expect.poll(async () => (await doc(page))[main].fill).toBe('#FF00AA');
+  await removeNodes(page, [main, instance]);
+});
+
+test('Move to page lists the other pages, and moving empties the selection', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxMove', x: 220, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  const other = await page.evaluate(() => {
+    const made = window.paperlike!.store.addPage('Somewhere Else');
+    window.paperlike!.store.commit();
+    return made;
+  });
+
+  await openMenu(page, id);
+  await row(page, 'Move to page').hover();
+  // the page you are on is not offered — there is nowhere to move to
+  await expect(row(page, 'Somewhere Else')).toBeVisible();
+  await expect(row(page, 'Page 1')).toHaveCount(0);
+  await row(page, 'Somewhere Else').click();
+
+  expect((await doc(page))[id].parent).toBe(other);
+  // nothing stays selected: the layer is on a page nobody is looking at
+  expect(await selection(page)).toEqual([]);
+
+  await page.evaluate((p) => window.paperlike!.store.removePage(p), other);
+});
+
 test('submenus open two levels deep and stay open on the way in', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'CtxSub', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
   await openMenu(page, id);
@@ -2112,6 +2596,72 @@ test('show/hide, lock/unlock and both flips toggle their flag', async ({ page })
   await runOnSelection(page, 'Show/Hide');
   expect((await doc(page))[id].visible).toBe(false);
   await removeNodes(page, [id]);
+});
+
+/**
+ * Rasterize selection.
+ *
+ * The command has to render what is on the canvas, so it is driven through the
+ * real menu rather than the store: a picture of the layer is the whole point,
+ * and a store-only test would prove nothing about what was drawn.
+ */
+test('Type on path needs a text layer and a shape, and offers to undo itself', async ({ page }) => {
+  const { text, ring } = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const shape = store.create('ellipse', 'root', { name: 'CtxRing', x: 700, y: 500, w: 160, h: 160 });
+    const label = store.create('text', 'root', { name: 'CtxRound', x: 40, y: 900, w: 200, h: 40, text: 'go round' });
+    store.commit();
+    return { text: label, ring: shape };
+  });
+
+  // one layer is not a pair, so the command has nothing to work with
+  await select(page, [text]);
+  await openMenu(page, text);
+  await expect(row(page, 'Type on path')).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  await select(page, [text, ring]);
+  await runOnSelection(page, 'Type on path');
+  await expect.poll(async () => (await doc(page))[text].textPath?.source).toBe(ring);
+
+  // and with the text alone selected again the row is the way back off
+  await select(page, [text]);
+  await runOnSelection(page, 'Take off path');
+  await expect.poll(async () => (await doc(page))[text].textPath ?? null).toBeNull();
+
+  await removeNodes(page, [text, ring]);
+});
+
+test('rasterize replaces a layer with a picture of it, in its place in the stack', async ({ page }) => {
+  const board = await makeNode(page, 'frame', {
+    name: 'RasterBoard', x: 40, y: 500, w: 300, h: 200, fill: '#FFFFFF', flex: null,
+  });
+  const { under, target, over } = await page.evaluate((parent) => {
+    const store = window.paperlike!.store;
+    const a = store.create('rect', parent, { name: 'Under', x: 10, y: 10, w: 40, h: 40, fill: '#DDDDDD' });
+    const b = store.create('rect', parent, { name: 'Target', x: 60, y: 20, w: 80, h: 60, fill: '#0D99FF', radius: 8 });
+    const c = store.create('rect', parent, { name: 'Over', x: 160, y: 10, w: 40, h: 40, fill: '#111111' });
+    store.commit();
+    return { under: a, target: b, over: c };
+  }, board);
+
+  await select(page, [target]);
+  await runOnSelection(page, 'Rasterize selection');
+
+  // the render is asynchronous — the layer is drawn before it is replaced
+  await expect.poll(async () => !!(await doc(page))[target]).toBe(false);
+  const after = await doc(page);
+  expect(after[board].children).toHaveLength(3);
+  const [first, middle, last] = after[board].children;
+  expect([first, last]).toEqual([under, over]);
+  const image = after[middle];
+  expect(image.type).toBe('image');
+  expect([image.x, image.y, image.w, image.h]).toEqual([60, 20, 80, 60]);
+  expect(image.name).toBe('Target');
+  // and it is a real picture, not an empty layer claiming to be one
+  expect(image.fill ?? '').toMatch(/^url\(data:image\/png;base64,/);
+
+  await removeNodes(page, [board]);
 });
 
 test('create component marks the layer as a main', async ({ page }) => {
@@ -2293,14 +2843,14 @@ test.describe('export section', () => {
 });
 
 test.describe('sections', () => {
-  test('⇧S puts the selection on a board without moving it', async ({ page }) => {
+  test('⌘S puts the selection on a board without moving it', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     const before = await page.locator(`[data-node-id="${board!.id}"]`).boundingBox();
 
     await select(page, [board!.id]);
     await page.locator('.canvas-root, body').first().click({ position: { x: 5, y: 5 } });
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
 
     const section = (await selection(page))[0];
     const nodes = await doc(page);
@@ -2313,10 +2863,57 @@ test.describe('sections', () => {
     expect(after!.y).toBeCloseTo(before!.y, 0);
   });
 
+  /**
+   * ⇧S is the Section *tool* in Figma — "click and drag the location of the
+   * canvas where you'd like the section to go" — and ⌘S is what wraps a
+   * selection in one. This canvas had ⌘S's behaviour on ⇧S's key, and so no way
+   * to draw an empty section at all.
+   */
+  test('⇧S arms the section tool, and a drag draws one', async ({ page }) => {
+    await select(page, []);
+    await page.keyboard.press('Shift+S');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('section');
+
+    await dragBy(page, { x: 900, y: 620 }, { x: 240, y: 160 });
+    const drawn = (await doc(page))[(await selection(page))[0]];
+    expect(drawn.type).toBe('section');
+    expect([drawn.w, drawn.h]).toEqual([240, 160]);
+    // it holds nothing: there was nothing under it
+    expect(drawn.children).toEqual([]);
+    // and the tool stands down once the section is made
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+    await removeNodes(page, [drawn.id]);
+  });
+
+  test('a section drawn over boards takes in the ones it covers whole', async ({ page }) => {
+    const { inside, across } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('frame', 'root', { name: 'Inside', x: 800, y: 560, w: 120, h: 80, fill: '#FFFFFF' });
+      const b = store.create('frame', 'root', { name: 'Across', x: 1010, y: 560, w: 200, h: 80, fill: '#FFFFFF' });
+      store.commit();
+      return { inside: a, across: b };
+    });
+
+    await select(page, []);
+    await page.keyboard.press('Shift+S');
+    // the box covers 'Inside' whole and clips through 'Across'
+    await dragBy(page, { x: 1180, y: 640 }, { x: 260, y: 160 });
+
+    const section = (await selection(page))[0];
+    const nodes = await doc(page);
+    expect(nodes[section].children).toEqual([inside]);
+    expect(nodes[across].parent).toBe('root');
+    // the board it took in did not move on screen
+    expect([nodes[inside].x, nodes[inside].y]).toEqual([23, 60]);
+
+    await removeNodes(page, [section, across]);
+  });
+
   test('a section names itself on the canvas, and the label selects it', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
     const section = (await selection(page))[0];
 
     await select(page, []);
@@ -2333,7 +2930,7 @@ test.describe('sections', () => {
   test('a frame inside a section is still what a click selects', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
     await select(page, []);
 
     // clicking a layer inside the artboard selects the artboard, not the section
@@ -2345,7 +2942,7 @@ test.describe('sections', () => {
   test('the export button says Section for one', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
     await expect(page.locator('.fig-export')).toHaveText('Export Section');
   });
 });
@@ -3822,13 +4419,67 @@ test.describe('pages', () => {
     }, [ids.source, ids.copy] as const);
   });
 
-  test('right-clicking a page offers Figma’s four commands', async ({ page }) => {
+  /**
+   * Figma's File ▸ Export frames to PDF: every board on the page, one per page,
+   * in one document — the format a deck is handed over in.
+   *
+   * The boards are different sizes on purpose. A PDF that squared them onto one
+   * sheet would be the wrong answer, and the MediaBox of each page is what says
+   * it did not.
+   */
+  test('a page exports every board as one PDF, a page each, in canvas order', async ({ page }) => {
+    const boards = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      // out of order on purpose: the PDF walks the canvas, not the stack
+      const right = store.create('frame', 'root', { name: 'Right', x: 900, y: 40, w: 300, h: 200, fill: '#FFFFFF' });
+      const left = store.create('frame', 'root', { name: 'Left', x: 700, y: 40, w: 400, h: 300, fill: '#FFFFFF' });
+      store.commit();
+      return { left, right };
+    });
+    // both boards have to be on screen: the renderer reads the canvas's own DOM
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 60, y: 80, zoom: 0.35 }));
+
+    await page.locator('.fig-layer[data-page-id]').first().click({ button: 'right' });
+    const wait = page.waitForEvent('download');
+    await row(page, 'Export frames to PDF').click();
+    const saved = await wait;
+    expect(saved.suggestedFilename()).toBe('Page-1.pdf');
+
+    const text = readFileSync((await saved.path())!).toString('latin1');
+    expect(text.startsWith('%PDF-1.4')).toBe(true);
+    // the fixture board is on this page too, so three boards, three pages
+    expect(text).toContain('/Count 3');
+    expect(text).toContain('/Type /Pages /Kids [3 0 R 7 0 R 11 0 R]');
+    // each page keeps its own board's size, in points
+    expect(text).toContain('/MediaBox [0 0 600 400]');
+    expect(text).toContain('/MediaBox [0 0 400 300]');
+    expect(text).toContain('/MediaBox [0 0 300 200]');
+    expect(text.trimEnd().endsWith('%%EOF')).toBe(true);
+
+    // and every offset in the table was counted by hand as the file was built
+    const marker = text.lastIndexOf('startxref');
+    const startxref = Number(text.slice(marker + 'startxref'.length).trim().split('\n')[0]);
+    expect(text.slice(startxref, startxref + 4)).toBe('xref');
+    const rows = text.slice(startxref).split('\n').slice(2, 16);
+    expect(rows).toHaveLength(14);
+    rows.forEach((entry, index) => {
+      if (index === 0) return; // the free entry
+      const offset = Number(entry.slice(0, 10));
+      expect(text.slice(offset, offset + String(index).length + 6)).toBe(`${index} 0 obj`);
+    });
+
+    await removeNodes(page, [boards.left, boards.right]);
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 120, y: 100, zoom: 1 }));
+  });
+
+  test('right-clicking a page offers Figma’s page commands', async ({ page }) => {
     const extra = await page.evaluate(() => window.paperlike!.store.addPage('Scratch'));
     await page.locator(`.fig-layer[data-page-id="${extra}"]`).click({ button: 'right' });
 
     const menu = page.locator('.ctx').first();
     await expect(menu.locator('.ctx-row')).toHaveText([
       'Copy link to page',
+      'Export frames to PDF',
       'Rename page',
       'Duplicate page',
       'Delete page',
@@ -4082,7 +4733,3 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 });
-
-
-
-

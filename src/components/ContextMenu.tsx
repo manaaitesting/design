@@ -24,13 +24,15 @@ import {
   pointerWorld,
   writeText,
 } from '../lib/actions';
-import { download, safeFilename } from '../export/raster';
+import { download, framesToPdf, nodeToPng, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
 import { pageActions, useUI } from '../state/ui';
+import { revealNode } from '../lib/view';
 import { canEditPoints } from '../document/geometry';
-import type { BooleanOp } from '../document/types';
+import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
+import { boardsOf } from '../document/layers';
 
 interface Item {
   label: string;
@@ -42,6 +44,31 @@ interface Item {
   divider?: boolean;
   items?: Item[];
   onHover?: (id: string | null) => void;
+}
+
+/** A rendered blob as an inline data URL, which is how this document stores images. */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read the rendered image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** The main this layer follows, if it follows one. */
+function mainOf(node: SceneNode | undefined): string | null {
+  return node?.instanceOf ?? null;
+}
+
+/**
+ * Whether anything inside this instance has been changed away from its main.
+ *
+ * An override can be on any layer in the subtree, not only the instance root —
+ * the usual one is a label three levels down — so the whole tree is asked.
+ */
+function hasOverrides(id: string, doc: Doc): boolean {
+  return [id, ...descendants(id, doc)].some((child) => (doc[child]?.overridden ?? []).length > 0);
 }
 
 /**
@@ -81,11 +108,17 @@ function Panel({
     });
   }, [x, y, items]);
 
+  // A panel with more rows than the window is tall cannot be clamped onto the
+  // screen — the arithmetic above pins it to the top and the rest hangs off the
+  // bottom, unreachable. Scrolling is what Figma does with a long menu, and it
+  // is the only answer that does not hide a command.
+  const fit = { maxHeight: 'calc(100vh - 16px)', overflowY: 'auto' as const };
+
   return (
     <div
       ref={ref}
       className="ctx"
-      style={{ left: at.left, top: at.top, width, visibility: at.ready ? 'visible' : 'hidden' }}
+      style={{ left: at.left, top: at.top, width, ...fit, visibility: at.ready ? 'visible' : 'hidden' }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
       role="menu"
@@ -173,6 +206,7 @@ function PageMenu({
   const store = useStore();
   const doc = useDoc();
   const pages = usePages();
+  const tokenVars = useTokenVars();
   const only = pages.length <= 1;
 
   const items: Item[] = [
@@ -181,6 +215,33 @@ function PageMenu({
       // the page is a query on the file's own URL, which is what the editor
       // reads back on load — see `Editor`
       run: () => writeText(`${location.origin}${location.pathname}?page=${id}`),
+    },
+    {
+      label: 'Export frames to PDF',
+      divider: true,
+      // a page with no boards on it has nothing to make pages out of
+      disabled: !boardsOf(doc, id).length,
+      run: async () => {
+        const boards = boardsOf(doc, id);
+        const name = safeFilename(doc[id]?.name ?? 'page');
+        try {
+          const { blob, missed } = await framesToPdf(
+            boards,
+            useUI.getState().viewport.zoom,
+            2,
+            tokenVars,
+          );
+          download(blob, `${name}.pdf`);
+          if (missed) {
+            window.alert(
+              `${missed} board${missed === 1 ? ' was' : 's were'} not on screen and could not be drawn. ` +
+                'Zoom out to fit the page and export again to include them.',
+            );
+          }
+        } catch (error) {
+          window.alert(error instanceof Error ? error.message : 'The export failed.');
+        }
+      },
     },
     {
       label: 'Rename page',
@@ -218,6 +279,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
   const pageId = useUI((s) => s.page);
+  const pages = usePages();
   const setHover = useUI((s) => s.setHover);
 
   const close = () => useUI.getState().setContextMenu(null);
@@ -270,6 +332,51 @@ function Menu({ menu }: { menu: OpenMenu }) {
     store.remove(selection);
     if (pasted.length) select(pasted);
   }
+
+  /**
+   * Figma's "Rasterize selection".
+   *
+   * Rendered here rather than in the store because this is where the DOM is —
+   * the picture is the canvas's own rendering of the layer, read back through
+   * the same exporter the PNG export uses, so what you get is what you saw.
+   *
+   * Every layer is rendered before the first one is replaced: rasterising as we
+   * go would take the next layer's element off the canvas midway through, and
+   * a layer that is not on screen cannot be rendered.
+   */
+  async function rasterizeSelection() {
+    const rendered: [string, string][] = [];
+    for (const id of selection) {
+      try {
+        const blob = await nodeToPng(id, zoom, 2, tokenVars);
+        rendered.push([id, await blobToDataUrl(blob)]);
+      } catch {
+        // a layer that is not on screen cannot be rendered; the rest still can
+      }
+    }
+    const made = rendered
+      .map(([id, src]) => store.rasterize(id, src))
+      .filter((id): id is string => !!id);
+    store.commit();
+    if (made.length) select(made);
+  }
+
+  /** A text layer already following a path, when that is the whole selection. */
+  const onPath = one && first?.textPath ? first.id : null;
+
+  /**
+   * The pair a "Type on path" needs: exactly one text layer and exactly one
+   * shape whose points can be opened, in either order.
+   */
+  const typeOnPath = (() => {
+    if (selection.length !== 2) return null;
+    const [a, b] = selection.map((id) => doc[id]);
+    if (!a || !b) return null;
+    const text = a.type === 'text' ? a : b.type === 'text' ? b : null;
+    const source = text === a ? b : a;
+    if (!text || text.textPath || !canEditPoints(source.type)) return null;
+    return { text: text.id, source: source.id };
+  })();
 
   const codeItems: Item[] = [
     { label: 'CSS', disabled: !one, run: () => writeText(cssFor(target, doc, false, varNames)) },
@@ -401,12 +508,73 @@ function Menu({ menu }: { menu: OpenMenu }) {
       run: () => useUI.getState().setRenameOpen(true),
     },
     {
+      label: 'Move to page',
+      // a file with one page has nowhere to move to, so the row greys rather
+      // than opening onto an empty list
+      disabled: !has || pages.length < 2,
+      items: pages
+        .filter((id) => id !== pageId)
+        .map((id) => ({
+          label: doc[id]?.name ?? 'Page',
+          run: () => {
+            store.moveToPage(selection, id);
+            store.commit();
+            // the layers are on another page now; keeping them selected would
+            // leave the panels describing something nobody can see
+            select([]);
+          },
+        })),
+    },
+    {
       label: 'Detach instance',
       shortcut: '⌥⌘B',
       disabled: !selection.some((id) => doc[id]?.instanceOf),
       run: () => {
         for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
         store.commit();
+      },
+    },
+    {
+      label: onPath ? 'Take off path' : 'Type on path',
+      // two layers, one of them text and one with an outline — Figma's own
+      // requirement, and the reason this is a menu command rather than a panel
+      // control: a panel only ever knows about one layer
+      disabled: !onPath && !typeOnPath,
+      run: () => {
+        if (onPath) store.detachFromPath(onPath);
+        else if (typeOnPath) store.attachToPath(typeOnPath.text, typeOnPath.source);
+        store.commit();
+      },
+    },
+    {
+      label: 'Rasterize selection',
+      disabled: !has,
+      run: () => void rasterizeSelection(),
+    },
+    {
+      label: 'Go to main component',
+      disabled: !one || !mainOf(first) || !doc[mainOf(first)!],
+      run: () => revealNode(mainOf(first)!, doc),
+    },
+    {
+      label: 'Push changes to main component',
+      // nothing to push is not the same as nothing selected, and the row says
+      // which by greying rather than by running and doing nothing
+      disabled: !one || !doc[mainOf(first) ?? ''] || !hasOverrides(first?.id ?? '', doc),
+      run: () => {
+        store.pushToMain(target);
+        store.commit();
+      },
+    },
+    {
+      label: 'Restore component',
+      // only for an instance whose main has gone: with the main still there
+      // this would make a second one
+      disabled: !one || !mainOf(first) || !!doc[mainOf(first)!],
+      run: () => {
+        const restored = store.restoreComponent(target);
+        store.commit();
+        if (restored) select([restored]);
       },
     },
 

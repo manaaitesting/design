@@ -27,9 +27,18 @@ update it at the end of every session.** It outlives compaction; nothing else he
   surface being covered. Eight further rows below, all found by reading source
   against Figma's published shortcut panel: `C-23`, `C-24`, `T-14`, `T-15`,
   `K-40`, `L-14`, `CP-09`, `S-14`. Seven are closed; see the session log.
-- **199 parity, 8 deliberate, 0 partial.** The two rows that were `partial` were
-  argued rather than fixed, twice, and the user overruled that both times —
-  correctly. See the session log.
+- **Phase 1, third sweep — 2026-08-30, sixth pass.** Ten further rows, found by
+  walking the two surfaces no earlier pass had: **drawing gestures** and
+  **Figma's menu bar**.
+- **Phase 3, second run — complete.** All ten are closed with code and tests:
+  `C-25`, `C-26`, `L-15`, `CP-10`, `VR-07`, `OB-01`, `X-09`, `TL-16`, `T-16`,
+  `T-11`. Eleven commits. Two of the ten changed verdict once the evidence was
+  read: `TL-16` was `partial` and turned out to be `wrong` (⇧S carried ⌘S's
+  behaviour), and `T-11` was `deliberate` on a reason that had expired.
+- **One new row is open: `C-27`**, found while testing `C-25` — the selection's
+  resize handles stay live while a drawing tool is armed, so a press that lands
+  on one resizes instead of drawing.
+- **210 parity, 7 deliberate, 0 partial, 1 missing (`C-27`).**
 
 ### What Phase 3 changed
 
@@ -383,6 +392,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | <a id="x-05"></a>X-05 | PDF | Yes | A one-page PDF, sized in points, lossless and alpha-correct. The artwork is a raster: vector *text* would mean re-laying out type the browser has already laid out **Now matches Figma.** | parity | `src/export/raster.ts` — **fixed `21b79ec`**, lossless + soft mask in `351081d` |
 | X-06 | Slices export the region under them | Yes | Yes | parity | test `features.spec.ts:526` |
 | X-07 | JPG export | Yes | Absent **Now matches Figma.** | parity | `types.ts:457` — **fixed `6743ce0`**. |
+| <a id="x-09"></a>X-09 | Export frames to PDF — one document, one page per frame | Walks every board on the page in canvas order and writes one multi-page PDF | `nodeToPdf` wrote one page sized to one layer, so a deck was handed over as a folder of PDFs **Now matches Figma.** | parity | `export/raster.ts` `framesToPdf`, `pdfWithRaster`; `document/layers.ts` `boardsOf` — **fixed `8480a78`**. Each page keeps its own board's size in points rather than being squared onto one sheet. The order is the same left-to-right walk `N` uses, so the comparator moved to `document/layers` and both read it from there. Boards not on screen are counted and reported, never silently dropped. |
 | X-08 | One source of style for canvas and export | — | `nodeStyle()` feeds both | parity (invariant) | `document/css.ts`; `export/toCode.ts` |
 
 ## Collaboration and file management
@@ -410,6 +420,123 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | SV-03 | Comments outside the undo scope | Yes | Yes | parity | `store.ts:868-899` |
 | SV-04 | Curves only in `geometry.ts`, booleans only in `clipper.ts` | Yes | Yes | parity | `document/geometry.ts`; `document/clipper.ts` |
 | SV-05 | Selection rules only in `selection.ts` | Yes | Yes — the marquee now injects a DOM-measuring `rectOf` rather than building geometry itself | parity | `Canvas.tsx` marquee release; `selection.ts:132-149` — **fixed `d770604`** |
+
+---
+
+# Phase 1 — third sweep (2026-08-30, sixth pass): ten open rows
+
+The second sweep closed with an instruction to itself: **"the next sweep should
+start from the gestures, not the panels."** This one did, and then walked
+Figma's *menu bar* — File, Edit, Object, Vector, Text — which is a different
+surface again from the panels (first sweep) and the shortcut cheatsheet (second).
+
+Nothing below is closed. Every row cites `file:line` and was established by
+reading source, not the README. Ranked by how often a real user hits it.
+
+**Every row below is now closed.** The ranking is kept as it stood before the
+work, because what it got wrong is worth keeping: `TL-16` is filed here as
+`partial` and was actually `wrong`, and `T-11` is filed as "not user-facing"
+when the feature it describes was missing outright.
+
+| # | row | was | closed by | test |
+|---|-----|-----|-----------|------|
+| 1 | [C-25 ⇧ / ⌥ while drawing a shape](#c-25) | missing | `544bcd0` | editor: "⇧ while drawing gives a square, sized by the axis you pulled furthest", "⌥ draws the shape out from the press point as its centre", "⇧ pressed mid-draw squares the box without waiting for the pointer" |
+| 2 | [L-15 move layers to another page](#l-15) | missing | `688d885` | editor: "a layer moved to another page keeps the position it looked like it had", "moving a frame carries its children, and nothing moves twice", "Move to page lists the other pages, and moving empties the selection" |
+| 3 | [CP-10 go to main / push changes to main / restore](#cp-10) | missing | `910e52b` | editor: "pushing an override to the main carries it to every other instance", "an override on a layer inside the instance pushes too", "an instance whose main has gone can rebuild it, and the orphans follow", "Go to main component crosses to the page the main is on", "Push and Restore grey out when there is nothing for them to do" |
+| 4 | [VR-07 boolean variables](#vr-07) | missing | `a3ab0a3` | editor: "a boolean variable drives a layer's visibility, in both directions", "a frame that sets a mode hides what that mode says to hide", "a bound layer's eye is greyed, because the variable owns it" |
+| 5 | [OB-01 rasterize selection](#ob-01) | missing | `a197e1d` | editor: "rasterize replaces a layer with a picture of it, in its place in the stack" |
+| 6 | [X-09 export frames to PDF as one document](#x-09) | missing | `8480a78` | editor: "a page exports every board as one PDF, a page each, in canvas order" |
+| 7 | [TL-16 section tool](#tl-16) | partial → **wrong** | `6fa0fd3` | editor: "⇧S arms the section tool, and a drag draws one", "a section drawn over boards takes in the ones it covers whole", "⌘S puts the selection on a board without moving it" |
+| 8 | [T-16 paste without formatting](#t-16) | missing | `bf3f2c9` | features: "⇧⌥⌘V pastes plain text at the caret, in the caret's style", "⇧⌥⌘V with the caret collapsed inserts rather than replaces" |
+| 9 | [C-26 Space while drawing repositions the shape](#c-26) | missing | `b01df7a` | editor: "Space while drawing walks the box without resizing it" |
+| 10 | [T-11 text on a path](#t-11-recheck) | deliberate → **missing** | `984d1f4` | features: "text put on a path follows it, and comes back off it again", "a text layer cannot be put on a frame, which has no outline to offer"; export: "a text layer on a path exports as real type along the same outline"; editor: "Type on path needs a text layer and a shape, and offers to undo itself" |
+
+## Gestures
+
+| id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
+|----|-----------|-------------------|-----------------|---------|----------|
+| <a id="c-25"></a>C-25 | ⇧ / ⌥ while drawing a rect, ellipse, frame, polygon, star or text box | ⇧ constrains to 1:1 — a square, a circle; ⌥ draws out from the press point as the centre; the two together give a centred square | The draw handler built its box from `Math.min`/`Math.abs` on the raw pointer and never read `shiftKey` or `altKey`. The *line* tool did honour ⇧, which is what made the omission on boxes a surprise rather than a policy **Now matches Figma.** | parity | `Canvas.tsx` `drawBox` and the draw path — **fixed `544bcd0`**. Both modifiers are read off the window as well as the pointer, so the box reshapes the moment a key goes down rather than on the next mouse move — which is most of the time, since ⇧ is reached for *after* the size is roughly right. |
+| <a id="c-26"></a>C-26 | Space held mid-draw moves the shape being drawn | The box keeps its size and follows the pointer until Space is released | Was absent — Space was bound to pan and the draw closure never consulted it **Now matches Figma.** | parity | `Canvas.tsx` draw path — **fixed `b01df7a`**. Space-to-pan stands down while a draw runs: lighting the hand tool under a gesture that is not panning would say the wrong thing, and the pan would fight the box for the key. A box Space has walked away from the press is parented by where it was released. |
+
+| <a id="c-27"></a>C-27 | An armed drawing tool takes the pointer, selection chrome included | The rectangle tool draws wherever you press, including over the handles of whatever is still selected | `Overlay` never reads the armed tool, so a selected layer's eight resize handles stay live. A press that lands on one resizes it instead of starting a shape — and the corner of a layer you have just drawn is exactly where the next press often lands | missing | no hit for `tool` anywhere in `Overlay.tsx`; handles rendered unconditionally at `Overlay.tsx:548-567` |
+
+## Layers and pages
+
+| id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
+|----|-----------|-------------------|-----------------|---------|----------|
+| <a id="l-15"></a>L-15 | Move the selection to another page | Right-click ▸ Move to page | There was no cross-page move at all; cut-and-paste was the only route, and it is two undo steps that drop the layers where the paste decides **Now matches Figma.** | parity | `store.ts` `moveToPage`; `ContextMenu.tsx` — **fixed `688d885`**. The layers land at canvas level and keep the position they looked like they had. The rebase walks *every* ancestor between the layer and its page: `moveMany` rebases by one level because the panel drag it serves only ever crosses one, so reusing it would have misplaced a twice-nested layer. `pagePoint` is in `document/types` beside `pageOf`. |
+
+## Components
+
+| id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
+|----|-----------|-------------------|-----------------|---------|----------|
+| <a id="cp-10"></a>CP-10 | Go to main component · Push changes to main · Restore component | Three commands on an instance | Reset, detach and swap were all here, so `instanceOf` was recorded and never read **Now matches Figma.** | parity | `store.ts` `pushToMain`, `restoreComponent`; `lib/view.ts` `revealNode` — **fixed `910e52b`**. Go to main also fixed the button that claimed to do it: the panel called `select([main.id])`, which selects without going anywhere, so a main on another page was selected where nobody could see it. Push carries only inheritable properties — position and name are the instance's own, and `sync` will not let the structure diverge. Restore repoints *every* orphan of the same missing id, and refuses while the main is still there. |
+
+## Variables
+
+| id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
+|----|-----------|-------------------|-----------------|---------|----------|
+| <a id="vr-07"></a>VR-07 | Boolean variables, and binding one to a layer's visibility | Four variable types, and a boolean binds to `visible` — how a design system ships a feature flag | There were three types and no boolean; nothing bound to `visible` except a component property, which is a different mechanism that stops at one component **Now matches Figma.** | parity | `types.ts` `BoundField`; `store.ts` `bindVariable`, `valueFor` — **fixed `a3ab0a3`**. A boolean cannot ride the CSS cascade the other three do — `visible` is not a property a `var()` can drive — so the *mode* is resolved in JavaScript by walking to the nearest ancestor that names one. Without that walk a flag would read the default mode everywhere, which is the one thing a flag must not do. The eye greys while bound. The variables panel grew a type picker on the way: there had been no way to make anything but a colour through the UI. |
+
+## Object menu
+
+| id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
+|----|-----------|-------------------|-----------------|---------|----------|
+| <a id="ob-01"></a>OB-01 | Rasterize selection | Each selected layer becomes an image of itself | Was absent entirely, though the hard half — `nodeToPng` — was already here **Now matches Figma.** | parity | `store.ts` `rasterize`; `ContextMenu.tsx` — **fixed `a197e1d`**. One image per layer, each in its original's place in the stack. A turned layer comes out flat: the rendering already has the turn baked into an axis-aligned box, so keeping the rotation would apply it twice. Every layer is rendered before the first is replaced — rasterising as we go would take the next layer's element off the canvas, and a layer that is not on screen cannot be rendered. |
+| <a id="tl-16"></a>TL-16 | Section tool (⇧S), and ⌘S to wrap a selection | **⇧S arms the Section tool** — "click and drag the location of the canvas where you'd like the section to go" — and **⌘S** wraps the selected frames in one | This canvas had ⌘S's behaviour bound to ⇧S's key, so the tool did not exist and the wrap was on the wrong shortcut. Filed as `partial`; it was `wrong` **Now matches Figma.** | parity | `Editor.tsx` `SHIFT_TOOL_KEYS`; `Canvas.tsx` `DRAW_TOOLS`; `store.ts` `adoptIntoSection` — **fixed `6fa0fd3`**. A section drawn over boards takes in the ones it covers *whole* — a board the box clips through was being drawn across, not collected. Four existing tests moved from ⇧S to ⌘S: they were testing the right behaviour on the wrong key. Settled from help.figma.com "Organize your canvas with sections", not from memory. |
+
+## Text
+
+| id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
+|----|-----------|-------------------|-----------------|---------|----------|
+| <a id="t-16"></a>T-16 | ⇧⌥⌘V paste without formatting | Drops the incoming runs and takes the caret's style | Was unbound **Now matches Figma.** | parity | `TextEditor.tsx` `pastePlain` — **fixed `bf3f2c9`**. The text goes in through the model, for the same reason ⌘B does. It takes the style of *what it replaces*, not of the character in front of it: `replaceRange` inherits from the preceding character, which is right for typing and wrong for a replacement — paste over a bold word and the result should be bold. Every key the insertion would otherwise inherit is cleared before the wanted style goes on. |
+| <a id="t-11-recheck"></a>T-11 | Text on a path | **Figma has this**, shipped with Figma Draw in 2025 | Was absent, and the row's `deliberate` verdict rested on "Figma does not have it either" — a reason that had expired **Now matches Figma.** | parity | `document/textpath.ts`; `NodeView.tsx` `PathText`; `export/toCode.ts` `pathTextMarkup` — **fixed `984d1f4`**. SVG lays the glyphs out, which is the only version that keeps the invariant: the browser is still the renderer and the export is the same description rather than a second opinion. One spec feeds both, so they cannot disagree about where a letter sits. Attaching gives the text the shape's box, so the outline's local coordinates mean the same thing in both. Exported type is real, selectable type. |
+
+## What this sweep says about the second one
+
+The second sweep's lesson — start from the gestures — was right and it found
+C-25, the highest-frequency row here: **⇧ to draw a square is muscle memory, and
+it silently does nothing.** It is invisible from the panels *and* from the
+shortcut cheatsheet, because Figma does not list drawing modifiers as shortcuts;
+they are in the drawing docs. The line tool honouring ⇧ while the box tools
+ignore it is the tell — one gesture path was written with modifiers in mind and
+the other was not.
+
+The other half of this sweep came from the **menu bar**, which no previous pass
+had walked: L-15, CP-10, OB-01 and X-09 are all plain menu commands, and all
+four were absent. A shortcut panel does not list them because they have no
+shortcut. **The surfaces are not interchangeable: panels, shortcuts, gestures
+and menus each hide a different class of gap.** The one surface still unwalked
+is Preferences — nudge amount, snap-to-geometry, invert-zoom and the rest — which
+is where a fourth sweep should start.
+
+## What closing the ten turned up
+
+1. **Two of the ten had the wrong verdict, and reading the evidence changed
+   both.** `TL-16` was filed `partial` — "⇧S wraps but cannot draw" — and Figma's
+   own help says ⇧S *is* the tool and ⌘S is the wrap, which makes it `wrong`:
+   the behaviour was on the wrong key, not merely incomplete. `T-11` was
+   `deliberate` on a reason that had expired. **A verdict is only as good as the
+   argument under it, and arguments go stale.** Both were settled from Figma's
+   published docs rather than from memory, which is the rule the third pass
+   already wrote down and this pass had to be reminded of once.
+2. **A row can break a neighbour it never touched.** CP-10 added three menu rows
+   and pushed the canvas menu past the height of the window; the clamp pinned
+   the top at 8px and everything below the fold — Flip, Delete — became
+   unclickable. Two *existing* tests caught it, which is exactly what tests that
+   click rows near the bottom of a menu are for. Fixed in `e8a189c` by letting a
+   long menu scroll, as Figma's does.
+3. **C-27 came out of a failing test of my own.** A draw test pressed on the
+   corner of the layer it had just drawn, and the press resized instead of
+   drawing. The first reading was "bad test coordinates"; the second was that
+   `Overlay` never reads the armed tool. The test was fixed *and* the row
+   recorded — a test that has to avoid a spot on the canvas is telling you
+   something about the canvas.
+4. **Do not run the suite while editing `src/`.** Two failures in this session
+   were the dev server hot-reloading mid-test, not the code: the page reloads,
+   `window.paperlike` is rebuilt, and the document under the assertion is gone.
+   Both passed on a clean re-run. Any run that overlaps an edit should be
+   treated as no evidence at all.
 
 ---
 
@@ -458,6 +585,43 @@ anyone disagrees with the trade.
 V-07, and the four approximate adjustments. All six README limits stand.
 
 ## Session log
+
+- **2026-08-30, seventh pass** — the user asked for the ten open rows to be
+  implemented, one at a time. All ten are closed: eleven commits on
+  `figma-parity-sweep-3`, and one new row (`C-27`) opened by the work.
+  What the pass is worth remembering for is above, under "What closing the ten
+  turned up": two verdicts were wrong until the evidence was actually read, one
+  row broke a neighbour it never touched, `C-27` came out of a test failure that
+  looked like a bad fixture, and two more failures were the dev server reloading
+  under the suite rather than anything in the code.
+  The largest of the ten was `T-11`. It is worth saying why it was possible at
+  all: SVG lays type along a path using the browser's own engine, so the feature
+  fits inside the invariant instead of arguing with it. Placing glyphs by hand
+  would have been a second text renderer, and "the canvas and the export cannot
+  drift" only holds while there is one — which is the same reasoning that keeps
+  PDF artwork a raster, and the same reasoning that made this one *not* a raster.
+
+- **2026-08-30, sixth pass** — the user asked what is left against Figma's Design
+  mode. Every row in the ledger was closed, so Phase 1 ran a third time over the
+  two surfaces the earlier passes had not walked: the **drawing gestures** and
+  **Figma's menu bar**. Ten rows, nine of them open, none of them fixed in this
+  session — the ask was the gap list, not the work.
+  **What it found that the first two sweeps could not.** C-25 (⇧ / ⌥ while
+  drawing) is the highest-frequency row in the file today and is invisible from
+  both earlier surfaces: Figma does not list drawing modifiers in its shortcut
+  panel, and there is no control for them in any panel. The tell was inside this
+  repo rather than in Figma — `Canvas.tsx:515` honours ⇧ on the *line* tool and
+  `:546-590` ignores it on every box tool, so one gesture path was written with
+  modifiers in mind and the other was not.
+  The four menu-bar rows (L-15, CP-10, OB-01, X-09) are all plain commands with
+  no shortcut, which is exactly why a shortcut-panel sweep could not see them.
+  **Panels, shortcuts, gestures and menus each hide a different class of gap.**
+  Preferences is the one surface still unwalked.
+  T-11 is a correction to the ledger, not to the code: its `deliberate` verdict
+  says "Figma does not have it either", and Figma Draw shipped text on a path in
+  2025. The absence is still real; the justification is not.
+  No code changed and no test ran this pass, so the recorded baseline (379
+  passing) stands as last measured, not as re-verified.
 
 - **2026-08-30** — Phase 1 and Phase 2 complete. Baseline recorded above: typecheck
   clean, 345/345 tests green. Ledger built from source reading plus the existing

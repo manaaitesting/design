@@ -39,6 +39,7 @@ import {
 } from './Session';
 import { canHoldModes, inScope } from '../document/variables';
 import { useUI } from '../state/ui';
+import { revealNode } from '../lib/view';
 import {
   alignAnchors,
   applyMirror,
@@ -694,7 +695,10 @@ function ComponentSection({ node }: { node: SceneNode }) {
             ) : (
               <FigButton
                 style={{ flex: 1, justifyContent: 'flex-start', color: '#9747FF' }}
-                onClick={() => main && select([main.id])}
+                title="Go to main component"
+                // selecting it is not the same as going to it: a main on
+                // another page would be selected where nobody can see it
+                onClick={() => main && revealNode(main.id, doc)}
               >
                 {main ? main.name : 'main component missing'}
               </FigButton>
@@ -2423,6 +2427,33 @@ function PositionSection({
  * a bound field shows the variable's name rather than the number it resolved
  * to — which is what tells you the value is the variable's to change.
  */
+/**
+ * Binding a layer's visibility to a boolean variable.
+ *
+ * The one thing Figma's boolean variables drive, and the reason they exist: a
+ * design system ships a feature behind a flag by binding every layer that
+ * belongs to it to one variable, and switching a mode turns the feature off
+ * everywhere at once.
+ */
+function VisibilityVariable({ node }: { node: SceneNode }) {
+  const names = useVarNames();
+  const [open, setOpen] = useState(false);
+  const bound = variableLabel(node, 'visible', names);
+
+  return (
+    <>
+      <FigButton
+        title={bound ? `Visibility follows ${bound}` : 'Apply variable to visibility'}
+        on={!!bound}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <FigIcon name="Apply variable" size={12} />
+      </FigButton>
+      {open && <VariableMenu node={node} field="visible" onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 function VarField({
   node,
   field,
@@ -3235,10 +3266,14 @@ function AppearanceSection({
         <>
           <FigButton
             title={node.visible ? 'Hide' : 'Show'}
+            // a bound layer's visibility belongs to the variable: toggling it
+            // by hand would be overwritten the next time the mode changed
+            disabled={!!node.vars?.visible}
             onClick={() => set({ visible: !node.visible })}
           >
             <Icon.Eye off={!node.visible} />
           </FigButton>
+          <VisibilityVariable node={node} />
           <FigButton
             title={node.locked ? 'Unlock layer' : 'Lock layer'}
             on={node.locked}
@@ -4135,7 +4170,48 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
       )}
 
       <FigPaintRow color={font.color} alpha={1} onColor={(color) => patch({ color })} />
+      {node.textPath && <PathTypeRow node={node} set={set} />}
     </FigSection>
+  );
+}
+
+/**
+ * The two things there are to say about type on a path: where along the line it
+ * starts, and which side of it the letters sit on.
+ *
+ * Shown only once the text is on a path. Putting it there is a two-layer
+ * command — pick the text and the shape — so it lives in the right-click menu,
+ * beside the other commands that need two things selected.
+ */
+function PathTypeRow({ node, set }: { node: SceneNode; set: Setter }) {
+  const store = useStore();
+  const on = node.textPath!;
+  return (
+    <>
+      <FigLabel>On path</FigLabel>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigField
+          value={Math.round(on.offset)}
+          glyph={<FigIcon name="Rotation" />}
+          suffix="%"
+          min={0}
+          max={100}
+          title="Start along the path"
+          onChange={(offset) => set({ textPath: { ...on, offset } })}
+        />
+        <FigGroup
+          value={on.side}
+          onChange={(side) => set({ textPath: { ...on, side } })}
+          options={[
+            { value: 'top' as const, label: <Icon.AlignV at="top" />, title: 'Outside the line' },
+            { value: 'bottom' as const, label: <Icon.AlignV at="bottom" />, title: 'Inside the line' },
+          ]}
+        />
+        <FigButton title="Take off the path" onClick={() => store.detachFromPath(node.id)}>
+          <FigIcon name="Remove" />
+        </FigButton>
+      </div>
+    </>
   );
 }
 

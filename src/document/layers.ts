@@ -196,3 +196,16 @@ export function panelOrder(doc: Doc, pageId: string): string[] {
   if (page) for (let i = page.children.length - 1; i >= 0; i--) walk(page.children[i]);
   return order;
 }
+
+/**
+ * The boards on a page, in canvas order — left to right, then top to bottom.
+ *
+ * This is the order Figma reads a page in, rather than the stacking order, and
+ * two commands want the same answer: `N` walks the boards in it, and a PDF of
+ * the page puts them on its pages in it.
+ */
+export function boardsOf(doc: Doc, pageId: string): string[] {
+  return (doc[pageId]?.children ?? [])
+    .filter((id) => doc[id]?.type === 'frame' || doc[id]?.type === 'section')
+    .sort((a, b) => doc[a].x - doc[b].x || doc[a].y - doc[b].y);
+}

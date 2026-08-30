@@ -39,6 +39,7 @@ import {
 
 const DRAW_TOOLS: Partial<Record<Tool, NodeType>> = {
   frame: 'frame',
+  section: 'section',
   rect: 'rect',
   ellipse: 'ellipse',
   polygon: 'polygon',
@@ -77,6 +78,33 @@ function constrain45(
   return { x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length };
 }
 
+/**
+ * The box a draw gesture is describing, with Figma's two modifiers applied.
+ *
+ * ⇧ constrains it to 1:1 — a square, a circle — by taking whichever axis you
+ * pulled furthest along, so the shape follows the gesture rather than snapping
+ * to the smaller of the two. ⌥ reads the press as the *centre* instead of a
+ * corner, so the box grows both ways at once. Together they give a centred
+ * square, which is the pair everyone uses to drop a circle on a point.
+ */
+function drawBox(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  square: boolean,
+  fromCentre: boolean,
+): { x: number; y: number; w: number; h: number } {
+  let w = Math.abs(to.x - from.x);
+  let h = Math.abs(to.y - from.y);
+  if (square) w = h = Math.max(w, h);
+  if (fromCentre) return { x: from.x - w, y: from.y - h, w: w * 2, h: h * 2 };
+  return {
+    x: to.x < from.x ? from.x - w : from.x,
+    y: to.y < from.y ? from.y - h : from.y,
+    w,
+    h,
+  };
+}
+
 /** Dragging a flex child moves the container it flows inside, not the child. */
 function draggableTarget(id: string, doc: Doc): string {
   let current: SceneNode | undefined = doc[id];
@@ -93,6 +121,8 @@ export function Canvas() {
   const spacePan = useUI((s) => s.spacePan);
   /** true only while a pan drag is running, for the closed-hand cursor */
   const [panning, setPanning] = useState(false);
+  /** true while a shape is being drawn, so Space moves the box instead of panning */
+  const drawing = useRef(false);
   const setTool = useUI((s) => s.setTool);
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
@@ -294,6 +324,9 @@ export function Canvas() {
       // — but only once the guard above has ruled out everything it belongs to.
       e.preventDefault();
       if (e.repeat) return;
+      // A draw in progress owns Space: there it moves the shape being drawn,
+      // and lighting the hand tool underneath it would say the wrong thing.
+      if (drawing.current) return;
       useUI.getState().setSpacePan(true);
     };
     const up = (e: KeyboardEvent) => {
@@ -548,26 +581,70 @@ export function Canvas() {
       // the live box lives in this closure — React state only mirrors it for
       // the preview, and would lag behind a fast drag
       let box: Draft | null = null;
+      let origin = start;
+      let last = start;
+      let square = false;
+      let centred = false;
+      let spacing = false;
+      /** where the pointer was released, for a box Space has walked away */
+      let released: { x: number; y: number } | null = null;
+
+      const paint = () => {
+        box = { type: drawType, ...drawBox(origin, last, square, centred) };
+        setDraft(box);
+      };
+
+      // ⇧, ⌥ and Space are read off the window as well as off the pointer,
+      // because Figma answers them the moment you press one — waiting for the
+      // next mouse move would leave the shape wrong for as long as you held
+      // still, which is most of the time: you reach for ⇧ *after* the size is
+      // roughly right.
+      const onModifier = (e: KeyboardEvent) => {
+        if (e.code === 'Space') {
+          // Space picks the box up and puts it down again wherever you let go
+          e.preventDefault();
+          spacing = e.type === 'keydown';
+          return;
+        }
+        if (e.shiftKey === square && e.altKey === centred) return;
+        square = e.shiftKey;
+        centred = e.altKey;
+        if (box) paint();
+      };
+      window.addEventListener('keydown', onModifier);
+      window.addEventListener('keyup', onModifier);
+      drawing.current = true;
+      const stopModifiers = () => {
+        drawing.current = false;
+        window.removeEventListener('keydown', onModifier);
+        window.removeEventListener('keyup', onModifier);
+      };
+
       drag(
         store,
         event,
         (e) => {
-          const current = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
-          box = {
-            type: drawType,
-            x: Math.min(start.x, current.x),
-            y: Math.min(start.y, current.y),
-            w: Math.abs(current.x - start.x),
-            h: Math.abs(current.y - start.y),
-          };
-          setDraft(box);
+          const world = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
+          if (spacing) {
+            // the box keeps its size and travels: both ends move together
+            origin = { x: origin.x + (world.x - last.x), y: origin.y + (world.y - last.y) };
+            released = { x: e.clientX, y: e.clientY };
+          }
+          last = world;
+          square = e.shiftKey;
+          centred = e.altKey;
+          paint();
         },
         () => {
+          stopModifiers();
           const size = box && box.w > 4 && box.h > 4
             ? box
-            : { x: start.x, y: start.y, w: drawType === 'text' ? 120 : 100, h: drawType === 'text' ? 24 : 100 };
+            : { x: origin.x, y: origin.y, w: drawType === 'text' ? 120 : 100, h: drawType === 'text' ? 24 : 100 };
 
-          const parentId = containerAt(event.clientX, event.clientY, doc) ?? page.id;
+          // the press decides which frame the shape lands in — unless Space
+          // walked the box somewhere else, and then the release does
+          const at = released ?? { x: event.clientX, y: event.clientY };
+          const parentId = containerAt(at.x, at.y, doc) ?? page.id;
           const parent = doc[parentId];
           const local =
             parentId === page.id
@@ -584,6 +661,9 @@ export function Canvas() {
               : null),
           });
           setDraft(null);
+          // a section drawn over boards takes them in, which is what the tool
+          // is for — you draw one around the work, not beside it
+          if (drawType === 'section') store.adoptIntoSection(id);
           select([id]);
           setTool('move');
           if (drawType === 'text') setEditing(id);

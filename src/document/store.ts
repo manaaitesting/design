@@ -6,6 +6,7 @@ import {
   anchorBounds,
   cloneAnchor,
   flattenAnchors,
+  canEditPoints,
   isClosedShape,
   isPathType,
   outlinePaths,
@@ -26,7 +27,9 @@ import {
   descendants,
   instanceRoot,
   isCanvasRoot,
+  isBooleanField,
   isInFlow,
+  pagePoint,
   setOf,
   ROOT_ID,
   type Align,
@@ -37,6 +40,7 @@ import {
   type FlexSpec,
   type Interaction,
   type NodeType,
+  type BoundField,
   type NumericField,
   FONT_FIELDS,
   isFontField,
@@ -50,7 +54,7 @@ import {
 } from './types';
 import { newId } from '../lib/id';
 import type { CustomFont } from '../lib/fonts';
-import { DEFAULT_COLLECTION, DEFAULT_COLLECTION_ID, type Collection } from './variables';
+import { collectionOf, DEFAULT_COLLECTION, DEFAULT_COLLECTION_ID, type Collection } from './variables';
 
 /** Tag for edits made by this client, so the UndoManager only rewinds our own work. */
 export const LOCAL_ORIGIN = Symbol('local');
@@ -96,6 +100,21 @@ function fromY(map: YNode): SceneNode {
     out[key] = value instanceof Y.Array ? value.toArray() : value;
   }
   return out as unknown as SceneNode;
+}
+
+/**
+ * A boolean variable's value.
+ *
+ * Values are stored as strings throughout, so this is where "false" stops
+ * being a non-empty string and starts being false. Anything that is not one of
+ * the two words is not an answer, and the binding is left alone rather than
+ * guessed at.
+ */
+function booleanOf(value: string): boolean | null {
+  const word = value.trim().toLowerCase();
+  if (word === 'true') return true;
+  if (word === 'false') return false;
+  return null;
 }
 
 /** The number inside a token's value — "16", "16px" and "1.5rem" all count. */
@@ -721,9 +740,34 @@ export class DocStore {
    * The field's number is set from the variable straight away, so nothing has
    * to wait a propagation tick to look right.
    */
-  bindVariable(ids: string[], field: NumericField, tokenId: string | null): void {
+  /**
+   * The value a variable has *for this layer*.
+   *
+   * A number resolves through CSS, where the cascade already answers this: the
+   * frame that sets a mode re-declares the custom properties on itself and
+   * everything inside inherits them. A boolean has no such route — `visible` is
+   * not a property a `var()` can drive — so the mode has to be resolved here,
+   * by walking up to the nearest ancestor that names one. Without this a
+   * feature flag would read the default mode everywhere, which is the one thing
+   * a flag must not do.
+   */
+  private valueFor(token: Token, nodeId: string): string {
+    const collection = collectionOf(token);
+    let node: SceneNode | undefined = this.snap[nodeId];
+    while (node) {
+      const mode = node.modes?.[collection];
+      if (mode) return token.values?.[mode] ?? token.value;
+      node = node.parent ? this.snap[node.parent] : undefined;
+    }
+    return token.value;
+  }
+
+  bindVariable(ids: string[], field: BoundField, tokenId: string | null): void {
     const token = tokenId ? this.tokens.get(tokenId) : null;
-    const resolved = token ? numberOf(token.value) : null;
+    // a boolean drives `visible`, which is not a number and has no CSS var to
+    // render through — the stored flag is the only copy of the answer
+    const boolean = isBooleanField(field);
+    const resolved = !boolean && token ? numberOf(token.value) : null;
     this.transact(() => {
       for (const id of ids) {
         const node = this.snap[id];
@@ -733,7 +777,12 @@ export class DocStore {
         if (tokenId) bound[field] = tokenId;
         else delete bound[field];
         ymap.set('vars', bound);
-        if (resolved !== null) writeBound(ymap, node, field, resolved);
+        if (boolean) {
+          const flag = token ? booleanOf(this.valueFor(token, id)) : null;
+          if (flag !== null) ymap.set('visible', flag);
+        } else if (resolved !== null) {
+          writeBound(ymap, node, field as NumericField, resolved);
+        }
       }
     });
   }
@@ -754,12 +803,18 @@ export class DocStore {
         if (!ymap) continue;
         // Line height is stored as a ratio of the font size, so a layer with
         // both bound has to resolve its size before the ratio is worked out.
-        const fields = (Object.entries(node.vars) as [NumericField, string][]).sort(
+        const fields = (Object.entries(node.vars) as [BoundField, string][]).sort(
           ([a], [b]) => Number(b === 'fontSize') - Number(a === 'fontSize'),
         );
         for (const [field, tokenId] of fields) {
           const token = this.tokens.get(tokenId);
-          const value = token ? numberOf(token.value) : null;
+          if (!token) continue;
+          if (isBooleanField(field)) {
+            const flag = booleanOf(this.valueFor(token, node.id));
+            if (flag !== null && node.visible !== flag) ymap.set('visible', flag);
+            continue;
+          }
+          const value = numberOf(token.value);
           if (value === null) continue;
           writeBound(ymap, node, field, value);
         }
@@ -1098,6 +1153,52 @@ export class DocStore {
   }
 
   /**
+   * Figma's Move to page.
+   *
+   * The layers land at canvas level on the destination, keeping the position
+   * they had on the board they came from. They cannot keep their parents: a
+   * layer three frames deep has no meaning on a page without those frames, and
+   * inventing them would be a copy rather than a move. So the move flattens to
+   * the page and rebases the coordinates, which is what Figma does too.
+   *
+   * Returns the ids that actually moved, so the caller can decide what to
+   * select — they are no longer on the page the user is looking at.
+   */
+  moveToPage(ids: string[], pageId: string): string[] {
+    const page = this.snap[pageId];
+    if (!page || page.type !== 'page') return [];
+
+    const movers = ids.filter((id) => {
+      const node = this.snap[id];
+      if (!node || node.type === 'page') return false;
+      // a node carried along inside another mover must not move twice
+      return !ids.some((other) => other !== id && descendants(other, this.snap).includes(id));
+    });
+    if (!movers.length) return [];
+
+    // read every position before the first detach: taking one node out can
+    // resize a hug-sized ancestor, and the rest would then rebase off it
+    const at = movers.map((id) => pagePoint(id, this.snap));
+
+    this.transact(() => {
+      const target = this.childrenOf(pageId);
+      if (!target) return;
+      movers.forEach((id, index) => {
+        const ymap = this.nodes.get(id);
+        if (!ymap) return;
+        this.detach(id);
+        ymap.set('parent', pageId);
+        ymap.set('x', Math.round(at[index].x));
+        ymap.set('y', Math.round(at[index].y));
+      });
+      // as one block, so they keep the order they were given
+      target.insert(target.length, movers);
+    });
+
+    return movers;
+  }
+
+  /**
    * `]` bring to front · `[` send to back · `⌘]` forward · `⌘[` backward.
    *
    * Z-order is document order, last child in front. The stepping pair moves one
@@ -1386,6 +1487,91 @@ export class DocStore {
       }
     });
     return sectionId;
+  }
+
+  /**
+   * Figma Draw's "Type on a path": puts a text layer on another layer's outline.
+   *
+   * The text takes the path layer's box. The outline is drawn in the path
+   * layer's own local coordinates, so sharing the box is what makes those
+   * coordinates mean the same thing in both — otherwise the glyphs would land
+   * wherever the text box happened to be, which is beside the line rather than
+   * on it.
+   *
+   * The text keeps its own paint and type. Only where it sits changes.
+   */
+  attachToPath(textId: string, sourceId: string): boolean {
+    const text = this.snap[textId];
+    const source = this.snap[sourceId];
+    // any shape whose points can be opened has an outline to offer, which is
+    // the ellipse included — a circle is what most text on a path runs round
+    if (text?.type !== 'text' || !source || !canEditPoints(source.type)) return false;
+    // a layer cannot follow itself, and following a path inside itself is the
+    // same knot by a longer route
+    if (textId === sourceId || descendants(textId, this.snap).includes(sourceId)) return false;
+
+    this.update(textId, {
+      textPath: { source: sourceId, offset: 0, side: 'top' },
+      // the box has to match, and a hugging box would resize away from it
+      x: source.parent === text.parent ? source.x : text.x,
+      y: source.parent === text.parent ? source.y : text.y,
+      w: source.w,
+      h: source.h,
+      wMode: 'fixed',
+      hMode: 'fixed',
+    });
+    return true;
+  }
+
+  /** Takes the text off the path, leaving it where the path had it. */
+  detachFromPath(textId: string): void {
+    if (!this.snap[textId]?.textPath) return;
+    this.update(textId, { textPath: null });
+  }
+
+  /**
+   * Everything on the canvas that a freshly drawn section now covers.
+   *
+   * Figma's section tool takes what you drag it over — "click and drag a
+   * section over the objects you want to add to it" — so a section drawn round
+   * three boards holds those three boards. Only what is *wholly* inside counts:
+   * a board the box clips through was not being collected, it was being drawn
+   * across.
+   */
+  adoptIntoSection(sectionId: string): string[] {
+    const section = this.snap[sectionId];
+    if (section?.type !== 'section' || !section.parent) return [];
+    const siblings = this.snap[section.parent]?.children ?? [];
+
+    const taken = siblings.filter((id) => {
+      if (id === sectionId) return false;
+      const node = this.snap[id];
+      if (!node || node.locked) return false;
+      return (
+        node.x >= section.x &&
+        node.y >= section.y &&
+        node.x + node.w <= section.x + section.w &&
+        node.y + node.h <= section.y + section.h
+      );
+    });
+    if (!taken.length) return [];
+
+    this.transact(() => {
+      const kids = this.childrenOf(sectionId);
+      if (!kids) return;
+      for (const id of taken) {
+        const node = this.snap[id];
+        const ymap = this.nodes.get(id);
+        if (!node || !ymap) continue;
+        this.detach(id);
+        ymap.set('parent', sectionId);
+        // rebase onto the section's origin so nothing appears to move
+        ymap.set('x', Math.round(node.x - section.x));
+        ymap.set('y', Math.round(node.y - section.y));
+        kids.push([id]);
+      }
+    });
+    return taken;
   }
 
   /**
@@ -2607,6 +2793,53 @@ export class DocStore {
     return setId;
   }
 
+  /**
+   * Figma's "Rasterize selection": the layer becomes a picture of itself.
+   *
+   * The image takes the layer's place — same parent, same index in the stack —
+   * so anything laid out around it is undisturbed. One image per layer rather
+   * than one for the whole selection, because the layers stay separate layers:
+   * that is what the command is for.
+   *
+   * A turned layer comes out flat. The PNG the caller hands over is the
+   * *rendered* picture, and a rotated element renders inside its axis-aligned
+   * box with the turn already baked in — keeping the rotation as well would
+   * apply it twice, so the image takes the box the picture actually covers.
+   *
+   * The pixels are rendered by the caller, which is where the DOM is: this
+   * takes the finished data URL and does the document half.
+   */
+  rasterize(id: string, src: string): string | null {
+    const node = this.snap[id];
+    if (!node?.parent) return null;
+    const siblings = this.childrenOf(node.parent);
+    const index = siblings?.toArray().indexOf(id) ?? -1;
+    if (index < 0) return null;
+
+    const box = node.rotation ? regionBounds(placedRegion(node)) : null;
+    const made = this.create(
+      'image',
+      node.parent,
+      {
+        name: node.name,
+        x: Math.round(box ? box.minX : node.x),
+        y: Math.round(box ? box.minY : node.y),
+        w: Math.round(box ? box.maxX - box.minX : node.w),
+        h: Math.round(box ? box.maxY - box.minY : node.h),
+        // opacity and blend are the layer's relationship with what is behind
+        // it, not part of its own picture, so they travel; the paint does not
+        opacity: node.opacity,
+        blend: node.blend,
+        locked: node.locked,
+        visible: node.visible,
+        fill: `url(${src})`,
+      },
+      index,
+    );
+    this.remove([id]);
+    return made;
+  }
+
   detachInstance(id: string): void {
     const node = this.snap[id];
     if (!node?.instanceOf) return;
@@ -2616,6 +2849,108 @@ export class DocStore {
         this.nodes.get(child)?.set('overridden', []);
       }
     });
+  }
+
+  /**
+   * Figma's "Push changes to main component".
+   *
+   * The overrides on this instance are written onto the main and then dropped,
+   * so every *other* instance picks the same change up — the difference between
+   * fixing a button here and fixing the button everywhere.
+   *
+   * Only the properties an instance can pin travel. Position and name are the
+   * instance's own and are never inherited in either direction, and the
+   * structure cannot have diverged: `sync` trims and grows an instance to match
+   * its main on every pass, so there is nothing structural left to push.
+   */
+  pushToMain(instanceId: string): boolean {
+    const instance = this.snap[instanceId];
+    const mainId = instance?.instanceOf;
+    if (!mainId || !this.snap[mainId]) return false;
+
+    let pushed = false;
+    this.transact(() => {
+      // the two trees are walked in step by index, which is the same
+      // correspondence `sync` maintains in the other direction
+      const walk = (fromId: string, ontoId: string): void => {
+        const from = this.snap[fromId];
+        const onto = this.nodes.get(ontoId);
+        if (!from || !onto) return;
+        for (const key of from.overridden ?? []) {
+          if (NOT_INHERITED.has(key)) continue;
+          onto.set(key, from[key as keyof SceneNode]);
+          pushed = true;
+        }
+        this.nodes.get(fromId)?.set('overridden', []);
+        const kids = this.snap[ontoId]?.children ?? [];
+        from.children.forEach((child, index) => {
+          if (kids[index]) walk(child, kids[index]);
+        });
+      };
+      walk(instanceId, mainId);
+    });
+
+    if (pushed) this.propagate();
+    return pushed;
+  }
+
+  /**
+   * Figma's "Restore component": rebuilds a main that has been deleted, from
+   * an instance that was still following it.
+   *
+   * An orphaned instance is the only surviving record of what the main looked
+   * like, so the new main is a copy of *this* instance — overrides included,
+   * since they are the only version of the layer anyone can still see. It is
+   * placed beside the instance rather than on top of it, and every other orphan
+   * that pointed at the same missing id is repointed at the new main, because
+   * they were all one component before it went.
+   */
+  restoreComponent(instanceId: string): string | null {
+    const instance = this.snap[instanceId];
+    const missing = instance?.instanceOf;
+    // a main that is still here needs no restoring, and would be duplicated
+    if (!missing || this.snap[missing] || !instance.parent) return null;
+    const parentId = instance.parent;
+
+    let mainId: string | null = null;
+    this.transact(() => {
+      const copy = (sourceId: string, parent: string, isRoot: boolean): string => {
+        const source = this.snap[sourceId];
+        const id = newId();
+        this.nodes.set(
+          id,
+          toY(
+            makeNode(id, source.type, parent, {
+              ...source,
+              id,
+              parent,
+              children: [],
+              isComponent: isRoot,
+              instanceOf: undefined,
+              overridden: [],
+              // the main is being rebuilt here, not re-imported: it no longer
+              // has a library revision to answer to
+              libraryId: undefined,
+              libraryVersion: undefined,
+              x: isRoot ? Math.round(source.x + source.w + 40) : source.x,
+              y: isRoot ? source.y : source.y,
+            }),
+          ),
+        );
+        const kids = this.childrenOf(id);
+        for (const child of source.children) kids?.push([copy(child, id, false)]);
+        return id;
+      };
+
+      mainId = copy(instanceId, parentId, true);
+      this.childrenOf(parentId)?.push([mainId]);
+      for (const node of Object.values(this.snap)) {
+        if (node.instanceOf === missing) this.nodes.get(node.id)?.set('instanceOf', mainId);
+      }
+    });
+
+    this.propagate();
+    return mainId;
   }
 
   /** Throws away local edits so the instance matches its main again. */

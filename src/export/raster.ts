@@ -322,8 +322,57 @@ export async function nodeToPdf(
 ): Promise<Blob> {
   const serialised = nodeToSvg(nodeId, zoom, vars, contentsOnly);
   if (!serialised) throw new Error('That layer is not on screen — scroll it into view and try again.');
-  const canvas = await rasterise(serialised, scale);
+  return pdfWithRaster([await pdfPage(serialised, scale)]);
+}
 
+/**
+ * Figma's "Export frames to PDF": every board on the page, one per page, in one
+ * document.
+ *
+ * The order is canvas order — the same left-to-right walk `N` uses — because a
+ * deck's page order is the order the boards are laid out in, not the order they
+ * happen to be stacked in.
+ *
+ * Boards that are not on screen are skipped rather than fatal. The renderer
+ * works from the canvas's own DOM, so a page longer than the viewport would
+ * otherwise mean no PDF at all instead of a PDF of what could be drawn.
+ */
+export async function framesToPdf(
+  ids: string[],
+  zoom: number,
+  scale: number,
+  vars: Record<string, string> = {},
+): Promise<{ blob: Blob; missed: number }> {
+  const pages: PdfPage[] = [];
+  let missed = 0;
+  for (const id of ids) {
+    const serialised = nodeToSvg(id, zoom, vars);
+    if (!serialised) {
+      missed += 1;
+      continue;
+    }
+    pages.push(await pdfPage(serialised, scale));
+  }
+  if (!pages.length) {
+    throw new Error('No board on this page is on screen — zoom out to fit and try again.');
+  }
+  // `missed` is returned rather than swallowed: a PDF quietly short of a board
+  // is worse than one that says which
+  return { blob: pdfWithRaster(pages), missed };
+}
+
+interface PdfPage {
+  rgb: Uint8Array<ArrayBuffer>;
+  alpha: Uint8Array<ArrayBuffer>;
+  pixelW: number;
+  pixelH: number;
+  pointW: number;
+  pointH: number;
+}
+
+/** One rendered board, split into the colour and alpha PDF wants them in. */
+async function pdfPage(serialised: Serialised, scale: number): Promise<PdfPage> {
+  const canvas = await rasterise(serialised, scale);
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Canvas 2D is unavailable in this browser.');
   const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
@@ -337,15 +386,14 @@ export async function nodeToPdf(
     rgb[to + 2] = data[i + 2];
     alpha[i / 4] = data[i + 3];
   }
-
-  return pdfWithRaster(
-    await deflate(rgb),
-    await deflate(alpha),
-    canvas.width,
-    canvas.height,
-    serialised.width,
-    serialised.height,
-  );
+  return {
+    rgb: await deflate(rgb),
+    alpha: await deflate(alpha),
+    pixelW: canvas.width,
+    pixelH: canvas.height,
+    pointW: serialised.width,
+    pointH: serialised.height,
+  };
 }
 
 /** zlib, which is exactly what PDF's `/FlateDecode` expects. */
@@ -355,12 +403,13 @@ async function deflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<Array
 }
 
 /**
- * The smallest valid PDF that holds one image: catalogue, page tree, page,
- * image, its soft mask, content stream, and the cross-reference table that says
- * where each of them starts.
+ * A PDF holding one raster image per page: catalogue, page tree, then four
+ * objects for every page — the page itself, its image, its content stream and
+ * the soft mask that carries the alpha — and the cross-reference table that
+ * says where each of them starts.
  *
  * Written by hand rather than with a library because the whole of it is these
- * fifty lines, and every byte offset in the table has to be counted as the file
+ * sixty lines, and every byte offset in the table has to be counted as the file
  * is built — which is the only part a library would actually be doing.
  *
  * The pixels are Flate rather than JPEG. A design is mostly flat colour and
@@ -369,15 +418,14 @@ async function deflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<Array
  * on this kind of picture, and — the part that actually mattered — carries a
  * soft mask, so a layer with transparency in it comes out transparent instead
  * of black.
+ *
+ * Each page is its board's own size in points. PDF's unit is 1/72", which is
+ * what a CSS pixel is measured against, so a 600-wide frame comes out 600pt and
+ * lands in a layout at the size it was drawn — and a document of boards that
+ * are different sizes keeps them different sizes, rather than squaring them all
+ * onto one sheet.
  */
-function pdfWithRaster(
-  rgb: Uint8Array<ArrayBuffer>,
-  alpha: Uint8Array<ArrayBuffer>,
-  pixelW: number,
-  pixelH: number,
-  pointW: number,
-  pointH: number,
-): Blob {
+function pdfWithRaster(pages: PdfPage[]): Blob {
   const parts: BlobPart[] = [];
   const offsets: number[] = [];
   let at = 0;
@@ -397,39 +445,50 @@ function pdfWithRaster(
     push('\nendstream\nendobj\n');
   };
 
+  // objects 1 and 2 are the catalogue and the page tree; each page takes the
+  // four after them, so its numbers can be worked out rather than counted
+  const first = (index: number) => 3 + index * 4;
+
   push('%PDF-1.4\n');
   object(1, '<< /Type /Catalog /Pages 2 0 R >>');
-  object(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
   object(
-    3,
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pointW} ${pointH}] ` +
-      '/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>',
-  );
-  stream(
-    4,
-    '/Type /XObject /Subtype /Image ' +
-      `/Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 ` +
-      '/Filter /FlateDecode /SMask 6 0 R',
-    rgb,
+    2,
+    `<< /Type /Pages /Kids [${pages.map((_, i) => `${first(i)} 0 R`).join(' ')}] ` +
+      `/Count ${pages.length} >>`,
   );
 
-  // the unit square the image is drawn into, stretched to fill the page
-  const content = `q ${pointW} 0 0 ${pointH} 0 0 cm /Im0 Do Q\n`;
-  object(5, `<< /Length ${content.length} >>\nstream\n${content}endstream`);
+  pages.forEach((page, index) => {
+    const [self, image, contents, mask] = [0, 1, 2, 3].map((n) => first(index) + n);
+    object(
+      self,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${page.pointW} ${page.pointH}] ` +
+        `/Resources << /XObject << /Im0 ${image} 0 R >> >> /Contents ${contents} 0 R >>`,
+    );
+    stream(
+      image,
+      '/Type /XObject /Subtype /Image ' +
+        `/Width ${page.pixelW} /Height ${page.pixelH} /ColorSpace /DeviceRGB /BitsPerComponent 8 ` +
+        `/Filter /FlateDecode /SMask ${mask} 0 R`,
+      page.rgb,
+    );
+    // the unit square the image is drawn into, stretched to fill the page
+    const content = `q ${page.pointW} 0 0 ${page.pointH} 0 0 cm /Im0 Do Q\n`;
+    object(contents, `<< /Length ${content.length} >>\nstream\n${content}endstream`);
+    stream(
+      mask,
+      '/Type /XObject /Subtype /Image ' +
+        `/Width ${page.pixelW} /Height ${page.pixelH} /ColorSpace /DeviceGray /BitsPerComponent 8 ` +
+        '/Filter /FlateDecode',
+      page.alpha,
+    );
+  });
 
-  stream(
-    6,
-    '/Type /XObject /Subtype /Image ' +
-      `/Width ${pixelW} /Height ${pixelH} /ColorSpace /DeviceGray /BitsPerComponent 8 ` +
-      '/Filter /FlateDecode',
-    alpha,
-  );
-
+  const count = 2 + pages.length * 4;
   const startxref = at;
-  let table = 'xref\n0 7\n0000000000 65535 f \n';
-  for (let n = 1; n <= 6; n++) table += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  let table = `xref\n0 ${count + 1}\n0000000000 65535 f \n`;
+  for (let n = 1; n <= count; n++) table += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
   push(table);
-  push(`trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`);
+  push(`trailer\n<< /Size ${count + 1} /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`);
 
   return new Blob(parts, { type: 'application/pdf' });
 }

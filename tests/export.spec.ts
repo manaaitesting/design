@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { toTailwind, toUtilities } from '../src/export/tailwind';
+import { toHtml } from '../src/export/toCode';
 import { flatColor, toAndroidXml, toSwiftUI } from '../src/export/toNative';
 import { makeNode } from '../src/document/defaults';
 import { ROOT_ID, type Doc } from '../src/document/types';
@@ -199,4 +200,53 @@ test('the card becomes an Android layout with its own numbers', () => {
   expect(xml).toContain('android:textColor="#FFFFFF"');
   // every tag that opened is closed
   expect((xml.match(/<LinearLayout/g) ?? []).length).toBe((xml.match(/<\/LinearLayout>/g) ?? []).length);
+});
+
+/**
+ * Text on a path exports as the SVG the canvas drew, not as a picture of it.
+ *
+ * This is the assertion that says the feature kept the invariant: the glyphs in
+ * the exported markup are still text, laid out along the same `d` by the same
+ * engine, and a reader can select them.
+ */
+test('a text layer on a path exports as real type along the same outline', () => {
+  const doc: Doc = {
+    [ROOT_ID]: makeNode(ROOT_ID, 'page', null, { children: ['ring', 'round'] }),
+    ring: makeNode('ring', 'ellipse', ROOT_ID, { name: 'Ring', x: 0, y: 0, w: 200, h: 200 }),
+    round: makeNode('round', 'text', ROOT_ID, {
+      name: 'Round',
+      x: 0,
+      y: 0,
+      w: 200,
+      h: 200,
+      text: 'around we go',
+      textPath: { source: 'ring', offset: 25, side: 'top' },
+      font: {
+        family: 'Inter',
+        size: 18,
+        weight: 600,
+        lineHeight: 1.4,
+        letterSpacing: 0,
+        align: 'left',
+        color: '#101828',
+      },
+    }),
+  };
+
+  const html = toHtml('round', doc, [], [], []);
+
+  expect(html).toContain('<textPath');
+  expect(html).toContain('href="#');
+  expect(html).toContain('startOffset="25%"');
+  expect(html).toContain('side="left"');
+  // the words are still words, and the type is the layer's own
+  expect(html).toContain('around we go');
+  expect(html).toContain('font-size="18"');
+  expect(html).toContain('font-weight="600"');
+  expect(html).toContain('fill="#101828"');
+  // and the outline is the ellipse's, drawn in the box the two layers share
+  const path = /<defs><path id="([^"]+)" d="([^"]+)"\/><\/defs>/.exec(html);
+  expect(path).not.toBeNull();
+  expect(html).toContain(`href="#${path![1]}"`);
+  expect(path![2].length).toBeGreaterThan(10);
 });
