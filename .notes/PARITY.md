@@ -22,9 +22,14 @@ update it at the end of every session.** It outlives compaction; nothing else he
 - **Phase 3: complete.** Every open row in this ledger is closed. 26 commits.
   Suite **379 passed, 0 failed**; typecheck clean. Every closed row carries its
   commit and its test name.
-- **Nothing is outstanding.** 191 parity, 8 deliberate, 0 partial. The two rows
-  that were `partial` were argued rather than fixed, twice, and the user
-  overruled that both times — correctly. See the session log.
+- **Phase 1, second sweep — 2026-08-30, fifth pass.** The first ledger walked
+  116 rows and every one of them closed, which is not the same as Figma's
+  surface being covered. Eight further rows below, all found by reading source
+  against Figma's published shortcut panel: `C-23`, `C-24`, `T-14`, `T-15`,
+  `K-40`, `L-14`, `CP-09`, `S-14`. Seven are closed; see the session log.
+- **199 parity, 8 deliberate, 0 partial.** The two rows that were `partial` were
+  argued rather than fixed, twice, and the user overruled that both times —
+  correctly. See the session log.
 
 ### What Phase 3 changed
 
@@ -152,6 +157,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | S-08 | ⌘A select all | Selects everything at the level you are in | Same | parity | `Editor.tsx:592-598` |
 | <a id="s-09"></a>S-09 | Select inverse | Selects everything *but* the selection | Absent — no handler, no menu row **Now matches Figma.** | parity | no hit for `inverse` in `src/` outside `geometry.ts:1393`, `shaders.ts:478` — **fixed `04dd72b`**. |
 | S-10 | ⌥⌘A select all with same … | Selects visually matching layers | `store.selectMatching` | parity | `Editor.tsx:586-591`; `store.ts:2190`; test `features.spec.ts:1278` |
+| <a id="s-14"></a>S-14 | Smart selection | Three or more evenly spaced layers get dots between them: drag one to swap it with a neighbour, drag a gap handle to respace them all at once | Absent — no chrome, no handles, and no way to reorder a free-standing row except by moving each layer by hand | missing | no hit for `smart` in `src/` outside `smart-animate`; `Overlay.tsx` draws one box for a multi-selection |
 | S-11 | Locked layers unselectable | Locked layers and their subtrees are untouchable | Same, plus a "this is locked" hint the canvas draws | parity | `selection.ts:18-25,40-46`; `Overlay.tsx:292-321` |
 
 ## Canvas gestures (`Canvas.tsx`, `Overlay.tsx`)
@@ -180,6 +186,8 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | C-19 | Pixel grid appears at high zoom only | Yes | Yes, ≥4× | parity | `Canvas.tsx:984-1006` |
 | C-20 | Snap to pixel grid toggles whole-pixel drags | Yes | Yes | parity | `Canvas.tsx:706-712`; `ui.ts:178` |
 | C-21 | Right-click selects what is under the pointer, then opens the menu | Yes | Same | parity | `Canvas.tsx:822-828` |
+| <a id="c-23"></a>C-23 | ⇧ holds a move drag to one axis | Yes — whichever axis you have pulled furthest along, re-decided as the drag turns | The ⇧ branch toggled the selection and returned, so a ⇧-drag never moved anything at all. Now a press that becomes a drag moves what is selected, held to one axis; a press that never moves is still a click, and still toggles **Now matches Figma.** | parity | `Canvas.tsx` pointer-down and move handlers — **fixed `45acf37`**. Test: editor "⇧ holds a drag to the axis you pulled furthest along", "a ⇧ press that never moves still takes the layer out of the selection" |
+| <a id="c-24"></a>C-24 | A handle dragged past the far edge turns the layer over | Yes — the box grows out the other side and the artwork mirrors | `Math.max(1, …)` clamped the size, so the gesture stopped dead at one pixel with nowhere to go **Now matches Figma.** | parity | `Overlay.tsx` `startResize` — **fixed `42aeac8`**. The mirror is re-derived from the crossing every move, so dragging back undoes it. Snapping stands down while the layer is over. Test: editor "dragging a handle past the far edge turns the layer over", "and dragging back across it puts the layer the right way round" |
 | C-22 | New shape drops into the frame under the pointer | Yes | Same, with local-coordinate conversion | parity | `Canvas.tsx:479-485`, `containerAt:1055-1063`, `localOffset:1066-1080` |
 
 ## Selection chrome (`Overlay.tsx`)
@@ -239,6 +247,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | K-36 | Shortcuts do not fire while typing | Yes | Yes, plus a belt-and-braces `ui.editing` guard | parity | `Editor.tsx:58-62,280,291` |
 | K-37 | ⌥T copy as Tailwind | *(Figma has no equivalent)* | Present | deliberate | `Editor.tsx:373-379` |
 | K-38 | ⇧⌘K place image | Opens a file picker, then the image rides the cursor until a click puts it down | The same, with Escape to put it down again **Now matches Figma.** | parity | `Canvas.tsx` place-image effect — **fixed `1dd7696`**, click-to-place in `351081d` |
+| <a id="k-40"></a>K-40 | ⌥A / ⌥D / ⌥W / ⌥S / ⌥H / ⌥V align the selection | Six shortcuts, beside ⌃⌥T for tidy up and ⌃⌥H/V for distribute | `store.align` knew the rule already — one layer aligns inside its parent, several to the box they share — and the Inspector's alignment row was the only thing that could reach it **Now matches Figma.** | parity | `Editor.tsx` `ALIGN_KEYS`; `store.ts:2117` — **fixed `f2b38bd`**. Matched on `event.code`, like the boolean ops: ⌥ rewrites the character on macOS. Test: editor "⌥A and ⌥S align the selection to its shared box", "⌥H centres them across, ⌥V down" |
 | K-39 | `N` / ⇧N next / previous frame | Zooms to the next frame on the page. Filed under *Zoom* in Figma's own shortcut panel as "Zoom to Next / Previous Frame"; the order is canvas order — left to right, then top to bottom | Both, framing what they land on **Now matches Figma.** | parity | `Editor.tsx` walking-the-boards block — **fixed `9155460`**. The Phase 1 row was right; the later demotion to "unverified" was over-cautious. |
 
 ## Layers panel (`LeftPanel.tsx`)
@@ -250,6 +259,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | L-03 | Selecting on canvas reveals the row | Yes | Yes — opens every ancestor | parity | `ui.ts:531-538`; test `editor.spec.ts:817` |
 | L-04 | ⇧-click range, ⌘-click toggle | Yes | Yes | parity | test `editor.spec.ts:825` |
 | <a id="l-05"></a>L-05 | Search layers by name | Yes — a search field at the top of the panel | Absent. Assets (`:818`) and Variables (`:1211`) each have one; Layers does not. Quick actions can jump to a layer by name, which is not the same thing. **Now matches Figma.** | parity | `LeftPanel.tsx:818,1211` vs `LayersTree` at `:541`; palette at `Palette.tsx:261` — **fixed `0d50814`**. Restacking is off while a search runs. |
+| <a id="l-14"></a>L-14 | ⌘R renames the selection | A dialog over the selection; the name is a pattern, with tokens for the current name and a number | Absent — renaming was a double-click in the panel and nothing else, so twenty layers called "Vector" had to be renamed twenty times **Now matches Figma.** | parity | `RenameDialog.tsx`; `layers.ts` `panelOrder` — **fixed `6b49045`**. `$&` current name, `$n` down the panel, `$N` up it, repeat the letter to pad. Numbered in panel order, which is the order on screen while you type. Test: editor "⌘R names the whole selection, numbering down the panel", "$& keeps the name it had, and Escape changes nothing" |
 | L-06 | Drag a row to restack | Yes | Yes | parity | `LeftPanel.tsx:70-192`; test `editor.spec.ts:839` |
 | L-07 | Drop a row onto a frame to reparent | Yes | Yes | parity | `LeftPanel.tsx:179`; test `editor.spec.ts:856` |
 | L-08 | A drag carries the whole selection | Yes | Yes | parity | test `editor.spec.ts:873` |
@@ -320,6 +330,8 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | T-10 | Paste keeps the model in step | Yes | Yes — diffs the plain text after every change | parity | `TextEditor.tsx:137-146` |
 | T-11 | Text on a path | Figma does not have it either | Absent | deliberate | README "honest limits" |
 | T-12 | A shader as a text fill | — | Absent | deliberate | README "honest limits" |
+| <a id="t-14"></a>T-14 | ⌘B / ⌘I / ⌘U / ⇧⌘X while editing | Toggle the mark on the selected range | Unbound — and worse than absent. A `contentEditable` answers ⌘B by writing a `<b>` into the DOM, which this editor treats as a view of the runs; the plain text does not change, so `onInput` saw nothing, the model never learned, and the styling vanished the next time the spans were rebuilt **Now matches Figma.** | parity | `TextEditor.tsx` `onKeyDown` — **fixed `d9c9521`**. With no range the patch lands on the whole layer, which is the rule the type panel follows and the only reading that is never a no-op. Test: features "⌘B bolds the selected range…", "⌘I and ⇧⌘X reach the runs as well", "with the caret collapsed…" |
+| <a id="t-15"></a>T-15 | ⌥⌘L/T/R/J alignment, ⇧⌘< / ⇧⌘> size | Layer properties, and they keep working with the caret inside the layer | Absent on both paths **Now matches Figma.** | parity | `lib/actions.ts` `alignText`, `stepFontSize`, `TEXT_ALIGN_KEYS`; called from `Editor.tsx` and `TextEditor.tsx` — **fixed `05109b5`**. One mapping rather than two that drift. ⇧⌘< is matched on the comma underneath it. Test: editor "⌥⌘R aligns the text…", "⇧⌘> and ⇧⌘< step the size…", "a selection with no text in it is left alone"; features "⇧⌘> steps the size while the caret is inside the layer" |
 | <a id="t-13"></a>T-13 | ⏎ with a text layer selected enters edit mode | Yes | No. ⏎ tries `canEditPoints` (false for `text`) then `firstChild` (a text layer has none), so the key does nothing. **Now matches Figma.** | parity | `Editor.tsx:296-312`; `geometry.ts:499-501` — **fixed `c4b9ec6`**. |
 
 ## Vectors
@@ -346,6 +358,7 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | CP-05 | Component properties: boolean, text, instance-swap, variant | Yes | Yes | parity | `store.ts:2423-2500`; tests `editor.spec.ts:1963-2101` |
 | CP-06 | Combine as variants | Yes | Yes | parity | `store.ts:2502`; test `editor.spec.ts:2117` |
 | CP-07 | Publish to a shared library, subscribe, take revisions | Yes | Yes | parity | `store.ts:1654,1680`; `library.spec.ts`; test `features.spec.ts:456` |
+| <a id="cp-09"></a>CP-09 | ⌥⌘B detach instance | Yes | The panel had the button; the key did nothing **Now matches Figma.** | parity | `Editor.tsx`; `ContextMenu.tsx` — **fixed `956acc0`**. Falls through on anything that is not an instance rather than swallowing the key. Test: editor "⌥⌘B detaches an instance from its main" |
 | CP-08 | Component descriptions | Yes | Yes | parity | `Inspector.tsx:834-888` |
 
 ## Variables and styles
