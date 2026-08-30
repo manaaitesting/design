@@ -444,6 +444,46 @@ test('dropping into an auto layout lands where the pointer is, not at the end', 
   await removeNodes(page, [built.frame]);
 });
 
+test('dragging over an auto layout draws the line the layer would land on', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'SlotRack', x: 700, y: 0, w: 300, h: 100, fill: '#FFFFFF',
+      flex: {
+        mode: 'flex', direction: 'row', gap: 10, padding: [0, 0, 0, 0],
+        align: 'start', justify: 'start', wrap: false,
+      },
+    } as never);
+    store.create('rect', frame, { name: 'SlotFirst', w: 60, h: 60, fill: '#4CC3F0' } as never);
+    const second = store.create('rect', frame, { name: 'SlotSecond', w: 60, h: 60, fill: '#9B7BF0' } as never);
+    const loose = store.create('rect', 'root', {
+      name: 'SlotArriving', x: 700, y: 300, w: 60, h: 60, fill: '#F2637F',
+    } as never);
+    store.commit();
+    return { frame, second, loose };
+  });
+  await select(page, [built.loose]);
+
+  const box = (await page.locator(`[data-node-id="${built.loose}"]`).boundingBox())!;
+  const edge = (await page.locator(`[data-node-id="${built.second}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await page.mouse.move(from.x + 35 * step, from.y - 300 * step);
+  }
+
+  // the outline says which frame; only the line says between which two children
+  const line = page.locator('[data-drop-slot]');
+  await expect(line).toBeVisible();
+  // the line is 2px wide and straddles the edge it marks
+  expect(Math.abs((await line.boundingBox())!.x - edge.x)).toBeLessThanOrEqual(2);
+
+  await page.mouse.up();
+  await expect(line).toHaveCount(0);
+  await removeNodes(page, [built.frame]);
+});
+
 /**
  * A child of an auto layout has no position of its own, so dragging it can only
  * mean one thing: put it somewhere else in the order. Dragging the frame away

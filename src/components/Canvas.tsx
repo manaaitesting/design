@@ -467,7 +467,15 @@ export function Canvas() {
     const skip = new Set(ids.flatMap((id) => [id, ...descendants(id, snapshot)]));
     const found = containerAt(e.clientX, e.clientY, snapshot, skip);
     const next = found && found !== snapshot[ids[0]]?.parent ? found : null;
-    if (useUI.getState().dropTarget !== next) setDropTarget(next);
+    const target = next ? snapshot[next] : null;
+    const slot = target?.flex ? flowSlotAt(target, ids, e.clientX, e.clientY) : null;
+    const line =
+      slot && target
+        ? flowSlotRect(target, ids, slot.position, rootRef.current!.getBoundingClientRect())
+        : null;
+    const now = useUI.getState();
+    if (now.dropTarget === next && sameRect(now.dropSlot, line)) return;
+    setDropTarget(next, line);
   };
 
   // ── Pointer interactions ───────────────────────────────────────────────
@@ -1514,6 +1522,40 @@ function flowSlotAt(
   const index =
     position < others.length ? parent.children.indexOf(others[position]) : parent.children.length;
   return { position, index };
+}
+
+interface SlotRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const sameRect = (a: SlotRect | null, b: SlotRect | null) =>
+  a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+
+/**
+ * The line where a flowed drop would land, in the canvas element's own pixels.
+ *
+ * `flowSlotAt` answers with a position in the list; this is that position drawn
+ * — the leading edge of the child that would be pushed along, or the trailing
+ * edge of the last one when the layer goes on the end.
+ */
+function flowSlotRect(
+  parent: SceneNode,
+  exclude: string[],
+  position: number,
+  base: DOMRect,
+): SlotRect | null {
+  const others = parent.children.filter((id) => !exclude.includes(id));
+  if (!others.length) return null;
+  const last = position >= others.length;
+  const anchor = others[last ? others.length - 1 : position];
+  const rect = document.querySelector<HTMLElement>(`[data-node-id="${anchor}"]`)?.getBoundingClientRect();
+  if (!rect) return null;
+  return parent.flex?.direction === 'row'
+    ? { x: (last ? rect.right : rect.left) - base.left - 1, y: rect.top - base.top, w: 2, h: rect.height }
+    : { x: rect.left - base.left, y: (last ? rect.bottom : rect.top) - base.top - 1, w: rect.width, h: 2 };
 }
 
 /**

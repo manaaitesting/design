@@ -336,9 +336,15 @@ export interface UIState {
   guides: SnapGuide[];
   setGuides: (guides: SnapGuide[]) => void;
 
-  /** the frame a drag in progress would drop into, outlined on the canvas */
+  /**
+   * The frame a drag in progress would drop into, outlined on the canvas, and
+   * — when that frame flows its children — the line where the layer would land
+   * in the flow. The line is in the canvas element's own pixels rather than in
+   * world coordinates, because it is measured off the laid-out children.
+   */
   dropTarget: string | null;
-  setDropTarget: (id: string | null) => void;
+  dropSlot: { x: number; y: number; w: number; h: number } | null;
+  setDropTarget: (id: string | null, slot?: { x: number; y: number; w: number; h: number } | null) => void;
 
   /** `page` is set when the menu was opened on a row in the Pages list */
   contextMenu: { x: number; y: number; stack: string[]; page?: string } | null;
@@ -762,6 +768,7 @@ export const useUI = create<UIState>((set) => ({
       expanded: {},
       guides: [],
       dropTarget: null,
+      dropSlot: null,
       lockedHint: null,
       contextMenu: null,
       presenting: null,
@@ -784,7 +791,8 @@ export const useUI = create<UIState>((set) => ({
   setGuides: (guides) => set({ guides }),
 
   dropTarget: null,
-  setDropTarget: (dropTarget) => set({ dropTarget }),
+  dropSlot: null,
+  setDropTarget: (dropTarget, dropSlot = null) => set({ dropTarget, dropSlot }),
 
   contextMenu: null,
   setContextMenu: (contextMenu) => set({ contextMenu }),

@@ -142,6 +142,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const lockedHint = useUI((s) => s.lockedHint);
   const guides = useUI((s) => s.guides);
   const dropTarget = useUI((s) => s.dropTarget);
+  const dropSlot = useUI((s) => s.dropSlot);
   // point editing replaces the selection chrome with the anchors themselves,
   // exactly as Figma's does — two sets of handles would fight for the pointer
   const vectorEdit = useUI((s) => s.vectorEdit);
@@ -719,6 +720,22 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
             height: rects[dropTarget].h,
             outline: '2px solid var(--color-select-line)',
             outlineOffset: -1,
+          }}
+        />
+      )}
+
+      {/* …and where in its flow the layer would land, when it flows its
+          children — the outline alone cannot say between which two */}
+      {dropSlot && (
+        <div
+          data-drop-slot="true"
+          style={{
+            position: 'absolute',
+            left: dropSlot.x,
+            top: dropSlot.y,
+            width: dropSlot.w,
+            height: dropSlot.h,
+            background: 'var(--color-select-line)',
           }}
         />
       )}
