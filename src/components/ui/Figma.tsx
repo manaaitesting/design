@@ -17,6 +17,7 @@ import { Icon } from './Icons';
 import { FigIcon } from './FigIcon';
 import { PaintPicker, type PaintType } from './PaintPicker';
 import { BLEND_MODES, blendLabel } from './blend';
+import { scrubValue } from './Controls';
 
 /**
  * A menu anchored to a button but rendered at the document root.
@@ -229,8 +230,8 @@ export function FigField({
     const startX = event.clientX;
     const from = value;
     const move = (e: PointerEvent) => {
-      const delta = ((e.clientX - startX) / sensitivity) * step;
-      onChange(Math.min(max, Math.max(min, Math.round((from + delta) / step) * step)));
+      const next = scrubValue(e, from, e.clientX - startX, step, sensitivity);
+      onChange(Math.min(max, Math.max(min, next)));
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
@@ -715,7 +716,8 @@ export function FigPaintRow({
           const startX = event.clientX;
           const from = alpha;
           const move = (e: PointerEvent) => {
-            const next = from + (e.clientX - startX) / 200;
+            // a percent every two pixels, so the whole range is one comfortable pull
+            const next = scrubValue(e, from, e.clientX - startX, 0.01, 2);
             onAlpha(Math.min(1, Math.max(0, next)));
           };
           const up = () => {

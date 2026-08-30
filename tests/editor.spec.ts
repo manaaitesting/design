@@ -1683,6 +1683,33 @@ test('the fill row matches Figma: one field holding swatch, hex and opacity', as
   await removeNodes(page, [id]);
 });
 
+test('\u21e7 makes a label-scrub step by ten, and \u2325 by a tenth', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Scrubbed', x: 40, y: 500, w: 100, h: 100, fill: '#d9d9d9' });
+  await select(page, [id]);
+
+  const glyph = page.getByTitle('Width').locator('.glyph');
+  const box = (await glyph.boundingBox())!;
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+  await dragBy(page, at, { x: 20, y: 0 });
+  expect((await doc(page))[id].w).toBe(120);
+
+  await dragBy(page, at, { x: 20, y: 0 }, ['Shift']);
+  expect((await doc(page))[id].w).toBe(320);
+
+  // a tenth-grain drag has to be able to land between the whole numbers
+  await dragBy(page, at, { x: 2, y: 0 }, ['Alt']);
+  expect((await doc(page))[id].w).toBeCloseTo(320.2, 3);
+
+  // the paint row's % handle takes the same accelerator
+  const percent = page.locator('.fig-paint-percent').first();
+  const pbox = (await percent.boundingBox())!;
+  await dragBy(page, { x: pbox.x + pbox.width / 2, y: pbox.y + pbox.height / 2 }, { x: -10, y: 0 }, ['Shift']);
+  expect((await doc(page))[id].fills![0].opacity).toBeCloseTo(0.5, 2);
+
+  await removeNodes(page, [id]);
+});
+
 test('the styles-and-variables dialog opens outside the inspector', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'TokenProbe', x: 40, y: 500, w: 200, h: 120, fill: '#d9d9d9' });
   await select(page, [id]);

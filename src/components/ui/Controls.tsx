@@ -10,6 +10,28 @@ import {
 } from 'react';
 import { Icon } from './Icons';
 
+/**
+ * Where a label-scrub lands.
+ *
+ * The modifier is read off each move rather than off the press, so ⇧ can be
+ * taken up after the drag has started, as it is on the canvas. ⇧ steps by ten
+ * and ⌥ by a tenth — ⌘ too, since a trackpad hand often has it nearer — and the
+ * value is snapped to whichever grain is in force, or a fine drag would round
+ * straight back to whole numbers.
+ */
+export function scrubValue(
+  event: { shiftKey: boolean; altKey: boolean; metaKey: boolean },
+  from: number,
+  pixels: number,
+  step: number,
+  sensitivity: number,
+): number {
+  const grain = step * (event.shiftKey ? 10 : event.altKey || event.metaKey ? 0.1 : 1);
+  const landed = Math.round((from + (pixels / sensitivity) * grain) / grain) * grain;
+  // a tenth-grain drag otherwise lands on values like 12.300000000000001
+  return Number(landed.toFixed(4));
+}
+
 // ── Numeric field ────────────────────────────────────────────────────────
 
 interface NumberFieldProps {
@@ -70,8 +92,7 @@ export function NumberField({
     const startX = event.clientX;
     const startValue = value;
     const move = (e: PointerEvent) => {
-      const delta = ((e.clientX - startX) / sensitivity) * step;
-      const next = Math.round((startValue + delta) / step) * step;
+      const next = scrubValue(e, startValue, e.clientX - startX, step, sensitivity);
       onChange(Math.min(max, Math.max(min, next)));
     };
     const up = () => {
