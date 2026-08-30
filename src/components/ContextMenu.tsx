@@ -13,6 +13,7 @@ import {
 } from './Session';
 import { hasNodes, readNodes, writeNodes } from '../lib/clipboard';
 import {
+  alignText,
   copyAsPng,
   copyAsSvg,
   copyProperties,
@@ -28,7 +29,7 @@ import { download, framesToPdf, nodeToPng, safeFilename } from '../export/raster
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
-import { pageActions, useUI } from '../state/ui';
+import { pageActions, textActions, useUI } from '../state/ui';
 import { fitView, revealNode } from '../lib/view';
 import { canEditPoints } from '../document/geometry';
 import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
@@ -119,7 +120,13 @@ function Panel({
       ref={ref}
       className="ctx"
       style={{ left: at.left, top: at.top, width, ...fit, visibility: at.ready ? 'visible' : 'hidden' }}
-      onPointerDown={(event) => event.stopPropagation()}
+      // A click on a row must not move focus: the text menu's commands act on
+      // the caret in the layer behind it, and taking focus would end the edit
+      // before the row had run.
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+      }}
       onContextMenu={(event) => event.preventDefault()}
       role="menu"
     >
@@ -268,6 +275,65 @@ function PageMenu({
   return <Panel items={items} x={x} y={y} width={200} onClose={onClose} />;
 }
 
+/**
+ * The menu a right-click inside a text layer being edited opens.
+ *
+ * The subject is a range of characters rather than a layer, so none of the
+ * object commands are here — the canvas menu's "Copy" copies the layer, and its
+ * "Delete" removes the one you are mid-sentence in. Cut and Copy read the live
+ * DOM range; the marks are run by the editor that owns the runs, because a
+ * change made behind its back is overwritten by the next keystroke.
+ */
+function TextMenu({
+  id,
+  x,
+  y,
+  onClose,
+}: {
+  id: string;
+  x: number;
+  y: number;
+  onClose: () => void;
+}) {
+  const store = useStore();
+  const range = window.getSelection()?.toString() ?? '';
+  const mark = (key: 'bold' | 'italic' | 'underline' | 'strike') => () => textActions.mark?.(key);
+
+  const items: Item[] = [
+    {
+      label: 'Cut',
+      shortcut: '⌘X',
+      disabled: !range,
+      run: () => {
+        void writeText(range);
+        // the deletion goes through the browser so the editor's `onInput` sees
+        // it and the runs follow it, the way typing and pasting already do
+        document.execCommand('delete');
+      },
+    },
+    { label: 'Copy', shortcut: '⌘C', disabled: !range, run: () => writeText(range) },
+    { label: 'Paste', shortcut: '⌘V', run: () => textActions.pastePlain?.() },
+
+    { label: 'Bold', shortcut: '⌘B', divider: true, run: mark('bold') },
+    { label: 'Italic', shortcut: '⌘I', run: mark('italic') },
+    { label: 'Underline', shortcut: '⌘U', run: mark('underline') },
+    { label: 'Strikethrough', shortcut: '⇧⌘X', run: mark('strike') },
+
+    {
+      label: 'Text alignment',
+      divider: true,
+      items: [
+        { label: 'Left', shortcut: '⌥⌘L', run: () => alignText(store, [id], 'left') },
+        { label: 'Center', shortcut: '⌥⌘T', run: () => alignText(store, [id], 'center') },
+        { label: 'Right', shortcut: '⌥⌘R', run: () => alignText(store, [id], 'right') },
+        { label: 'Justified', shortcut: '⌥⌘J', run: () => alignText(store, [id], 'justify') },
+      ],
+    },
+  ];
+
+  return <Panel items={items} x={x} y={y} width={200} onClose={onClose} />;
+}
+
 function Menu({ menu }: { menu: OpenMenu }) {
   const store = useStore();
   const doc = useDoc();
@@ -281,6 +347,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
   const pageId = useUI((s) => s.page);
   const pages = usePages();
   const setHover = useUI((s) => s.setHover);
+  const editing = useUI((s) => s.editing);
 
   const close = () => useUI.getState().setContextMenu(null);
 
@@ -301,6 +368,12 @@ function Menu({ menu }: { menu: OpenMenu }) {
 
   // a right-click on a page row is about that page, not about the selection
   if (menu.page) return <PageMenu id={menu.page} x={menu.x} y={menu.y} onClose={close} />;
+
+  // and one over a caret is about the characters, not about the layer they sit
+  // in — offering Delete there would destroy the layer you are mid-sentence in
+  if (editing && doc[editing]) {
+    return <TextMenu id={editing} x={menu.x} y={menu.y} onClose={close} />;
+  }
 
   const has = selection.length > 0;
   const one = selection.length === 1;

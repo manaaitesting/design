@@ -402,6 +402,19 @@ export const pageActions: {
 } = { rename: null, remove: null };
 
 /**
+ * The marks, published by the text editor for the menu a right-click over a
+ * caret opens.
+ *
+ * The runs belong to the mounted editor — it keeps them in a ref and rebuilds
+ * the spans from them — so a change made behind its back is overwritten by the
+ * next keystroke. The menu draws the rows and the editor runs them.
+ */
+export const textActions: {
+  mark: ((key: 'bold' | 'italic' | 'underline' | 'strike') => void) | null;
+  pastePlain: (() => void) | null;
+} = { mark: null, pastePlain: null };
+
+/**
  * Panel geometry. `base` is the width the panel ships at — the same number the
  * stylesheet uses, so an un-dragged panel looks identical either way.
  */

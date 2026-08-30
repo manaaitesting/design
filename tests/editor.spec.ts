@@ -2719,6 +2719,44 @@ test('delete removes the layer and clears the selection', async ({ page }) => {
   expect(await selection(page)).toEqual([]);
 });
 
+/**
+ * A right-click over a caret is about the characters, not about the layer they
+ * are in — the object menu's Copy copies the layer, and its Delete removes the
+ * one you are mid-sentence in.
+ */
+test('right-clicking inside text being edited offers the characters, not the layer', async ({ page }) => {
+  const id = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const made = store.create('text', 'root', {
+      name: 'CtxCaret', x: 40, y: 560, w: 300, h: 40, text: 'hello brave new world',
+    });
+    store.commit();
+    return made;
+  });
+  await page.evaluate((target) => {
+    window.paperlike!.ui.getState().select([target]);
+    window.paperlike!.ui.getState().setEditing(target);
+  }, id);
+  await page.waitForFunction(() => document.querySelector('[contenteditable]') !== null);
+  await page.waitForTimeout(120);
+
+  await page.locator(`[contenteditable][data-node-id="${id}"]`).click({ button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
+
+  await expect(row(page, 'Delete')).toHaveCount(0);
+  await expect(row(page, 'Group selection')).toHaveCount(0);
+  await expect(row(page, 'Rasterize selection')).toHaveCount(0);
+  await expect(row(page, 'Cut')).toBeVisible();
+
+  // the marks reach the runs the way ⌘B does, and the edit survives the click
+  await row(page, 'Bold').click();
+  await expect.poll(async () => (await doc(page))[id].runs?.some((run) => run.bold)).toBe(true);
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().editing)).toBe(id);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setEditing(null));
+  await removeNodes(page, [id]);
+});
+
 test('the mask toggle is one row, and it reads the same way each time', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'CtxMask', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
   const maskRows = page.locator('.ctx-row .ctx-label', { hasText: 'mask' });

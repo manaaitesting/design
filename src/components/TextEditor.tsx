@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from './Session';
-import { useUI } from '../state/ui';
+import { textActions, useUI } from '../state/ui';
 import { alignText, stepFontSize, TEXT_ALIGN_KEYS } from '../lib/actions';
 import {
   applyToRange,
@@ -164,6 +164,22 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
     const caret = start + text.length;
     requestAnimationFrame(() => restore(editorRef.current, caret, caret));
   };
+
+  // The right-click menu over a caret is drawn by `ContextMenu`, but its
+  // commands have to run in here for the same reason ⌘B does. Re-registered on
+  // every render so the closures see the range the caret is on now.
+  useEffect(() => {
+    textActions.mark = (key) => {
+      const span = targetRange();
+      const on = styleOfRange(runs.current, span.start, span.end)[key];
+      applyStyle({ [key]: on ? undefined : true });
+    };
+    textActions.pastePlain = () => void pastePlain();
+    return () => {
+      textActions.mark = null;
+      textActions.pastePlain = null;
+    };
+  });
 
   const current = styleOfRange(runs.current, selection.start, selection.end);
   const hasRange = selection.end > selection.start;
