@@ -104,9 +104,21 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
     return () => document.removeEventListener('selectionchange', read);
   }, []);
 
-  /** Applies a patch to the selected range, or to the caret's word if empty. */
+  /**
+   * Applies a patch to the selected range.
+   *
+   * With nothing selected the patch lands on the whole layer, which is the rule
+   * the type panel already follows: no range means the text object. It is also
+   * the only answer that is never a no-op, and a shortcut that silently does
+   * nothing is worse than one that is missing.
+   */
+  const targetRange = () =>
+    selection.end > selection.start
+      ? { start: selection.start, end: selection.end }
+      : { start: 0, end: plainText(runs.current).length };
+
   const applyStyle = (patch: RunPatch) => {
-    const { start, end } = selection;
+    const { start, end } = targetRange();
     if (end <= start) return;
     runs.current = applyToRange(runs.current, start, end, patch);
     store.update(node.id, { runs: runs.current, text: plainText(runs.current) });
@@ -132,7 +144,36 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           if (event.key === 'Escape') {
             event.preventDefault();
             (event.currentTarget as HTMLElement).blur();
+            return;
           }
+          // ⌘B / ⌘I / ⌘U / ⇧⌘X, as Figma binds them.
+          //
+          // These have to be claimed rather than left to the browser: a
+          // `contentEditable` answers ⌘B by writing a <b> into the DOM, which
+          // this editor treats as a view of the runs rather than the truth. The
+          // plain text is unchanged, so `onInput` sees nothing, the model never
+          // learns, and the styling disappears the next time the spans are
+          // rebuilt. Doing it ourselves is the only way it survives.
+          const mod = event.metaKey || event.ctrlKey;
+          if (!mod || event.altKey) return;
+          const key = event.key.toLowerCase();
+          const mark =
+            !event.shiftKey && key === 'b'
+              ? 'bold'
+              : !event.shiftKey && key === 'i'
+                ? 'italic'
+                : !event.shiftKey && key === 'u'
+                  ? 'underline'
+                  : event.shiftKey && key === 'x'
+                    ? 'strike'
+                    : null;
+          if (!mark) return;
+          event.preventDefault();
+          // read the mark off the span the change will land on, which is not
+          // `current` when the caret is collapsed and the whole layer is meant
+          const span = targetRange();
+          const on = styleOfRange(runs.current, span.start, span.end)[mark];
+          applyStyle({ [mark]: on ? undefined : true });
         }}
         onInput={(event) => {
           const after = (event.currentTarget as HTMLElement).innerText ?? '';

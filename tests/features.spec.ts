@@ -396,6 +396,64 @@ test.describe('rich text', () => {
     await removeNodes(page, [id]);
   });
 
+  /**
+   * ⌘B and its neighbours have to be claimed by the editor rather than left to
+   * the browser. A `contentEditable` answers ⌘B by writing a <b> into the DOM,
+   * which this editor treats as a view of the runs — the plain text does not
+   * change, so nothing reaches the model, and the styling is gone the next time
+   * the spans are rebuilt.
+   */
+  test('\u2318B bolds the selected range, and \u2318B again takes it off', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Meta+b');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.bold ? '*' : ''}`))
+      .toEqual(['hello ', 'brave*', ' new world']);
+
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Meta+b');
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.some((run) => run.bold))
+      .toBe(false);
+    await removeNodes(page, [id]);
+  });
+
+  test('\u2318I and \u21e7\u2318X reach the runs as well', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    await selectRange(page, 0, 5);
+    await page.keyboard.press('Meta+i');
+    await selectRange(page, 0, 5);
+    await page.keyboard.press('Shift+Meta+x');
+
+    await expect
+      .poll(async () => {
+        const run = (await doc(page))[id].runs?.[0];
+        return [run?.text, !!run?.italic, !!run?.strike];
+      })
+      .toEqual(['hello', true, true]);
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * With no range selected the type panel acts on the whole text object, so the
+   * shortcut does too. It is the only reading that is never a no-op.
+   */
+  test('with the caret collapsed the shortcut styles the whole layer', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    await selectRange(page, 4, 4);
+    await page.keyboard.press('Meta+u');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.underline ? '_' : ''}`))
+      .toEqual(['hello brave new world_']);
+    await removeNodes(page, [id]);
+  });
+
   test('typing inside a styled run keeps its styling', async ({ page }) => {
     const id = await seed(page);
     await page.evaluate((target) => {
