@@ -41,7 +41,8 @@ const GROUPS: Entry[][] = [
     { tool: 'pan', label: 'Hand tool', shortcut: 'H', icon: <Icon.Hand /> },
   ],
   [
-    { tool: 'frame', label: 'Frame', shortcut: 'F', icon: <Icon.Frame /> },
+    // Figma's panel prints both keys for this one, F and the legacy Artboard A
+    { tool: 'frame', label: 'Frame', shortcut: 'F  A', icon: <Icon.Frame /> },
     { tool: 'section', label: 'Section', shortcut: '⇧S', icon: <Icon.Section /> },
     // the shape flyout is spliced in here
     { tool: 'pen', label: 'Pen', shortcut: 'P', icon: <Icon.Pen /> },

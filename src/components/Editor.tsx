@@ -44,6 +44,9 @@ const TOOL_KEYS: Record<string, Tool> = {
   k: 'scale',
   h: 'pan',
   f: 'frame',
+  // Figma still ships the legacy Artboard key beside F, and its shortcut panel
+  // prints the tool as "Frame  F  A"
+  a: 'frame',
   r: 'rect',
   o: 'ellipse',
   l: 'line',
@@ -659,11 +662,13 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
 
       // ── Tools ──────────────────────────────────────────────────────────
-      if (!mod && event.shiftKey && SHIFT_TOOL_KEYS[event.key.toLowerCase()]) {
+      if (!mod && !event.altKey && event.shiftKey && SHIFT_TOOL_KEYS[event.key.toLowerCase()]) {
         ui.setTool(SHIFT_TOOL_KEYS[event.key.toLowerCase()]);
         return;
       }
-      if (!mod && !event.shiftKey && TOOL_KEYS[event.key.toLowerCase()]) {
+      // ⌥ is never a tool key in Figma, and A is now one: without the guard
+      // ⌥A over an empty selection fell past the align branch and armed Frame
+      if (!mod && !event.altKey && !event.shiftKey && TOOL_KEYS[event.key.toLowerCase()]) {
         ui.setTool(TOOL_KEYS[event.key.toLowerCase()]);
         return;
       }
