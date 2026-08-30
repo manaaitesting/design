@@ -2719,16 +2719,62 @@ test('delete removes the layer and clears the selection', async ({ page }) => {
   expect(await selection(page)).toEqual([]);
 });
 
-test('rows that need a selection are disabled without one', async ({ page }) => {
+test('an empty patch of canvas gets the short canvas menu, not the object menu greyed out', async ({ page }) => {
   await page.evaluate(() => window.paperlike!.ui.getState().clearSelection());
   await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
 
-  await expect(row(page, 'Copy')).toBeDisabled();
-  await expect(row(page, 'Group selection')).toBeDisabled();
-  await expect(row(page, 'Flip horizontal')).toBeDisabled();
+  // nothing is under the pointer and nothing is selected, so no row that acts
+  // on a layer is offered at all
+  await expect(row(page, 'Copy')).toHaveCount(0);
+  await expect(row(page, 'Group selection')).toHaveCount(0);
+  await expect(row(page, 'Flip horizontal')).toHaveCount(0);
+  await expect(row(page, 'Delete')).toHaveCount(0);
+  await expect(page.locator('.ctx-row')).toHaveCount(8);
+
+  // what is left is what the canvas itself can do
+  await expect(row(page, 'Zoom to fit')).toBeVisible();
+  await expect(row(page, 'Select all')).toBeVisible();
+
+  // and it fits the window: the object menu was long enough to need scrolling
+  const scrolls = await page
+    .locator('.ctx')
+    .first()
+    .evaluate((el) => el.scrollHeight > el.clientHeight);
+  expect(scrolls).toBe(false);
 
   await page.keyboard.press('Escape');
   await expect(page.locator('.ctx')).toHaveCount(0);
+});
+
+test('select all from the canvas menu takes the whole page', async ({ page }) => {
+  const { a, b } = await twoRects(page);
+  await page.evaluate(() => window.paperlike!.ui.getState().clearSelection());
+
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await row(page, 'Select all').click();
+
+  expect(await selection(page)).toEqual(expect.arrayContaining([a, b]));
+  await removeNodes(page, [a, b]);
+});
+
+/**
+ * The instance commands are the clearest case of a row that can never light up
+ * on the selection in front of you — a rectangle has no main.
+ */
+test('the instance commands are absent on a layer that follows no main', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxPlain', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await openMenu(page, id);
+
+  await expect(row(page, 'Detach instance')).toHaveCount(0);
+  await expect(row(page, 'Go to main component')).toHaveCount(0);
+  await expect(row(page, 'Push changes to main component')).toHaveCount(0);
+  await expect(row(page, 'Restore component')).toHaveCount(0);
+  // the rows that do apply are still there
+  await expect(row(page, 'Delete')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
 });
 
 test('the menu shortcuts run the same commands from the keyboard', async ({ page }) => {

@@ -29,7 +29,7 @@ import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
 import { pageActions, useUI } from '../state/ui';
-import { revealNode } from '../lib/view';
+import { fitView, revealNode } from '../lib/view';
 import { canEditPoints } from '../document/geometry';
 import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
 import { boardsOf } from '../document/layers';
@@ -304,6 +304,16 @@ function Menu({ menu }: { menu: OpenMenu }) {
 
   const has = selection.length > 0;
   const one = selection.length === 1;
+  /**
+   * Whether anything in the selection follows a main.
+   *
+   * Figma omits the instance commands rather than greying them — a rectangle
+   * has no main to detach from, and a row that can never light up on this
+   * selection is noise. The greying below still does its job inside the group:
+   * with an instance selected, "Push changes" says by greying that there is
+   * nothing to push.
+   */
+  const instances = selection.some((id) => doc[id]?.instanceOf);
   const first = doc[selection[0]];
   const target = selection[0];
   const zoom = useUI.getState().viewport.zoom;
@@ -377,6 +387,64 @@ function Menu({ menu }: { menu: OpenMenu }) {
     if (!text || text.textPath || !canEditPoints(source.type)) return null;
     return { text: text.id, source: source.id };
   })();
+
+  /**
+   * Figma's canvas menu, which is a different menu rather than the object menu
+   * with everything greyed.
+   *
+   * Nothing under the pointer and nothing selected means every command that
+   * acts on a layer is dead, so none of them is offered — what is left is the
+   * handful of things the canvas itself can do.
+   */
+  if (!has && !menu.stack.length) {
+    const ui = useUI.getState();
+    return (
+      <Panel
+        items={[
+          { label: 'Paste here', disabled: !hasNodes(), run: pasteHere },
+          {
+            label: 'Show/Hide UI',
+            shortcut: '⌘\\',
+            divider: true,
+            run: () => ui.toggleChrome(),
+          },
+          { label: 'Show/Hide comments', shortcut: '⇧C', run: () => ui.toggleView('comments') },
+          {
+            label: 'Show/Hide multiplayer cursors',
+            shortcut: '⌥⌘\\',
+            run: () => ui.toggleView('cursors'),
+          },
+          {
+            label: 'Zoom to fit',
+            shortcut: '⇧1',
+            divider: true,
+            run: () => {
+              const fitted = fitView(doc, ui.leftPanel, ui.leftWidth, ui.rightWidth);
+              if (fitted) ui.setViewport(fitted);
+            },
+          },
+          { label: 'Zoom to 100%', shortcut: '⇧0', run: () => ui.zoomTo(1) },
+          {
+            label: 'Select all',
+            shortcut: '⌘A',
+            divider: true,
+            // select-all applies to the level you're in, as the keyboard's does
+            run: () => select(doc[level()]?.children ?? []),
+          },
+          {
+            label: 'Actions…',
+            shortcut: '⌘/',
+            divider: true,
+            run: () => ui.setPaletteOpen(true),
+          },
+        ]}
+        x={menu.x}
+        y={menu.y}
+        width={232}
+        onClose={close}
+      />
+    );
+  }
 
   const codeItems: Item[] = [
     { label: 'CSS', disabled: !one, run: () => writeText(cssFor(target, doc, false, varNames)) },
@@ -525,15 +593,44 @@ function Menu({ menu }: { menu: OpenMenu }) {
           },
         })),
     },
-    {
-      label: 'Detach instance',
-      shortcut: '⌥⌘B',
-      disabled: !selection.some((id) => doc[id]?.instanceOf),
-      run: () => {
-        for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
-        store.commit();
-      },
-    },
+    ...(instances
+      ? [
+          {
+            label: 'Detach instance',
+            shortcut: '⌥⌘B',
+            run: () => {
+              for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
+              store.commit();
+            },
+          },
+          {
+            label: 'Go to main component',
+            disabled: !one || !mainOf(first) || !doc[mainOf(first)!],
+            run: () => revealNode(mainOf(first)!, doc),
+          },
+          {
+            label: 'Push changes to main component',
+            // nothing to push is not the same as nothing selected, and the row
+            // says which by greying rather than by running and doing nothing
+            disabled: !one || !doc[mainOf(first) ?? ''] || !hasOverrides(first?.id ?? '', doc),
+            run: () => {
+              store.pushToMain(target);
+              store.commit();
+            },
+          },
+          {
+            label: 'Restore component',
+            // only for an instance whose main has gone: with the main still
+            // there this would make a second one
+            disabled: !one || !mainOf(first) || !!doc[mainOf(first)!],
+            run: () => {
+              const restored = store.restoreComponent(target);
+              store.commit();
+              if (restored) select([restored]);
+            },
+          },
+        ]
+      : []),
     {
       label: onPath ? 'Take off path' : 'Type on path',
       // two layers, one of them text and one with an outline — Figma's own
@@ -551,33 +648,6 @@ function Menu({ menu }: { menu: OpenMenu }) {
       disabled: !has,
       run: () => void rasterizeSelection(),
     },
-    {
-      label: 'Go to main component',
-      disabled: !one || !mainOf(first) || !doc[mainOf(first)!],
-      run: () => revealNode(mainOf(first)!, doc),
-    },
-    {
-      label: 'Push changes to main component',
-      // nothing to push is not the same as nothing selected, and the row says
-      // which by greying rather than by running and doing nothing
-      disabled: !one || !doc[mainOf(first) ?? ''] || !hasOverrides(first?.id ?? '', doc),
-      run: () => {
-        store.pushToMain(target);
-        store.commit();
-      },
-    },
-    {
-      label: 'Restore component',
-      // only for an instance whose main has gone: with the main still there
-      // this would make a second one
-      disabled: !one || !mainOf(first) || !!doc[mainOf(first)!],
-      run: () => {
-        const restored = store.restoreComponent(target);
-        store.commit();
-        if (restored) select([restored]);
-      },
-    },
-
     { label: 'Bring to front', shortcut: ']', divider: true, disabled: !has, run: () => store.reorder(selection, 'front') },
     { label: 'Bring forward', shortcut: '⌘]', disabled: !has, run: () => store.reorder(selection, 'forward') },
     { label: 'Send backward', shortcut: '⌘[', disabled: !has, run: () => store.reorder(selection, 'backward') },
@@ -692,14 +762,19 @@ function Menu({ menu }: { menu: OpenMenu }) {
         if (id) select([id]);
       },
     },
-    {
-      label: 'Combine as variants',
-      disabled: selection.filter((id) => doc[id]?.isComponent).length < 2,
-      run: () => {
-        const id = store.combineAsVariants(selection);
-        if (id) select([id]);
-      },
-    },
+    // two mains or it is not a thing you can ask for, so the row is absent
+    // rather than permanently grey on the selections that fill this menu
+    ...(selection.filter((id) => doc[id]?.isComponent).length >= 2
+      ? [
+          {
+            label: 'Combine as variants',
+            run: () => {
+              const id = store.combineAsVariants(selection);
+              if (id) select([id]);
+            },
+          },
+        ]
+      : []),
     {
       label: 'Create component',
       shortcut: '⌥⌘K',
