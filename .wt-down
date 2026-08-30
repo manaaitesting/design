@@ -1,0 +1,4 @@
+source .wt-env
+pkill -f "next dev -p $WEB_PORT" 2>/dev/null || true
+kill $(lsof -tiTCP:$SYNC_PORT -sTCP:LISTEN 2>/dev/null) 2>/dev/null || true
+echo down

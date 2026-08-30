@@ -142,6 +142,16 @@ export type LineStyle = 'solid' | 'dashed' | 'dotted';
 export interface BorderSpec {
   width: number;
   color: string;
+  /**
+   * The paint's own opacity, as every other paint in the panel has one. It is
+   * kept apart from the colour so a variable-bound stroke can still be faded.
+   */
+  opacity?: number;
+  /**
+   * The row's eye. A hidden stroke keeps its weight, which is the whole reason
+   * this is a flag rather than a width of zero.
+   */
+  visible?: boolean;
   style: LineStyle;
   /** where the stroke sits relative to the edge, as in Figma */
   position: 'inside' | 'center' | 'outside';

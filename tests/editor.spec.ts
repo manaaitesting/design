@@ -4179,6 +4179,41 @@ test.describe('layout grid and text blocks', () => {
   });
 });
 
+test("a stroke's opacity reaches the canvas, and its eye keeps the weight", async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Hairline', x: 700, y: 40, w: 160, h: 100, fill: '#FFFFFF' });
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, {
+      border: { width: 8, color: '#000000', style: 'solid', position: 'inside' },
+    });
+  }, id);
+  await select(page, [id]);
+
+  const section = page
+    .locator('.fig-section')
+    .filter({ has: page.getByRole('heading', { name: 'Stroke', exact: true }) });
+  await section.locator('input[aria-label="Opacity"]').fill('20');
+
+  expect((await doc(page))[id].border!.opacity).toBeCloseTo(0.2);
+  await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS(
+    'box-shadow',
+    /rgba\(0, 0, 0, 0\.2\)/,
+  );
+
+  // the eye hides the stroke; the weight is still 8 when it comes back
+  await section.locator('input[aria-label="Toggle visibility"]').click();
+  let border = (await doc(page))[id].border!;
+  expect(border.visible).toBe(false);
+  expect(border.width).toBe(8);
+  await expect(page.locator(`[data-node-id="${id}"]`)).not.toHaveCSS('box-shadow', /rgba/);
+
+  await section.locator('input[aria-label="Toggle visibility"]').click();
+  border = (await doc(page))[id].border!;
+  expect(border.visible).toBe(true);
+  expect(border.width).toBe(8);
+
+  await removeNodes(page, [id]);
+});
+
 test('the stroke-style menu opens inside the panel, with its own glyph', async ({ page }) => {
   const cover = await nodeNamed(page, 'Cover');
   await select(page, [cover!.id]);

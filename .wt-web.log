@@ -1,0 +1,31 @@
+▲ Next.js 16.3.3 (Turbopack)
+- Local:         http://localhost:3202
+- Network:       http://192.168.0.2:3202
+- Environments: .env.local
+✓ Ready in 251ms
+✓ Running next.config.ts took 1180ms
+
+ GET /signin 200 in 1467ms (next.js: 1360ms, application-code: 107ms)
+ GET /signin 200 in 34ms (next.js: 16ms, application-code: 18ms)
+ GET /files 200 in 279ms (next.js: 229ms, application-code: 50ms)
+ POST /signin 200 in 326ms (next.js: 2ms, application-code: 324ms)
+  └─ ƒ signIn(undefined, {}) in 31ms src/server/actions.ts
+Yjs was already imported. This breaks constructor checks and will lead to issues! - https://github.com/yjs/yjs/issues/438
+ GET /f/testfile00 200 in 895ms (next.js: 782ms, proxy.ts: 26ms, application-code: 86ms)
+ GET /signin 200 in 14ms (next.js: 1.3ms, application-code: 13ms)
+ GET /files 200 in 18ms (next.js: 0.9ms, application-code: 17ms)
+ POST /signin 200 in 45ms (next.js: 1.1ms, application-code: 44ms)
+  └─ ƒ signIn(undefined, {}) in 21ms src/server/actions.ts
+ GET /f/testfile00 200 in 20ms (next.js: 4ms, proxy.ts: 1.7ms, application-code: 14ms)
+ GET /signin 200 in 17ms (next.js: 3ms, application-code: 15ms)
+ GET /files 200 in 18ms (next.js: 1.8ms, application-code: 16ms)
+ POST /signin 200 in 49ms (next.js: 1.3ms, application-code: 48ms)
+  └─ ƒ signIn(undefined, {}) in 24ms src/server/actions.ts
+ GET /f/testfile00 200 in 22ms (next.js: 5ms, proxy.ts: 1.7ms, application-code: 16ms)
+ GET /f/testfile00 200 in 17ms (next.js: 3ms, proxy.ts: 1.4ms, application-code: 13ms)
+ GET /f/testfile00 200 in 22ms (next.js: 3ms, proxy.ts: 1.6ms, application-code: 17ms)
+ GET /f/testfile00 200 in 17ms (next.js: 3ms, proxy.ts: 1.5ms, application-code: 13ms)
+ GET /f/testfile00 200 in 16ms (next.js: 2ms, proxy.ts: 1.1ms, application-code: 13ms)
+ GET /f/testfile00 200 in 21ms (next.js: 2ms, proxy.ts: 1.0ms, application-code: 17ms)
+ GET /f/testfile00 200 in 17ms (next.js: 2ms, proxy.ts: 1.4ms, application-code: 13ms)
+ GET /f/testfile00 200 in 17ms (next.js: 3ms, proxy.ts: 1.4ms, application-code: 13ms)

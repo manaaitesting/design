@@ -4758,12 +4758,12 @@ function StrokeSection({
         <>
           <FigPaintRow
             color={stroke.color}
-            alpha={1}
+            alpha={stroke.opacity ?? 1}
             mixed={mixedPaint}
             onColor={(color) => set({ border: { ...stroke, color } })}
-            onAlpha={() => undefined}
-            onVisible={() => set({ border: { ...stroke, width: stroke.width ? 0 : 1 } })}
-            visible={stroke.width > 0}
+            onAlpha={(opacity) => set({ border: { ...stroke, opacity } })}
+            onVisible={() => set({ border: { ...stroke, visible: stroke.visible === false } })}
+            visible={stroke.visible !== false}
             onRemove={() => set({ border: null })}
           />
           <div style={{ display: 'flex', gap: 8 }}>

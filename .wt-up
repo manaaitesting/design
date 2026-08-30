@@ -1,0 +1,11 @@
+set -e
+source .wt-env
+pkill -f "next dev -p $WEB_PORT" 2>/dev/null || true
+pkill -f "SYNC_PORT=$SYNC_PORT" 2>/dev/null || true
+nohup node --env-file-if-exists=.env.local server/ws.mjs > .wt-sync.log 2>&1 &
+nohup npx next dev -p $WEB_PORT > .wt-web.log 2>&1 &
+for i in $(seq 1 90); do
+  if curl -sf -o /dev/null "http://localhost:$WEB_PORT/signin"; then echo "up on $WEB_PORT"; exit 0; fi
+  sleep 2
+done
+echo "web server did not come up; see .wt-web.log"; tail -20 .wt-web.log; exit 1
