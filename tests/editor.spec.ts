@@ -2671,6 +2671,41 @@ test('create component marks the layer as a main', async ({ page }) => {
   await removeNodes(page, [id]);
 });
 
+/**
+ * Componentising several layers at once, which Figma offers two ways: one
+ * component around the lot, or one component each.
+ */
+test('create component wraps a multi-selection, and the sibling row makes one of each', async ({ page }) => {
+  const { a, b } = await twoRects(page);
+  await select(page, [a, b]);
+  await runOnSelection(page, 'Create component');
+
+  const wrapper = (await selection(page))[0];
+  const wrapped = await doc(page);
+  expect(wrapper).not.toBe(a);
+  expect(wrapped[wrapper].isComponent).toBe(true);
+  expect(wrapped[wrapper].children).toEqual([a, b]);
+  // the layers inside are not components themselves — that is the other row
+  expect(wrapped[a].isComponent).toBeFalsy();
+  await removeNodes(page, [wrapper]);
+
+  // ⌥⌘K takes the same path rather than going dead at two layers
+  const keys = await twoRects(page);
+  await select(page, [keys.a, keys.b]);
+  await page.keyboard.press('Alt+Meta+KeyK');
+  await expect
+    .poll(async () => (await doc(page))[(await selection(page))[0]]?.isComponent ?? false)
+    .toBe(true);
+  await removeNodes(page, [(await selection(page))[0]]);
+
+  const each = await twoRects(page);
+  await select(page, [each.a, each.b]);
+  await runOnSelection(page, 'Create multiple components');
+  const made = await doc(page);
+  expect([made[each.a].isComponent, made[each.b].isComponent]).toEqual([true, true]);
+  await removeNodes(page, [each.a, each.b]);
+});
+
 test('paste here drops the copy under the pointer', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'CtxSrc', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
   await select(page, [id]);

@@ -174,6 +174,31 @@ export function flip(store: DocStore, selection: string[], axis: 'h' | 'v'): voi
 }
 
 /**
+ * Figma's ⌥⌘K, which does not need the selection to be one layer.
+ *
+ * Several layers become one component, which means they are wrapped in a frame
+ * first — a component is a node, and eight icons are not. Reached from the
+ * keyboard, the menu and the palette, so it lives here rather than being
+ * guessed at three times.
+ */
+export function componentize(store: DocStore, ids: string[]): string | null {
+  if (!ids.length) return null;
+  if (ids.length === 1) return store.createComponent(ids[0]) ? ids[0] : null;
+  const wrapper = store.wrapInFlex(ids, false);
+  if (!wrapper) return null;
+  store.createComponent(wrapper);
+  store.commit();
+  return wrapper;
+}
+
+/** Figma's "Create multiple components" — one component per selected layer. */
+export function componentizeEach(store: DocStore, ids: string[]): string[] {
+  const made = ids.filter((id) => store.createComponent(id));
+  if (made.length) store.commit();
+  return made;
+}
+
+/**
  * Figma's text shortcuts, which act on the layer rather than on a run.
  *
  * ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J set the alignment and ⇧⌘< / ⇧⌘> step the size, and both

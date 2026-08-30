@@ -7,6 +7,7 @@ import { useUI } from '../state/ui';
 import { openingFrame } from '../document/prototype';
 import { descendants, ROOT_ID, type Doc } from '../document/types';
 import { TYPE_LABEL } from '../document/defaults';
+import { componentize, componentizeEach } from '../lib/actions';
 
 /**
  * Quick actions.
@@ -195,9 +196,12 @@ function commands(doc: Doc, store: ReturnType<typeof useStore>): Entry[] {
       if (freed.length) pick(freed);
     }, '⇧⌘G'),
     make('component', 'Create component', () => {
-      const [first] = selection();
-      if (first) store.createComponent(first);
+      const made = componentize(store, selection());
+      if (made) pick([made]);
     }, '⌥⌘K'),
+    make('components', 'Create multiple components', () => {
+      componentizeEach(store, selection());
+    }),
     make('union', 'Union selection', () => runBoolean(store, 'union'), '⌥⌘U'),
     make('subtract', 'Subtract selection', () => runBoolean(store, 'subtract'), '⌥⌘S'),
     make('intersect', 'Intersect selection', () => runBoolean(store, 'intersect'), '⌥⌘I'),

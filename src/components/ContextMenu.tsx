@@ -14,6 +14,8 @@ import {
 import { hasNodes, readNodes, writeNodes } from '../lib/clipboard';
 import {
   alignText,
+  componentize,
+  componentizeEach,
   copyAsPng,
   copyAsSvg,
   copyProperties,
@@ -845,8 +847,18 @@ function Menu({ menu }: { menu: OpenMenu }) {
     {
       label: 'Create component',
       shortcut: '⌥⌘K',
-      disabled: !one,
-      run: () => void store.createComponent(target),
+      disabled: !has,
+      run: () => {
+        const made = componentize(store, selection);
+        if (made) select([made]);
+      },
+    },
+    {
+      // Figma's second gesture: a row of icons becomes a row of components,
+      // rather than one component with a row of icons inside it
+      label: 'Create multiple components',
+      disabled: selection.length < 2,
+      run: () => void componentizeEach(store, selection),
     },
 
     {

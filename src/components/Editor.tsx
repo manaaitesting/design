@@ -28,6 +28,7 @@ import { canEditPoints } from '../document/geometry';
 import { readNodes, writeNodes } from '../lib/clipboard';
 import {
   alignText,
+  componentize,
   copyAsPng,
   copyProperties,
   flip,
@@ -376,9 +377,10 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         if (framed) select([framed]);
         return;
       }
-      if (mod && event.altKey && event.code === 'KeyK' && selection.length === 1) {
+      if (mod && event.altKey && event.code === 'KeyK' && selection.length) {
         event.preventDefault();
-        store.createComponent(selection[0]);
+        const made = componentize(store, selection);
+        if (made) select([made]);
         return;
       }
       if (mod && event.altKey && BOOLEAN_KEYS[event.code] && selection.length > 1) {
