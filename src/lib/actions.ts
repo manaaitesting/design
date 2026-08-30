@@ -174,6 +174,54 @@ export function flip(store: DocStore, selection: string[], axis: 'h' | 'v'): voi
 }
 
 /**
+ * Figma's ⇧X: the fill colour and the stroke colour change places.
+ *
+ * The layer's paint may be a stack rather than one colour, and only the topmost
+ * visible solid in it has a colour a stroke can wear — so that is the one that
+ * travels, and it is put back into the same slot it came from. A layer with no
+ * stroke gains a one-pixel one in the colour its fill had, which is what Figma
+ * does and is the whole point of the key: it is how you outline a filled shape.
+ */
+export function swapFillAndStroke(store: DocStore, ids: string[]): boolean {
+  const doc = store.getSnapshot();
+  const swappable = ids.filter((id) => {
+    const n = doc[id];
+    return !!n && (n.fill !== null || !!solidIndex(n) || !!n.border);
+  });
+  if (!swappable.length) return false;
+
+  store.updateMany(swappable, (n) => {
+    const index = solidIndex(n);
+    const fillColor = index === null ? n.fill : n.fills![index].value;
+    const strokeColor = n.border?.color ?? null;
+
+    const patch: Partial<SceneNode> = {};
+    if (index === null) patch.fill = strokeColor;
+    else patch.fills = n.fills!.map((p, i) => (i === index ? { ...p, value: strokeColor ?? 'transparent' } : p));
+
+    patch.border = fillColor
+      ? { ...(n.border ?? DEFAULT_STROKE), color: fillColor }
+      : null;
+    return patch;
+  });
+  store.commit();
+  return true;
+}
+
+/** The paint a stroke can take its colour from: the top visible solid. */
+function solidIndex(node: SceneNode): number | null {
+  if (!node.fills?.length) return null;
+  for (let i = node.fills.length - 1; i >= 0; i--) {
+    const paint = node.fills[i];
+    if (paint.visible && paint.value.startsWith('#')) return i;
+  }
+  return null;
+}
+
+/** What a layer with no stroke gets when a fill colour arrives on it. */
+const DEFAULT_STROKE = { width: 1, color: '#000000', style: 'solid', position: 'inside' } as const;
+
+/**
  * Figma's text shortcuts, which act on the layer rather than on a run.
  *
  * ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J set the alignment and ⇧⌘< / ⇧⌘> step the size, and both

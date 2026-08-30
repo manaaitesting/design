@@ -34,6 +34,7 @@ import {
   pasteAt,
   pasteProperties,
   stepFontSize,
+  swapFillAndStroke,
   TEXT_ALIGN_KEYS,
 } from '../lib/actions';
 import { measureChildren } from '../lib/measure';
@@ -600,6 +601,15 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         event.preventDefault();
         flip(store, selection, event.code === 'KeyH' ? 'h' : 'v');
         return;
+      }
+      // ⇧X — swap the fill and the stroke, which is the reason Figma moved
+      // Exclude off X and onto E. Checked before the ⌘X below, which does not
+      // test ⇧ and would otherwise cut the layer instead.
+      if (!mod && event.shiftKey && !event.altKey && event.code === 'KeyX' && selection.length) {
+        if (swapFillAndStroke(store, selection)) {
+          event.preventDefault();
+          return;
+        }
       }
 
       // ── Clipboard ──────────────────────────────────────────────────────

@@ -59,3 +59,38 @@ test('⌥⇧A takes auto layout off, which ⇧A only ever put on', async ({ page
 
   await removeNodes(page, [frame]);
 });
+
+test('⇧X swaps the fill and the stroke, and ⌘X still cuts', async ({ page }) => {
+  const id = await makeNode(page, 'rect', {
+    name: 'KB Swap', x: 700, y: 500, w: 80, h: 80, fill: '#4CC3F0',
+    border: { width: 4, color: '#F2637F', style: 'solid', position: 'inside' },
+  } as never);
+  await select(page, [id]);
+
+  await page.keyboard.press('Shift+x');
+  const swapped = (await doc(page))[id];
+  expect(swapped.fill).toBe('#F2637F');
+  expect(swapped.border!.color).toBe('#4CC3F0');
+  // the stroke keeps everything about itself except its colour
+  expect(swapped.border!.width).toBe(4);
+
+  // twice puts it back, which is what makes the key safe to press
+  await page.keyboard.press('Shift+x');
+  const back = (await doc(page))[id];
+  expect([back.fill, back.border!.color]).toEqual(['#4CC3F0', '#F2637F']);
+
+  // a filled shape with no stroke gains one in the fill's colour: Figma's way
+  // of outlining something you have just drawn
+  const plain = await makeNode(page, 'rect', {
+    name: 'KB Outline', x: 900, y: 500, w: 60, h: 60, fill: '#9B7BF0',
+  });
+  await select(page, [plain]);
+  await page.keyboard.press('Shift+x');
+  const outlined = (await doc(page))[plain];
+  expect(outlined.border).toMatchObject({ color: '#9B7BF0', width: 1 });
+  expect(outlined.fill).toBeNull();
+
+  // and the layer is still there — ⇧X must not reach the unguarded ⌘X cut
+  expect((await selection(page))[0]).toBe(plain);
+  await removeNodes(page, [id, plain]);
+});
