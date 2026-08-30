@@ -1602,6 +1602,34 @@ test.describe('view options', () => {
     await removeNodes(page, [id]);
   });
 
+  test('outlines draws text as hollow glyphs rather than erasing it', async ({ page }) => {
+    const id = await makeNode(page, 'text', {
+      name: 'Readable', x: 40, y: 1280, w: 200, h: 40, text: 'Still legible', fill: '#111111',
+    });
+    const stroke = () =>
+      page.evaluate((id) => {
+        const el = document.querySelector<HTMLElement>(`[data-canvas-root] [data-node-id="${id}"]`);
+        const style = getComputedStyle(el!);
+        return { width: style.webkitTextStrokeWidth, color: style.color };
+      }, id);
+    expect((await stroke()).width).toBe('0px');
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await page.keyboard.press('Escape');
+
+    // the fill goes, but the letterforms stay — the mode exists to tell you
+    // which box is which, and empty boxes cannot
+    const outlined = await stroke();
+    expect(outlined.color).toBe('rgba(0, 0, 0, 0)');
+    expect(parseFloat(outlined.width)).toBeGreaterThan(0);
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await page.keyboard.press('Escape');
+    await removeNodes(page, [id]);
+  });
+
   test('the zoom field takes a number and goes there', async ({ page }) => {
     await openView(page);
     await page.getByLabel('Zoom', { exact: true }).fill('150');

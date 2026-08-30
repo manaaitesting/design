@@ -629,7 +629,16 @@ select {
     box-shadow: none !important;
     outline: 1px solid var(--color-select-line);
     outline-offset: -1px;
+  }
+  /* Text is geometry too. A transparent fill alone turned every text layer
+     into an anonymous empty box, which is the opposite of what the mode is
+     for; the stroke draws the letterforms hollow so the copy still reads.
+     The span rule catches styled runs, which carry their colour inline. */
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id],
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] span {
     color: transparent !important;
+    -webkit-text-stroke: 0.5px var(--color-select-line);
+    text-shadow: none !important;
   }
   .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] svg,
   .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] img,
