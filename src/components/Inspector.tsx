@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Icon } from './ui/Icons';
 import { FigIcon } from './ui/FigIcon';
 import {
@@ -92,6 +92,7 @@ import {
   type Justify,
   type NumericField,
   type Constraint,
+  type ConstraintSpec,
   type LineStyle,
   type FontSpec,
   type Paint,
@@ -2958,24 +2959,142 @@ function ConstraintsRow({ node, set }: { node: SceneNode; set: Setter }) {
   return (
     <>
       <FigLabel>Constraints</FigLabel>
-      <div className="fig-row" style={{ marginTop: 0 }}>
-        <FigSelect
-          value={spec.h}
-          options={options('h')}
-          glyph="H"
-          title="Horizontal constraint"
-          onChange={(h) => set({ constraints: { ...spec, h } })}
-        />
-        <FigSelect
-          value={spec.v}
-          options={options('v')}
-          glyph="V"
-          title="Vertical constraint"
-          onChange={(v) => set({ constraints: { ...spec, v } })}
-        />
+      <div className="fig-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 0' }}>
+          <FigSelect
+            value={spec.h}
+            options={options('h')}
+            glyph="H"
+            title="Horizontal constraint"
+            onChange={(h) => set({ constraints: { ...spec, h } })}
+          />
+          <FigSelect
+            value={spec.v}
+            options={options('v')}
+            glyph="V"
+            title="Vertical constraint"
+            onChange={(v) => set({ constraints: { ...spec, v } })}
+          />
+        </div>
+        <ConstraintsWidget spec={spec} onChange={(constraints) => set({ constraints })} />
         <span style={{ width: 24, flex: 'none' }} />
       </div>
     </>
+  );
+}
+
+/**
+ * Figma's constraint diagram, and the way most people set a constraint: the
+ * layer as a small rectangle inside its parent, a pin bar on each side and a
+ * centre line on each axis. A bar pins that edge, both opposing bars stretch,
+ * and a centre line centres — which is every constraint but Scale, and Scale is
+ * what the two dropdowns beside it are still for. It reads the current state at
+ * a glance, which two closed dropdowns cannot.
+ */
+function ConstraintsWidget({
+  spec,
+  onChange,
+}: {
+  spec: ConstraintSpec;
+  onChange: (next: ConstraintSpec) => void;
+}) {
+  const pinned = (value: Constraint, side: 'start' | 'end') => value === side || value === 'stretch';
+  const toggle = (axis: 'h' | 'v', side: 'start' | 'end') => {
+    const value = spec[axis];
+    const start = side === 'start' ? !pinned(value, 'start') : pinned(value, 'start');
+    const end = side === 'end' ? !pinned(value, 'end') : pinned(value, 'end');
+    onChange({
+      ...spec,
+      [axis]: start && end ? 'stretch' : start ? 'start' : end ? 'end' : 'center',
+    });
+  };
+
+  const ink = (on: boolean) => (on ? 'var(--fig-blue)' : 'rgba(0,0,0,0.28)');
+  const hit: CSSProperties = {
+    position: 'absolute',
+    border: 0,
+    padding: 0,
+    background: 'transparent',
+    cursor: 'default',
+    display: 'grid',
+    placeItems: 'center',
+  };
+
+  const bar = (axis: 'h' | 'v', side: 'start' | 'end', label: string, box: CSSProperties) => {
+    const on = pinned(spec[axis], side);
+    const across = axis === 'h';
+    return (
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={on}
+        title={label}
+        style={{ ...hit, ...box }}
+        onClick={() => toggle(axis, side)}
+      >
+        <span
+          style={{
+            width: across ? 11 : 2,
+            height: across ? 2 : 11,
+            borderRadius: 1,
+            background: ink(on),
+          }}
+        />
+      </button>
+    );
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label="Constraints"
+      style={{
+        position: 'relative',
+        width: 56,
+        height: 56,
+        flex: 'none',
+        borderRadius: 5,
+        background: 'var(--fig-field)',
+      }}
+    >
+      <span
+        style={{
+          position: 'absolute',
+          left: 17,
+          top: 17,
+          width: 22,
+          height: 22,
+          borderRadius: 2,
+          border: '1px solid rgba(0,0,0,0.28)',
+        }}
+      />
+      {bar('h', 'start', 'Pin left', { left: 0, top: 21, width: 16, height: 14 })}
+      {bar('h', 'end', 'Pin right', { right: 0, top: 21, width: 16, height: 14 })}
+      {bar('v', 'start', 'Pin top', { top: 0, left: 21, width: 14, height: 16 })}
+      {bar('v', 'end', 'Pin bottom', { bottom: 0, left: 21, width: 14, height: 16 })}
+      {/* the two centre lines cross, so they share four pixels in the middle;
+          everywhere else each one is the only thing under the pointer */}
+      <button
+        type="button"
+        aria-label="Center vertically"
+        aria-pressed={spec.v === 'center'}
+        title="Center vertically"
+        style={{ ...hit, left: 17, top: 26, width: 22, height: 4 }}
+        onClick={() => onChange({ ...spec, v: 'center' })}
+      >
+        <span style={{ width: 22, height: 2, background: ink(spec.v === 'center') }} />
+      </button>
+      <button
+        type="button"
+        aria-label="Center horizontally"
+        aria-pressed={spec.h === 'center'}
+        title="Center horizontally"
+        style={{ ...hit, left: 26, top: 17, width: 4, height: 22 }}
+        onClick={() => onChange({ ...spec, h: 'center' })}
+      >
+        <span style={{ width: 2, height: 22, background: ink(spec.h === 'center') }} />
+      </button>
+    </div>
   );
 }
 

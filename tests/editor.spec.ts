@@ -1484,6 +1484,42 @@ test('constraints reposition children when their frame resizes', async ({ page }
   await removeNodes(page, [frame]);
 });
 
+test('the constraint diagram pins an edge, stretches, and centres', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'PinFrame', x: 700, y: 40, w: 400, h: 200, fill: '#FFFFFF', flex: null,
+  });
+  const child = await page.evaluate(
+    (parent) =>
+      window.paperlike!.store.create('rect', parent, {
+        name: 'Pinned', x: 40, y: 40, w: 60, h: 40, fill: '#DDDDDD',
+      }),
+    frame,
+  );
+  await select(page, [child]);
+
+  const widget = page.getByRole('group', { name: 'Constraints' });
+  // the diagram reads the state out without a dropdown having to be opened
+  await expect(widget.getByLabel('Pin left')).toHaveAttribute('aria-pressed', 'true');
+  await expect(widget.getByLabel('Pin right')).toHaveAttribute('aria-pressed', 'false');
+
+  // the opposite bar as well as the one already pinned is Left and right
+  await widget.getByLabel('Pin right').click();
+  expect((await doc(page))[child].constraints!.h).toBe('stretch');
+  await expect(page.getByTitle('Horizontal constraint')).toHaveText(/Left and right/);
+
+  // and taking the first one off again leaves the layer pinned to the right
+  await widget.getByLabel('Pin left').click();
+  expect((await doc(page))[child].constraints!.h).toBe('end');
+
+  // the crossing four pixels belong to both lines, so press the vertical one clear of it
+  await widget.getByLabel('Center horizontally').click({ position: { x: 2, y: 3 } });
+  expect((await doc(page))[child].constraints!.h).toBe('center');
+  await widget.getByLabel('Center vertically').click({ position: { x: 3, y: 2 } });
+  expect((await doc(page))[child].constraints!.v).toBe('center');
+
+  await removeNodes(page, [frame]);
+});
+
 test('export produces React, HTML and JSON', async ({ page }) => {
   const artboard = await nodeNamed(page, 'Fixture Board');
   await select(page, [artboard!.id]);
