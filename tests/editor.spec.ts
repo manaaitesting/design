@@ -2863,6 +2863,41 @@ test('a component wears purple chrome where a plain frame wears blue', async ({ 
   await removeNodes(page, [main, plain]);
 });
 
+/**
+ * Componentising several layers at once, which Figma offers two ways: one
+ * component around the lot, or one component each.
+ */
+test('create component wraps a multi-selection, and the sibling row makes one of each', async ({ page }) => {
+  const { a, b } = await twoRects(page);
+  await select(page, [a, b]);
+  await runOnSelection(page, 'Create component');
+
+  const wrapper = (await selection(page))[0];
+  const wrapped = await doc(page);
+  expect(wrapper).not.toBe(a);
+  expect(wrapped[wrapper].isComponent).toBe(true);
+  expect(wrapped[wrapper].children).toEqual([a, b]);
+  // the layers inside are not components themselves — that is the other row
+  expect(wrapped[a].isComponent).toBeFalsy();
+  await removeNodes(page, [wrapper]);
+
+  // ⌥⌘K takes the same path rather than going dead at two layers
+  const keys = await twoRects(page);
+  await select(page, [keys.a, keys.b]);
+  await page.keyboard.press('Alt+Meta+KeyK');
+  await expect
+    .poll(async () => (await doc(page))[(await selection(page))[0]]?.isComponent ?? false)
+    .toBe(true);
+  await removeNodes(page, [(await selection(page))[0]]);
+
+  const each = await twoRects(page);
+  await select(page, [each.a, each.b]);
+  await runOnSelection(page, 'Create multiple components');
+  const made = await doc(page);
+  expect([made[each.a].isComponent, made[each.b].isComponent]).toEqual([true, true]);
+  await removeNodes(page, [each.a, each.b]);
+});
+
 test('paste here drops the copy under the pointer', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'CtxSrc', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
   await select(page, [id]);
@@ -2911,16 +2946,179 @@ test('delete removes the layer and clears the selection', async ({ page }) => {
   expect(await selection(page)).toEqual([]);
 });
 
-test('rows that need a selection are disabled without one', async ({ page }) => {
+/**
+ * A right-click over a caret is about the characters, not about the layer they
+ * are in — the object menu's Copy copies the layer, and its Delete removes the
+ * one you are mid-sentence in.
+ */
+test('right-clicking inside text being edited offers the characters, not the layer', async ({ page }) => {
+  const id = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const made = store.create('text', 'root', {
+      name: 'CtxCaret', x: 40, y: 560, w: 300, h: 40, text: 'hello brave new world',
+    });
+    store.commit();
+    return made;
+  });
+  await page.evaluate((target) => {
+    window.paperlike!.ui.getState().select([target]);
+    window.paperlike!.ui.getState().setEditing(target);
+  }, id);
+  await page.waitForFunction(() => document.querySelector('[contenteditable]') !== null);
+  await page.waitForTimeout(120);
+
+  await page.locator(`[contenteditable][data-node-id="${id}"]`).click({ button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
+
+  await expect(row(page, 'Delete')).toHaveCount(0);
+  await expect(row(page, 'Group selection')).toHaveCount(0);
+  await expect(row(page, 'Rasterize selection')).toHaveCount(0);
+  await expect(row(page, 'Cut')).toBeVisible();
+
+  // the marks reach the runs the way ⌘B does, and the edit survives the click
+  await row(page, 'Bold').click();
+  await expect.poll(async () => (await doc(page))[id].runs?.some((run) => run.bold)).toBe(true);
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().editing)).toBe(id);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setEditing(null));
+  await removeNodes(page, [id]);
+});
+
+test('the mask toggle is one row, and it reads the same way each time', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxMask', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  const maskRows = page.locator('.ctx-row .ctx-label', { hasText: 'mask' });
+
+  await openMenu(page, id);
+  await expect(maskRows).toHaveCount(1);
+  await row(page, 'Use as mask').click();
+  await expect.poll(async () => (await doc(page))[id].isMask).toBe(true);
+
+  // masked, the one row says the one thing — not "Remove mask" and
+  // "Release mask" as if they were different commands
+  await select(page, [id]);
+  await runOnSelection(page, 'Remove mask');
+  await expect.poll(async () => (await doc(page))[id].isMask).toBe(false);
+
+  await select(page, [id]);
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(maskRows).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('an empty patch of canvas gets the short canvas menu, not the object menu greyed out', async ({ page }) => {
   await page.evaluate(() => window.paperlike!.ui.getState().clearSelection());
   await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
 
-  await expect(row(page, 'Copy')).toBeDisabled();
-  await expect(row(page, 'Group selection')).toBeDisabled();
-  await expect(row(page, 'Flip horizontal')).toBeDisabled();
+  // nothing is under the pointer and nothing is selected, so no row that acts
+  // on a layer is offered at all
+  await expect(row(page, 'Copy')).toHaveCount(0);
+  await expect(row(page, 'Group selection')).toHaveCount(0);
+  await expect(row(page, 'Flip horizontal')).toHaveCount(0);
+  await expect(row(page, 'Delete')).toHaveCount(0);
+  await expect(page.locator('.ctx-row')).toHaveCount(8);
+
+  // what is left is what the canvas itself can do
+  await expect(row(page, 'Zoom to fit')).toBeVisible();
+  await expect(row(page, 'Select all')).toBeVisible();
+
+  // and it fits the window: the object menu was long enough to need scrolling
+  const scrolls = await page
+    .locator('.ctx')
+    .first()
+    .evaluate((el) => el.scrollHeight > el.clientHeight);
+  expect(scrolls).toBe(false);
 
   await page.keyboard.press('Escape');
   await expect(page.locator('.ctx')).toHaveCount(0);
+});
+
+test('select all from the canvas menu takes the whole page', async ({ page }) => {
+  const { a, b } = await twoRects(page);
+  await page.evaluate(() => window.paperlike!.ui.getState().clearSelection());
+
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await row(page, 'Select all').click();
+
+  expect(await selection(page)).toEqual(expect.arrayContaining([a, b]));
+  await removeNodes(page, [a, b]);
+});
+
+/**
+ * The instance commands are the clearest case of a row that can never light up
+ * on the selection in front of you — a rectangle has no main.
+ */
+test('the instance commands are absent on a layer that follows no main', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxPlain', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await openMenu(page, id);
+
+  await expect(row(page, 'Detach instance')).toHaveCount(0);
+  await expect(row(page, 'Go to main component')).toHaveCount(0);
+  await expect(row(page, 'Push changes to main component')).toHaveCount(0);
+  await expect(row(page, 'Restore component')).toHaveCount(0);
+  // the rows that do apply are still there
+  await expect(row(page, 'Delete')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+/**
+ * An open menu owns the keyboard. Both halves matter: the rows have to answer
+ * the arrows, and the canvas shortcuts underneath have to stop answering — a
+ * stray ⌫ used to delete the selection sitting out of sight behind the panel.
+ */
+test('the open menu takes the keyboard, and the canvas shortcuts wait for it', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxKeys', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await openMenu(page, id);
+
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('r');
+  expect((await doc(page))[id]).toBeTruthy();
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+  // ⇱ and ↓ move the highlight, and a letter jumps to the next row starting
+  // with it — which is where the R above went instead of arming the tool
+  await page.keyboard.press('Home');
+  await expect(page.locator('.ctx-row[data-active]')).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('c');
+  await page.keyboard.press('c');
+  await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Copy/Paste as');
+
+  // → opens the submenu that row owns, ← closes it again
+  await page.keyboard.press('ArrowRight');
+  await expect(row(page, 'Copy as SVG')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(row(page, 'Copy as SVG')).toHaveCount(0);
+
+  await page.keyboard.press('f');
+  await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Frame selection');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ctx')).toHaveCount(0);
+
+  const framed = (await selection(page))[0];
+  expect((await doc(page))[framed].children).toEqual([id]);
+  await removeNodes(page, [framed]);
+});
+
+test('escape over an open menu closes the menu and nothing else', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxEsc', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await select(page, [id]);
+  await page.evaluate((target) => window.paperlike!.ui.getState().setVectorEdit(target), id);
+
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await expect(page.locator('.ctx')).toHaveCount(0);
+  // one press, one mode: point editing used to go with it
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().vectorEdit)).toBe(id);
+
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().vectorEdit)).toBeNull();
+  await removeNodes(page, [id]);
 });
 
 test('the menu shortcuts run the same commands from the keyboard', async ({ page }) => {
@@ -4979,3 +5177,5 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 });
+
+

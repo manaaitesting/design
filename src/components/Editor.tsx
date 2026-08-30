@@ -29,6 +29,7 @@ import { canEditPoints } from '../document/geometry';
 import { readNodes, writeNodes } from '../lib/clipboard';
 import {
   alignText,
+  componentize,
   copyAsPng,
   copyProperties,
   flip,
@@ -278,16 +279,18 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       if (ui.presenting) return;
 
       /**
-       * A modal owns the keyboard while it is up.
+       * Something in front of the canvas owns the keyboard while it is there.
        *
        * Export, Version history, Shaders and Rename cover the canvas and focus
-       * nothing, so every canvas shortcut went on firing behind them — ⌫ with
-       * the Export sheet open deleted the very layer the sheet was previewing,
-       * and R, ⌘D and ⌘G edited the document out of sight. Escape is the way
-       * out, so it is the one key that still reaches the ladder below.
+       * nothing, and an open context menu is on top of everything — so every
+       * canvas shortcut went on firing behind all five. ⌫ with the Export sheet
+       * open deleted the very layer the sheet was previewing; R armed a tool
+       * under an open menu. Escape is the way out of each, so it is the one key
+       * that still reaches the ladder below.
        */
-      const modal = ui.exportOpen || ui.historyOpen || ui.shadersOpen || ui.renameOpen || !!ui.linkEditor;
-      if (modal && event.key !== 'Escape') return;
+      const covered =
+        ui.exportOpen || ui.historyOpen || ui.shadersOpen || ui.renameOpen || !!ui.linkEditor || !!ui.contextMenu;
+      if (covered && event.key !== 'Escape') return;
 
       // ⇧⌘⏎ — play the prototype, as in Figma
       if (mod && event.shiftKey && event.key === 'Enter') {
@@ -327,7 +330,10 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
 
       if (event.key === 'Escape') {
-        if (ui.paletteOpen) ui.setPaletteOpen(false);
+        // the menu is on top of everything, so it is what Escape takes first —
+        // checked below vector editing, one press used to close both
+        if (ui.contextMenu) ui.setContextMenu(null);
+        else if (ui.paletteOpen) ui.setPaletteOpen(false);
         else if (ui.shortcutsOpen) ui.setShortcutsOpen(false);
         else if (ui.linkEditor) ui.setLinkEditor(null);
         else if (ui.renameOpen) ui.setRenameOpen(false);
@@ -336,7 +342,6 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         else if (ui.exportOpen) ui.setExportOpen(false);
         else if (ui.shadersOpen) ui.setShadersOpen(false);
         else if (ui.editing) ui.setEditing(null);
-        else if (ui.contextMenu) ui.setContextMenu(null);
         else if (ui.motion.frame) ui.openMotion(null);
         else if (ui.prompt) {
           ui.setPrompt(null);
@@ -409,9 +414,10 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         if (framed) select([framed]);
         return;
       }
-      if (mod && event.altKey && event.code === 'KeyK' && selection.length === 1) {
+      if (mod && event.altKey && event.code === 'KeyK' && selection.length) {
         event.preventDefault();
-        store.createComponent(selection[0]);
+        const made = componentize(store, selection);
+        if (made) select([made]);
         return;
       }
       if (mod && event.altKey && BOOLEAN_KEYS[event.code] && selection.length > 1) {

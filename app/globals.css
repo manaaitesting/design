@@ -1662,8 +1662,12 @@ select {
     white-space: nowrap;
   }
   .ctx-row:hover:not(:disabled),
-  .ctx-row[data-open='true'] {
+  .ctx-row[data-active]:not(:disabled),
+  .ctx-row[aria-expanded='true'] {
     background: var(--fig-blue, #0d99ff);
+  }
+  .ctx:focus-visible {
+    outline: none;
   }
   .ctx-row:disabled {
     color: rgba(255, 255, 255, 0.32);
@@ -1677,7 +1681,8 @@ select {
     flex: none;
   }
   .ctx-row:hover:not(:disabled) .ctx-shortcut,
-  .ctx-row[data-open='true'] .ctx-shortcut {
+  .ctx-row[data-active]:not(:disabled) .ctx-shortcut,
+  .ctx-row[aria-expanded='true'] .ctx-shortcut {
     color: rgba(255, 255, 255, 0.85);
   }
   .ctx-row:disabled .ctx-shortcut {
@@ -1690,7 +1695,8 @@ select {
     flex: none;
   }
   .ctx-row:hover:not(:disabled) .ctx-arrow,
-  .ctx-row[data-open='true'] .ctx-arrow {
+  .ctx-row[data-active]:not(:disabled) .ctx-arrow,
+  .ctx-row[aria-expanded='true'] .ctx-arrow {
     color: #fff;
   }
   .ctx-sep {
@@ -3264,42 +3270,6 @@ select {
     font-weight: 500;
     white-space: nowrap;
     pointer-events: none;
-  }
-
-  .fig-tab-menu {
-    position: fixed;
-    z-index: 60;
-    min-width: 168px;
-    padding: 4px;
-    display: flex;
-    flex-direction: column;
-    border-radius: 8px;
-    background: var(--color-panel);
-    box-shadow: var(--shadow-pop);
-  }
-  .fig-tab-menu > button {
-    height: 26px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    text-align: left;
-    font-weight: 450;
-    color: var(--color-ink);
-    cursor: default;
-  }
-  .fig-tab-menu > button:hover:enabled {
-    background: var(--color-select);
-    color: #fff;
-  }
-  .fig-tab-menu > button:disabled {
-    color: var(--color-ink-dim);
-  }
-  .fig-tab-menu > hr {
-    height: 1px;
-    margin: 4px 0;
-    border: 0;
-    background: var(--color-line);
   }
 }
 
