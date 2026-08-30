@@ -34,7 +34,7 @@ function ZoomMenu({ zoom }: { zoom: number }) {
   const items: { label: string; tag: string; divider?: boolean; run: () => void }[] = [
     { label: 'Zoom in', tag: '⌘+', run: () => useUI.getState().zoomBy(ZOOM.step) },
     { label: 'Zoom out', tag: '⌘−', run: () => useUI.getState().zoomBy(1 / ZOOM.step) },
-    { label: 'Zoom to fit', tag: '⇧1', divider: true, run: () => frame(contentBounds(doc)) },
+    { label: 'Zoom to fit', tag: '⇧1', divider: true, run: () => frame(contentBounds(doc, useUI.getState().page)) },
     {
       label: 'Zoom to selection',
       tag: '⇧2',

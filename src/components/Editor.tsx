@@ -231,7 +231,9 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
     // for an empty file would mean an empty file never remembers where you
     // left it — which is exactly the file you are about to put something in.
     framed.current = true;
-    const fitted = fitView(doc, leftPanel, leftWidth, rightWidth);
+    // fitting magnifies now, but an opening view that greets you at 40× on a
+    // file holding one small layer reads as broken rather than as helpful
+    const fitted = fitView(doc, useUI.getState().page, leftPanel, leftWidth, rightWidth, 1);
     if (fitted) useUI.getState().setViewport(fitted);
   }, [doc, leftPanel, leftWidth, rightWidth, room, store]);
 
@@ -962,7 +964,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
       if (event.code === 'Digit1' && (mod || event.shiftKey)) {
         event.preventDefault();
-        const fitted = fitView(doc, leftPanel, ui.leftWidth, ui.rightWidth);
+        const fitted = fitView(doc, ui.page, leftPanel, ui.leftWidth, ui.rightWidth);
         if (fitted) ui.setViewport(fitted);
         return;
       }

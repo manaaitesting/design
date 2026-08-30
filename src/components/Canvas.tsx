@@ -137,6 +137,7 @@ export function Canvas() {
   const prototyping = useUI((s) => s.inspectorTab === 'prototype');
   const setEntered = useUI((s) => s.setEntered);
   const setGuides = useUI((s) => s.setGuides);
+  const setDropTarget = useUI((s) => s.setDropTarget);
   const rulers = useUI((s) => s.rulers);
   const pixelPreview = useUI((s) => s.view.pixelPreview);
   const vectorEdit = useUI((s) => s.vectorEdit);
@@ -452,6 +453,30 @@ export function Canvas() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tool, pen, commitPen, setTool]);
+
+  /**
+   * Outlines the frame a release here would drop into, while you are still
+   * holding the layer.
+   *
+   * Reparenting is decided at pointer-up and rewrites the tree silently, so
+   * without this the only way to learn that a card adopted the layer is to
+   * move the card later and find the layer coming with it. A target the layer
+   * is already inside says nothing, so it draws nothing.
+   */
+  const markDropTarget = (e: PointerEvent, ids: string[], snapshot: Doc) => {
+    const skip = new Set(ids.flatMap((id) => [id, ...descendants(id, snapshot)]));
+    const found = containerAt(e.clientX, e.clientY, snapshot, skip);
+    const next = found && found !== snapshot[ids[0]]?.parent ? found : null;
+    const target = next ? snapshot[next] : null;
+    const slot = target?.flex ? flowSlotAt(target, ids, e.clientX, e.clientY) : null;
+    const line =
+      slot && target
+        ? flowSlotRect(target, ids, slot.position, rootRef.current!.getBoundingClientRect())
+        : null;
+    const now = useUI.getState();
+    if (now.dropTarget === next && sameRect(now.dropSlot, line)) return;
+    setDropTarget(next, line);
+  };
 
   // ── Pointer interactions ───────────────────────────────────────────────
   const onPointerDown = (event: React.PointerEvent) => {
@@ -925,6 +950,7 @@ export function Canvas() {
           if (!shifted && Math.hypot(e.clientX - event.clientX, e.clientY - event.clientY) < 3) return;
           shifted = true;
           const snapshot = store.getSnapshot();
+          markDropTarget(e, kids, snapshot);
           const parent = snapshot[parentId];
           if (!parent?.flex) return;
           // outside the frame this is a drop, not a reorder — the release
@@ -939,6 +965,7 @@ export function Canvas() {
           store.moveMany(kids, parentId, slot.index);
         },
         (e) => {
+          setDropTarget(null);
           if (!shifted) {
             if (untoggle) toggle(targetId);
             return;
@@ -1023,9 +1050,11 @@ export function Canvas() {
           const origin = origins.get(n.id)!;
           return { x: place(origin.x + dx), y: place(origin.y + dy) };
         });
+        markDropTarget(e, movers, snapshot);
       },
       (e) => {
         setGuides([]);
+        setDropTarget(null);
         // a click that never moved is a selection, not a drop
         if (!moved) {
           if (untoggle) toggle(targetId);
@@ -1493,6 +1522,40 @@ function flowSlotAt(
   const index =
     position < others.length ? parent.children.indexOf(others[position]) : parent.children.length;
   return { position, index };
+}
+
+interface SlotRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const sameRect = (a: SlotRect | null, b: SlotRect | null) =>
+  a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+
+/**
+ * The line where a flowed drop would land, in the canvas element's own pixels.
+ *
+ * `flowSlotAt` answers with a position in the list; this is that position drawn
+ * — the leading edge of the child that would be pushed along, or the trailing
+ * edge of the last one when the layer goes on the end.
+ */
+function flowSlotRect(
+  parent: SceneNode,
+  exclude: string[],
+  position: number,
+  base: DOMRect,
+): SlotRect | null {
+  const others = parent.children.filter((id) => !exclude.includes(id));
+  if (!others.length) return null;
+  const last = position >= others.length;
+  const anchor = others[last ? others.length - 1 : position];
+  const rect = document.querySelector<HTMLElement>(`[data-node-id="${anchor}"]`)?.getBoundingClientRect();
+  if (!rect) return null;
+  return parent.flex?.direction === 'row'
+    ? { x: (last ? rect.right : rect.left) - base.left - 1, y: rect.top - base.top, w: 2, h: rect.height }
+    : { x: rect.left - base.left, y: (last ? rect.bottom : rect.top) - base.top - 1, w: rect.width, h: 2 };
 }
 
 /**

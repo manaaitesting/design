@@ -15,6 +15,10 @@
      the accent used for controls — otherwise 1.5px of #0d99ff disappears
      against light fills */
   --color-select-line: #0a7ad4;
+  /* Figma paints a component, a component set and an instance purple, and
+     everything else blue. It is how you tell an instance from a detached copy
+     without leaving the canvas. */
+  --color-select-component: #9747ff;
 
   --rail-left: 240px;
   --rail-tools: 42px;
@@ -629,7 +633,16 @@ select {
     box-shadow: none !important;
     outline: 1px solid var(--color-select-line);
     outline-offset: -1px;
+  }
+  /* Text is geometry too. A transparent fill alone turned every text layer
+     into an anonymous empty box, which is the opposite of what the mode is
+     for; the stroke draws the letterforms hollow so the copy still reads.
+     The span rule catches styled runs, which carry their colour inline. */
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id],
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] span {
     color: transparent !important;
+    -webkit-text-stroke: 0.5px var(--color-select-line);
+    text-shadow: none !important;
   }
   .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] svg,
   .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] img,
@@ -2586,6 +2599,14 @@ select {
 .section-label:hover,
 .section-label[data-on] {
   color: var(--color-select-line);
+}
+/* a component's board wears the purple and Figma's diamond at all times, not
+   only when it is under the pointer */
+.section-label[data-component] {
+  color: var(--color-select-component);
+}
+.section-label[data-component]::before {
+  content: '◆ ';
 }
 /* A frame is one board among many, so its name is quieter than a section's,
    which titles a whole region of the page. */

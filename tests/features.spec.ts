@@ -1602,6 +1602,34 @@ test.describe('view options', () => {
     await removeNodes(page, [id]);
   });
 
+  test('outlines draws text as hollow glyphs rather than erasing it', async ({ page }) => {
+    const id = await makeNode(page, 'text', {
+      name: 'Readable', x: 40, y: 1280, w: 200, h: 40, text: 'Still legible', fill: '#111111',
+    });
+    const stroke = () =>
+      page.evaluate((id) => {
+        const el = document.querySelector<HTMLElement>(`[data-canvas-root] [data-node-id="${id}"]`);
+        const style = getComputedStyle(el!);
+        return { width: style.webkitTextStrokeWidth, color: style.color };
+      }, id);
+    expect((await stroke()).width).toBe('0px');
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await page.keyboard.press('Escape');
+
+    // the fill goes, but the letterforms stay — the mode exists to tell you
+    // which box is which, and empty boxes cannot
+    const outlined = await stroke();
+    expect(outlined.color).toBe('rgba(0, 0, 0, 0)');
+    expect(parseFloat(outlined.width)).toBeGreaterThan(0);
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await page.keyboard.press('Escape');
+    await removeNodes(page, [id]);
+  });
+
   test('the zoom field takes a number and goes there', async ({ page }) => {
     await openView(page);
     await page.getByLabel('Zoom', { exact: true }).fill('150');
@@ -1730,6 +1758,28 @@ test('the Measure tool latches the readout that ⌥ gives you', async ({ page })
 
   await page.getByRole('button', { name: 'Move', exact: true }).click();
   expect(await page.evaluate(() => window.paperlike!.ui.getState().measuring)).toBe(false);
+});
+
+test('⌥ measures from the whole selection, and marks the edge it read', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  const a = await makeNode(page, 'rect', { name: 'MeasA', x: 100, y: 100, w: 50, h: 50, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'MeasB', x: 300, y: 100, w: 50, h: 50, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'MeasC', x: 500, y: 400, w: 60, h: 60, fill: '#F2637F' });
+  await select(page, [a, b]);
+  await page.evaluate(() => window.paperlike!.ui.getState().setMeasuring(true));
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+  // the selection ends at 350, not at 150 where its first member ends
+  await expect(page.getByText('150', { exact: true })).toBeVisible();
+  await expect(page.getByText('350', { exact: true })).toHaveCount(0);
+  // and the hovered layer is nowhere near the line, so a dashed run says which
+  // of its edges the number was taken from
+  await expect(page.locator('[data-measure="extension"]').first()).toBeVisible();
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setMeasuring(false));
+  await removeNodes(page, [a, b, c]);
 });
 
 /**

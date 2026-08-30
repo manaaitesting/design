@@ -91,6 +91,46 @@ test('a \u21e7 press that never moves still takes the layer out of the selection
  * back to the page — in both directions without the layer appearing to move,
  * which is the whole point: the drop changes the tree, not the picture.
  */
+test('dragging a layer over a frame outlines the frame that will adopt it', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'Highlighter', x: 700, y: 0, w: 300, h: 300, fill: '#FFFFFF', flex: null,
+  });
+  const id = await makeNode(page, 'rect', {
+    name: 'Passenger', x: 700, y: 400, w: 100, h: 60, fill: '#F2637F',
+  });
+  await select(page, [id]);
+
+  const before = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+  const from = { x: before!.x + before!.width / 2, y: before!.y + before!.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // several moves, because one is under the threshold that starts a drag
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await page.mouse.move(from.x + 80 * step, from.y - 270 * step);
+  }
+
+  // still holding it: the frame says it is about to take the layer
+  const target = await page.evaluate(() => window.paperlike!.ui.getState().dropTarget);
+  expect(target).toBe(frame);
+  // and the chrome draws it, over the frame's own box
+  const box = (await page.locator(`[data-node-id="${frame}"]`).boundingBox())!;
+  const outlined = await page.evaluate((want) =>
+    [...document.querySelectorAll('div')].some((el) => {
+      if (getComputedStyle(el).outlineWidth !== '2px') return false;
+      const r = el.getBoundingClientRect();
+      return Math.abs(r.x - want.x) < 2 && Math.abs(r.width - want.width) < 2;
+    }),
+  { x: box.x, width: box.width });
+  expect(outlined).toBe(true);
+
+  await page.mouse.up();
+  // and the outline goes away with the gesture that raised it
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().dropTarget)).toBeNull();
+  expect((await doc(page))[id].parent).toBe(frame);
+
+  await removeNodes(page, [frame, id]);
+});
+
 test('dropping a layer on a frame makes it a child of that frame', async ({ page }) => {
   // a frame away from the origin, so a parent-local coordinate is not the same
   // number as the world one and a wrong conversion cannot pass by accident
@@ -401,6 +441,46 @@ test('dropping into an auto layout lands where the pointer is, not at the end', 
     'First', 'Arriving', 'Second',
   ]);
 
+  await removeNodes(page, [built.frame]);
+});
+
+test('dragging over an auto layout draws the line the layer would land on', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'SlotRack', x: 700, y: 0, w: 300, h: 100, fill: '#FFFFFF',
+      flex: {
+        mode: 'flex', direction: 'row', gap: 10, padding: [0, 0, 0, 0],
+        align: 'start', justify: 'start', wrap: false,
+      },
+    } as never);
+    store.create('rect', frame, { name: 'SlotFirst', w: 60, h: 60, fill: '#4CC3F0' } as never);
+    const second = store.create('rect', frame, { name: 'SlotSecond', w: 60, h: 60, fill: '#9B7BF0' } as never);
+    const loose = store.create('rect', 'root', {
+      name: 'SlotArriving', x: 700, y: 300, w: 60, h: 60, fill: '#F2637F',
+    } as never);
+    store.commit();
+    return { frame, second, loose };
+  });
+  await select(page, [built.loose]);
+
+  const box = (await page.locator(`[data-node-id="${built.loose}"]`).boundingBox())!;
+  const edge = (await page.locator(`[data-node-id="${built.second}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await page.mouse.move(from.x + 35 * step, from.y - 300 * step);
+  }
+
+  // the outline says which frame; only the line says between which two children
+  const line = page.locator('[data-drop-slot]');
+  await expect(line).toBeVisible();
+  // the line is 2px wide and straddles the edge it marks
+  expect(Math.abs((await line.boundingBox())!.x - edge.x)).toBeLessThanOrEqual(2);
+
+  await page.mouse.up();
+  await expect(line).toHaveCount(0);
   await removeNodes(page, [built.frame]);
 });
 
@@ -1157,6 +1237,59 @@ test('dragging snaps to a sibling edge', async ({ page }) => {
   expect(after.x).toBe(40);
   expect(after.y).toBeGreaterThan(660);
   await removeNodes(page, [anchor, mover]);
+});
+
+/**
+ * Alignment is half of what smart guides do; spacing is the other half. Figma
+ * users space a row by dragging until the numbers read the same, so the snap
+ * has to take an even arrangement and say what it took.
+ */
+test('a drag snaps to match the space its neighbours already hold, and says so', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const a = await makeNode(page, 'rect', { name: 'GapA', x: 4105, y: 4000, w: 100, h: 80, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'GapB', x: 4305, y: 4000, w: 100, h: 80, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'GapC', x: 4700, y: 4000, w: 100, h: 80, fill: '#F2637F' });
+  await select(page, [c]);
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // five world px short of an even row — inside the threshold, so it should take
+  for (const step of [0.25, 0.5, 0.75, 1]) await page.mouse.move(from.x - 190 * step, from.y);
+
+  // both spaces are drawn, and both carry the measurement
+  await expect(page.locator('[data-gap-guide="x"]')).toHaveCount(2);
+  await expect(page.locator('[data-gap-label="x"]').first()).toHaveText('100');
+
+  await page.mouse.up();
+  expect((await doc(page))[c].x).toBe(4505);
+  await expect(page.locator('[data-gap-guide="x"]')).toHaveCount(0);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [a, b, c]);
+});
+
+test('a layer dropped between two others evens the space either side of it', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const a = await makeNode(page, 'rect', { name: 'EvenA', x: 4105, y: 4200, w: 100, h: 80, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'EvenB', x: 4705, y: 4200, w: 100, h: 80, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'EvenC', x: 4600, y: 4200, w: 100, h: 80, fill: '#F2637F' });
+  await select(page, [c]);
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await dragBy(page, from, { x: -190, y: 0 });
+
+  // 4405 leaves 200 on each side, where the drag alone would have left 205 and 195
+  expect((await doc(page))[c].x).toBe(4405);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [a, b, c]);
 });
 
 test('holding the snap-bypass modifier lets a drag land off the guide', async ({ page }) => {
@@ -2706,6 +2839,28 @@ test('create component marks the layer as a main', async ({ page }) => {
   await runCommand(page, id, 'Create component');
   expect((await doc(page))[id].isComponent).toBe(true);
   await removeNodes(page, [id]);
+});
+
+test('a component wears purple chrome where a plain frame wears blue', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'PurpleMain', x: 40, y: 1700, w: 160, h: 100, fill: '#EEEEEE', isComponent: true,
+  });
+  const plain = await makeNode(page, 'frame', {
+    name: 'BlueBoard', x: 260, y: 1700, w: 160, h: 100, fill: '#EEEEEE',
+  });
+
+  const handleColour = () =>
+    page.evaluate(() => getComputedStyle(document.querySelector('[data-handle="nw"]')!).borderTopColor);
+
+  await select(page, [main]);
+  expect(await handleColour()).toBe('rgb(151, 71, 255)');
+
+  await select(page, [plain]);
+  expect(await handleColour()).toBe('rgb(10, 122, 212)');
+  // and the board label says the same thing without anything being selected
+  await expect(page.locator('.section-label[data-component]')).toHaveText(/PurpleMain/);
+
+  await removeNodes(page, [main, plain]);
 });
 
 test('paste here drops the copy under the pointer', async ({ page }) => {
@@ -4752,6 +4907,60 @@ test.describe('zoom', () => {
     await page.getByRole('option', { name: /Zoom to 100%/ }).click();
     expect(await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom)).toBe(1);
 
+    await removeNodes(page, [id]);
+  });
+
+  test('⇧1 fits the page you are looking at, not the first one', async ({ page }) => {
+    const other = await page.evaluate(() => {
+      const id = window.paperlike!.store.addPage('Fit Elsewhere');
+      window.paperlike!.store.commit();
+      return id;
+    });
+    const id = await page.evaluate((parent) => {
+      const made = window.paperlike!.store.create('rect', parent, {
+        name: 'OnTheSecondPage',
+        x: 3200,
+        y: 2600,
+        w: 200,
+        h: 150,
+        fill: '#4CC3F0',
+      });
+      window.paperlike!.store.commit();
+      return made;
+    }, other);
+    await page.evaluate((id) => window.paperlike!.ui.getState().setPage(id), other);
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+    await expect(page.locator(`[data-node-id="${id}"]`)).toBeAttached();
+
+    await page.keyboard.press('Shift+1');
+
+    // fit used to measure Page 1's layers whatever page you were on
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThan(0);
+    expect(box!.y).toBeGreaterThan(0);
+    expect(box!.x + box!.width).toBeLessThan(page.viewportSize()!.width);
+
+    await page.evaluate(() => {
+      const ui = window.paperlike!.ui.getState();
+      ui.setPage(window.paperlike!.store.listPages()[0]);
+      ui.setViewport({ x: 0, y: 0, zoom: 1 });
+    });
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), other);
+  });
+
+  test('⇧2 on something small magnifies it rather than stopping at 100%', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'TinyIcon', x: 1800, y: 1200, w: 24, h: 24 });
+    await select(page, [id]);
+    await page.keyboard.press('Shift+2');
+
+    // fit used to clamp at 1, so framing an icon only re-centred it
+    const zoom = await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom);
+    expect(zoom).toBeGreaterThan(4);
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    expect(box!.width).toBeGreaterThan(100);
+
+    await page.keyboard.press('Shift+0');
     await removeNodes(page, [id]);
   });
 
