@@ -40,8 +40,8 @@ export default defineConfig({
     { name: 'motion', testMatch: /motion\.spec\.ts/ },
     // no browser either: the shared library, against a scratch database
     { name: 'library', testMatch: /library\.spec\.ts/ },
-    // no browser either: this one drives the sync server
-    { name: 'sync', testMatch: /snapshots\.spec\.ts/ },
+    // no browser either: these drive the sync server
+    { name: 'sync', testMatch: /(snapshots|collab)\.spec\.ts/ },
     // no browser to drive, but it spawns one: the MCP server renders headlessly
     { name: 'mcp', testMatch: /mcp\.spec\.ts/ },
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
