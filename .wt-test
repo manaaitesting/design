@@ -1,3 +1,0 @@
-set -e
-source .wt-env
-npx playwright test "${@}"

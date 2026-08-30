@@ -1,6 +1,0 @@
-export SYNC_PORT=1302
-export DATA_DIR=/Users/krishnabenna/design/.claude/worktrees/wf_9ce68bd8-a80-2/.data
-export NEXT_PUBLIC_SYNC_URL=ws://localhost:1302
-export BASE_URL=http://localhost:3202
-export SKIP_WEB_SERVER=1
-export WEB_PORT=3202
