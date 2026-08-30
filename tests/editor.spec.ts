@@ -2598,6 +2598,45 @@ test('show/hide, lock/unlock and both flips toggle their flag', async ({ page })
   await removeNodes(page, [id]);
 });
 
+/**
+ * Rasterize selection.
+ *
+ * The command has to render what is on the canvas, so it is driven through the
+ * real menu rather than the store: a picture of the layer is the whole point,
+ * and a store-only test would prove nothing about what was drawn.
+ */
+test('rasterize replaces a layer with a picture of it, in its place in the stack', async ({ page }) => {
+  const board = await makeNode(page, 'frame', {
+    name: 'RasterBoard', x: 40, y: 500, w: 300, h: 200, fill: '#FFFFFF', flex: null,
+  });
+  const { under, target, over } = await page.evaluate((parent) => {
+    const store = window.paperlike!.store;
+    const a = store.create('rect', parent, { name: 'Under', x: 10, y: 10, w: 40, h: 40, fill: '#DDDDDD' });
+    const b = store.create('rect', parent, { name: 'Target', x: 60, y: 20, w: 80, h: 60, fill: '#0D99FF', radius: 8 });
+    const c = store.create('rect', parent, { name: 'Over', x: 160, y: 10, w: 40, h: 40, fill: '#111111' });
+    store.commit();
+    return { under: a, target: b, over: c };
+  }, board);
+
+  await select(page, [target]);
+  await runOnSelection(page, 'Rasterize selection');
+
+  // the render is asynchronous — the layer is drawn before it is replaced
+  await expect.poll(async () => !!(await doc(page))[target]).toBe(false);
+  const after = await doc(page);
+  expect(after[board].children).toHaveLength(3);
+  const [first, middle, last] = after[board].children;
+  expect([first, last]).toEqual([under, over]);
+  const image = after[middle];
+  expect(image.type).toBe('image');
+  expect([image.x, image.y, image.w, image.h]).toEqual([60, 20, 80, 60]);
+  expect(image.name).toBe('Target');
+  // and it is a real picture, not an empty layer claiming to be one
+  expect(image.fill ?? '').toMatch(/^url\(data:image\/png;base64,/);
+
+  await removeNodes(page, [board]);
+});
+
 test('create component marks the layer as a main', async ({ page }) => {
   const id = await makeNode(page, 'frame', { name: 'CtxMain', x: 40, y: 560, w: 160, h: 100, fill: '#EEEEEE' });
   await runCommand(page, id, 'Create component');

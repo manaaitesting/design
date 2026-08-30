@@ -24,7 +24,7 @@ import {
   pointerWorld,
   writeText,
 } from '../lib/actions';
-import { download, safeFilename } from '../export/raster';
+import { download, nodeToPng, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
@@ -43,6 +43,16 @@ interface Item {
   divider?: boolean;
   items?: Item[];
   onHover?: (id: string | null) => void;
+}
+
+/** A rendered blob as an inline data URL, which is how this document stores images. */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read the rendered image.'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 /** The main this layer follows, if it follows one. */
@@ -294,6 +304,34 @@ function Menu({ menu }: { menu: OpenMenu }) {
     if (pasted.length) select(pasted);
   }
 
+  /**
+   * Figma's "Rasterize selection".
+   *
+   * Rendered here rather than in the store because this is where the DOM is —
+   * the picture is the canvas's own rendering of the layer, read back through
+   * the same exporter the PNG export uses, so what you get is what you saw.
+   *
+   * Every layer is rendered before the first one is replaced: rasterising as we
+   * go would take the next layer's element off the canvas midway through, and
+   * a layer that is not on screen cannot be rendered.
+   */
+  async function rasterizeSelection() {
+    const rendered: [string, string][] = [];
+    for (const id of selection) {
+      try {
+        const blob = await nodeToPng(id, zoom, 2, tokenVars);
+        rendered.push([id, await blobToDataUrl(blob)]);
+      } catch {
+        // a layer that is not on screen cannot be rendered; the rest still can
+      }
+    }
+    const made = rendered
+      .map(([id, src]) => store.rasterize(id, src))
+      .filter((id): id is string => !!id);
+    store.commit();
+    if (made.length) select(made);
+  }
+
   const codeItems: Item[] = [
     { label: 'CSS', disabled: !one, run: () => writeText(cssFor(target, doc, false, varNames)) },
     { label: 'CSS (all layers)', disabled: !one, run: () => writeText(cssFor(target, doc, true, varNames)) },
@@ -449,6 +487,11 @@ function Menu({ menu }: { menu: OpenMenu }) {
         for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
         store.commit();
       },
+    },
+    {
+      label: 'Rasterize selection',
+      disabled: !has,
+      run: () => void rasterizeSelection(),
     },
     {
       label: 'Go to main component',

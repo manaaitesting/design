@@ -2707,6 +2707,53 @@ export class DocStore {
     return setId;
   }
 
+  /**
+   * Figma's "Rasterize selection": the layer becomes a picture of itself.
+   *
+   * The image takes the layer's place — same parent, same index in the stack —
+   * so anything laid out around it is undisturbed. One image per layer rather
+   * than one for the whole selection, because the layers stay separate layers:
+   * that is what the command is for.
+   *
+   * A turned layer comes out flat. The PNG the caller hands over is the
+   * *rendered* picture, and a rotated element renders inside its axis-aligned
+   * box with the turn already baked in — keeping the rotation as well would
+   * apply it twice, so the image takes the box the picture actually covers.
+   *
+   * The pixels are rendered by the caller, which is where the DOM is: this
+   * takes the finished data URL and does the document half.
+   */
+  rasterize(id: string, src: string): string | null {
+    const node = this.snap[id];
+    if (!node?.parent) return null;
+    const siblings = this.childrenOf(node.parent);
+    const index = siblings?.toArray().indexOf(id) ?? -1;
+    if (index < 0) return null;
+
+    const box = node.rotation ? regionBounds(placedRegion(node)) : null;
+    const made = this.create(
+      'image',
+      node.parent,
+      {
+        name: node.name,
+        x: Math.round(box ? box.minX : node.x),
+        y: Math.round(box ? box.minY : node.y),
+        w: Math.round(box ? box.maxX - box.minX : node.w),
+        h: Math.round(box ? box.maxY - box.minY : node.h),
+        // opacity and blend are the layer's relationship with what is behind
+        // it, not part of its own picture, so they travel; the paint does not
+        opacity: node.opacity,
+        blend: node.blend,
+        locked: node.locked,
+        visible: node.visible,
+        fill: `url(${src})`,
+      },
+      index,
+    );
+    this.remove([id]);
+    return made;
+  }
+
   detachInstance(id: string): void {
     const node = this.snap[id];
     if (!node?.instanceOf) return;
