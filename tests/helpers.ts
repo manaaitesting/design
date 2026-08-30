@@ -100,7 +100,7 @@ declare global {
             entries(): Iterable<[string, unknown]>;
           };
         };
-        listComments(page: string): {
+        listComments(page?: string): {
           id: string;
           body: string;
           resolved: boolean;

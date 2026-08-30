@@ -147,7 +147,7 @@ export function useStyles(kind?: StyleKind): Style[] {
   return store.listStyles(kind);
 }
 
-export function useComments(page: string): Comment[] {
+export function useComments(page?: string): Comment[] {
   const store = useStore();
   useSyncExternalStore(store.subscribe, store.getRevision, () => 0);
   return store.listComments(page);

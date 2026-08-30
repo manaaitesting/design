@@ -26,6 +26,7 @@ import { StyleBadge, StylePicker } from './StylePicker';
 import type { Style } from '../document/store';
 import { VariableMenu, variableLabel } from './VariablePicker';
 import { Presence } from './Presence';
+import { CommentsPanel } from './Comments';
 import { Inspect } from './Inspect';
 import {
   useCollections,
@@ -230,10 +231,21 @@ export function Inspector() {
         >
           Inspect
         </button>
+        <button
+          type="button"
+          className="fig-tab"
+          data-on={tab === 'comments'}
+          title="Comments  C"
+          onClick={() => setTab('comments')}
+        >
+          Comments
+        </button>
       </div>
 
       {tab === 'prototype' ? (
         <PrototypeTab node={node} />
+      ) : tab === 'comments' ? (
+        <CommentsPanel />
       ) : tab === 'inspect' ? (
         <Inspect node={node} />
       ) : (

@@ -976,9 +976,10 @@ export class DocStore {
     });
   }
 
-  listComments(page: string): Comment[] {
+  /** One page's threads, or — with no page — every thread in the file. */
+  listComments(page?: string): Comment[] {
     return [...this.comments.values()]
-      .filter((comment) => comment.page === page)
+      .filter((comment) => !page || comment.page === page)
       .sort((a, b) => a.createdAt - b.createdAt);
   }
 

@@ -2483,8 +2483,7 @@ test.describe('comments', () => {
   const clearComments = (page: Page) =>
     page.evaluate(() => {
       const store = window.paperlike!.store;
-      const here = window.paperlike!.ui.getState().page;
-      for (const comment of store.listComments(here)) store.removeComment(comment.id);
+      for (const comment of store.listComments()) store.removeComment(comment.id);
     });
 
   test('a pin travels with the layer it was left on', async ({ page }) => {
@@ -2514,6 +2513,52 @@ test.describe('comments', () => {
         null,
     );
     expect(anchored).toBeNull();
+
+    await clearComments(page);
+  });
+
+  test('the panel lists a thread on another page, and a click goes to it', async ({ page }) => {
+    const away = await page.evaluate(() => window.paperlike!.store.addPage('Elsewhere'));
+    await page.evaluate(
+      (id) =>
+        window.paperlike!.store.addComment({
+          page: id,
+          x: 40,
+          y: 40,
+          authorId: 'ada',
+          authorName: 'Ada',
+          authorColor: '#BDEE63',
+          body: 'the hero on page two is still the old one',
+        }),
+      away,
+    );
+
+    await page.getByRole('button', { name: 'Comments', exact: true }).click();
+    const row = page.locator('.fig-thread', { hasText: 'the hero on page two' });
+    await expect(row).toBeVisible();
+    await row.click();
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(away);
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setPage('root'));
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    await clearComments(page);
+  });
+
+  test('a resolved thread is still reachable once the comment tool is put down', async ({
+    page,
+  }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'the crop is tight');
+
+    await page.locator('.fig-pin').click();
+    await page.getByRole('button', { name: 'Resolve', exact: true }).click();
+    await expect(page.locator('.fig-pin')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Comments', exact: true }).click();
+    await expect(page.locator('.fig-thread')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Resolved', exact: true }).click();
+    await expect(page.locator('.fig-thread', { hasText: 'the crop is tight' })).toBeVisible();
 
     await clearComments(page);
   });

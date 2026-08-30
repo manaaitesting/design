@@ -1267,6 +1267,67 @@ select {
       0 0 0 4px var(--fig-blue) !important;
   }
 
+  /* the comments list: one row per thread, and the thread's first line under it */
+  .fig-thread {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px;
+    border: 0;
+    border-bottom: 1px solid var(--fig-line);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .fig-thread:hover {
+    background: var(--fig-hover);
+  }
+  .fig-thread[data-mine] {
+    box-shadow: inset 2px 0 0 var(--fig-blue);
+  }
+  .fig-thread-avatar {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .fig-thread-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .fig-thread-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .fig-thread-name {
+    font-weight: 550;
+  }
+  .fig-thread-when,
+  .fig-thread-meta {
+    color: var(--fig-dim);
+  }
+  /* two lines of the remark, which is enough to know which thread this is */
+  .fig-thread-snippet {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .fig-thread-empty {
+    padding: 16px;
+    color: var(--fig-dim);
+  }
+
   /* observation mode: the ring around the canvas and the bar that names it */
   .fig-follow-ring {
     position: absolute;

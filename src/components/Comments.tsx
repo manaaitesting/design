@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { create } from 'zustand';
 import { Icon } from './ui/Icons';
 import { useRects } from './Overlay';
-import { useComments, useSession, useStore } from './Session';
+import { useComments, useDoc, useSession, useStore } from './Session';
 import { toScreen, useUI } from '../state/ui';
+import { fitBounds } from '../lib/view';
+import { pagePoint, type Doc } from '../document/types';
 import { readableOn } from '../lib/color';
 import type { Comment } from '../document/store';
 
@@ -14,6 +17,60 @@ function when(timestamp: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
+export type ThreadFilter = 'open' | 'resolved' | 'mine';
+
+/**
+ * Which thread is open, and which threads are shown.
+ *
+ * The pins and the panel are two views of one list, so neither can own the
+ * choice. It is not in `ui.ts` because nothing else in the editor has any
+ * business knowing which remark you happen to have open.
+ */
+export const useThreads = create<{
+  open: string | null;
+  filter: ThreadFilter;
+  setOpen: (id: string | null) => void;
+  setFilter: (filter: ThreadFilter) => void;
+}>((set) => ({
+  open: null,
+  filter: 'open',
+  setOpen: (open) => set({ open }),
+  setFilter: (filter) => set({ filter }),
+}));
+
+/** Whether a thread belongs in the list you are looking at. */
+function matches(comment: Comment, filter: ThreadFilter, me: string): boolean {
+  if (filter === 'resolved') return comment.resolved;
+  const named = [comment.body, ...comment.replies.map((reply) => reply.body)].some((text) =>
+    namesMe(text, me),
+  );
+  return filter === 'mine' ? named : !comment.resolved;
+}
+
+/** The pin's world point: on its layer if that layer is still in the file. */
+function pinPoint(comment: Comment, doc: Doc): { x: number; y: number } {
+  const anchor = comment.anchor;
+  const node = anchor && doc[anchor.node];
+  if (!anchor || !node) return { x: comment.x, y: comment.y };
+  const at = pagePoint(anchor.node, doc);
+  return { x: at.x + node.w * anchor.u, y: at.y + node.h * anchor.v };
+}
+
+/** Takes the canvas to a thread: its page, framed on its pin. */
+function reveal(comment: Comment, doc: Doc): void {
+  const ui = useUI.getState();
+  ui.setPage(comment.page);
+  const at = pinPoint(comment, doc);
+  ui.setViewport(
+    fitBounds(
+      { minX: at.x - 240, minY: at.y - 160, maxX: at.x + 240, maxY: at.y + 160 },
+      ui.leftPanel,
+      ui.leftWidth,
+      ui.rightWidth,
+    ),
+  );
 }
 
 /**
@@ -51,11 +108,20 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
   const store = useStore();
   const { identity } = useSession();
 
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [showResolved, setShowResolved] = useState(false);
+  const openId = useThreads((s) => s.open);
+  const setOpenId = useThreads((s) => s.setOpen);
+  const filter = useThreads((s) => s.filter);
+  const setFilter = useThreads((s) => s.setFilter);
+  const setInspectorTab = useUI((s) => s.setInspectorTab);
   const [draft, setDraft] = useState('');
 
-  const all = showResolved ? comments : comments.filter((c) => !c.resolved);
+  // Reaching for the comment tool is asking to work on comments, and the list
+  // is where the threads you cannot see from here are.
+  useEffect(() => {
+    if (tool === 'comment') setInspectorTab('comments');
+  }, [tool, setInspectorTab]);
+
+  const all = comments.filter((comment) => matches(comment, filter, identity.name));
   const visible = shown ? all : [];
   const rects = useRects(
     visible.flatMap((comment) => (comment.anchor ? [comment.anchor.node] : [])),
@@ -210,8 +276,12 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
         >
           <Icon.Comment />
           <span>Click anywhere to leave a comment</span>
-          <button type="button" className="btn" onClick={() => setShowResolved((v) => !v)}>
-            {showResolved ? 'Hide resolved' : 'Show resolved'}
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setFilter(filter === 'resolved' ? 'open' : 'resolved')}
+          >
+            {filter === 'resolved' ? 'Hide resolved' : 'Show resolved'}
           </button>
         </div>
       )}
@@ -284,6 +354,97 @@ function Entry({ name, color, body, at }: { name: string; color: string; body: s
         </div>
       </div>
     </div>
+  );
+}
+
+const FILTERS: { key: ThreadFilter; label: string }[] = [
+  { key: 'open', label: 'Open' },
+  { key: 'resolved', label: 'Resolved' },
+  { key: 'mine', label: 'Mentions me' },
+];
+
+/**
+ * Every thread in the file, as a list.
+ *
+ * A pin is only reachable if you can already see it, which leaves a thread that
+ * is off-screen, on another page, or resolved with no entry point at all — you
+ * cannot answer "what is still open?" by looking at the canvas. So this lists
+ * the whole file rather than the page, newest first, and a row takes the canvas
+ * to its pin and opens it.
+ */
+export function CommentsPanel() {
+  const doc = useDoc();
+  const page = useUI((s) => s.page);
+  const { identity } = useSession();
+  const comments = useComments();
+  const filter = useThreads((s) => s.filter);
+  const setFilter = useThreads((s) => s.setFilter);
+  const setOpen = useThreads((s) => s.setOpen);
+
+  const threads = comments
+    .filter((comment) => matches(comment, filter, identity.name))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  return (
+    <>
+      <div className="fig-tabs" style={{ height: 32 }}>
+        {FILTERS.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            className="fig-tab"
+            data-on={filter === entry.key}
+            onClick={() => setFilter(entry.key)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="scroll" style={{ flex: 1 }}>
+        {threads.length === 0 ? (
+          <div className="fig-thread-empty">Nothing here.</div>
+        ) : (
+          threads.map((comment) => (
+            <button
+              key={comment.id}
+              type="button"
+              className="fig-thread"
+              data-mine={
+                matches(comment, 'mine', identity.name) && !comment.resolved ? true : undefined
+              }
+              onClick={() => {
+                reveal(comment, doc);
+                setOpen(comment.id);
+              }}
+            >
+              <span
+                className="fig-thread-avatar"
+                style={{
+                  background: comment.authorColor,
+                  color: readableOn(comment.authorColor),
+                }}
+              >
+                {comment.authorName.charAt(0).toUpperCase()}
+              </span>
+              <span className="fig-thread-body">
+                <span className="fig-thread-head">
+                  <span className="fig-thread-name">{comment.authorName}</span>
+                  <span className="fig-thread-when">{when(comment.createdAt)}</span>
+                </span>
+                <span className="fig-thread-snippet">{comment.body}</span>
+                <span className="fig-thread-meta">
+                  {comment.page !== page && `${doc[comment.page]?.name ?? 'Another page'} · `}
+                  {comment.replies.length === 1
+                    ? '1 reply'
+                    : `${comment.replies.length} replies`}
+                </span>
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </>
   );
 }
 
