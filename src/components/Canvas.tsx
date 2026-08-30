@@ -120,6 +120,8 @@ export function Canvas() {
   const spacePan = useUI((s) => s.spacePan);
   /** true only while a pan drag is running, for the closed-hand cursor */
   const [panning, setPanning] = useState(false);
+  /** true while a shape is being drawn, so Space moves the box instead of panning */
+  const drawing = useRef(false);
   const setTool = useUI((s) => s.setTool);
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
@@ -321,6 +323,9 @@ export function Canvas() {
       // — but only once the guard above has ruled out everything it belongs to.
       e.preventDefault();
       if (e.repeat) return;
+      // A draw in progress owns Space: there it moves the shape being drawn,
+      // and lighting the hand tool underneath it would say the wrong thing.
+      if (drawing.current) return;
       useUI.getState().setSpacePan(true);
     };
     const up = (e: KeyboardEvent) => {
@@ -575,19 +580,31 @@ export function Canvas() {
       // the live box lives in this closure — React state only mirrors it for
       // the preview, and would lag behind a fast drag
       let box: Draft | null = null;
+      let origin = start;
       let last = start;
       let square = false;
       let centred = false;
+      let spacing = false;
+      /** where the pointer was released, for a box Space has walked away */
+      let released: { x: number; y: number } | null = null;
 
       const paint = () => {
-        box = { type: drawType, ...drawBox(start, last, square, centred) };
+        box = { type: drawType, ...drawBox(origin, last, square, centred) };
         setDraft(box);
       };
 
-      // ⇧ and ⌥ are read off the window as well as off the pointer, because
-      // Figma reshapes the box the moment you press one — waiting for the next
-      // mouse move would leave the shape wrong for as long as you held still.
+      // ⇧, ⌥ and Space are read off the window as well as off the pointer,
+      // because Figma answers them the moment you press one — waiting for the
+      // next mouse move would leave the shape wrong for as long as you held
+      // still, which is most of the time: you reach for ⇧ *after* the size is
+      // roughly right.
       const onModifier = (e: KeyboardEvent) => {
+        if (e.code === 'Space') {
+          // Space picks the box up and puts it down again wherever you let go
+          e.preventDefault();
+          spacing = e.type === 'keydown';
+          return;
+        }
         if (e.shiftKey === square && e.altKey === centred) return;
         square = e.shiftKey;
         centred = e.altKey;
@@ -595,7 +612,9 @@ export function Canvas() {
       };
       window.addEventListener('keydown', onModifier);
       window.addEventListener('keyup', onModifier);
+      drawing.current = true;
       const stopModifiers = () => {
+        drawing.current = false;
         window.removeEventListener('keydown', onModifier);
         window.removeEventListener('keyup', onModifier);
       };
@@ -604,7 +623,13 @@ export function Canvas() {
         store,
         event,
         (e) => {
-          last = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
+          const world = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
+          if (spacing) {
+            // the box keeps its size and travels: both ends move together
+            origin = { x: origin.x + (world.x - last.x), y: origin.y + (world.y - last.y) };
+            released = { x: e.clientX, y: e.clientY };
+          }
+          last = world;
           square = e.shiftKey;
           centred = e.altKey;
           paint();
@@ -613,9 +638,12 @@ export function Canvas() {
           stopModifiers();
           const size = box && box.w > 4 && box.h > 4
             ? box
-            : { x: start.x, y: start.y, w: drawType === 'text' ? 120 : 100, h: drawType === 'text' ? 24 : 100 };
+            : { x: origin.x, y: origin.y, w: drawType === 'text' ? 120 : 100, h: drawType === 'text' ? 24 : 100 };
 
-          const parentId = containerAt(event.clientX, event.clientY, doc) ?? page.id;
+          // the press decides which frame the shape lands in — unless Space
+          // walked the box somewhere else, and then the release does
+          const at = released ?? { x: event.clientX, y: event.clientY };
+          const parentId = containerAt(at.x, at.y, doc) ?? page.id;
           const parent = doc[parentId];
           const local =
             parentId === page.id

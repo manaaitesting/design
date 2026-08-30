@@ -993,6 +993,33 @@ test('⇧ pressed mid-draw squares the box without waiting for the pointer', asy
   await removeNodes(page, [drawn.id]);
 });
 
+test('Space while drawing walks the box without resizing it', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+  const badge = page.locator('text=/^\\d+ × \\d+$/').first();
+
+  await page.mouse.move(500, 600);
+  await page.mouse.down();
+  await page.mouse.move(600, 660);
+  await expect(badge).toHaveText('100 × 60');
+
+  // held down, the pointer carries the whole box rather than one corner of it
+  await page.keyboard.down('Space');
+  await page.mouse.move(700, 760);
+  await expect(badge).toHaveText('100 × 60');
+  await page.keyboard.up('Space');
+
+  // and letting go of Space leaves the far corner where the pointer now is
+  await page.mouse.move(750, 790);
+  await expect(badge).toHaveText('150 × 90');
+  await page.mouse.up();
+
+  const drawn = (await doc(page))[(await selection(page))[0]];
+  expect([drawn.w, drawn.h]).toEqual([150, 90]);
+  // the press was at world (97, 460); Space moved the origin 100 across and down
+  expect([drawn.x, drawn.y]).toEqual([197, 560]);
+  await removeNodes(page, [drawn.id]);
+});
+
 test('dragging snaps to a sibling edge', async ({ page }) => {
   const anchor = await makeNode(page, 'rect', { name: 'SnapAnchor', x: 40, y: 500, w: 120, h: 80, fill: '#4CC3F0' });
   const mover = await makeNode(page, 'rect', { name: 'SnapMover', x: 40, y: 620, w: 120, h: 80, fill: '#F2637F' });
