@@ -37,6 +37,63 @@ test('outlining a dashed stroke leaves one shape per dash, not one long bar', as
   await removeNodes(page, [outlined!.id]);
 });
 
+test('a path wears a head on one end and nothing on the other', async ({ page }) => {
+  const id = await makeNode(page, 'vector', {
+    name: 'Callout',
+    x: 60,
+    y: 680,
+    w: 120,
+    h: 1,
+    anchors: [{ x: 0, y: 0 }, { x: 120, y: 0 }],
+    closed: false,
+    border: {
+      width: 4,
+      color: '#111111',
+      style: 'solid',
+      position: 'center',
+      capEnd: 'arrowTriangle',
+    },
+  });
+
+  const path = page.locator(`[data-node-id="${id}"] svg path[marker-end]`).first();
+  await expect(path).toHaveCount(1);
+  // the head sits on the end alone; the tail is left bare
+  expect(await path.getAttribute('marker-start')).toBeNull();
+
+  await select(page, [id]);
+  await page.evaluate(() => {
+    window.paperlike!.store.outlineStroke(window.paperlike!.ui.getState().selection);
+    window.paperlike!.store.commit();
+  });
+  const outlined = await nodeNamed(page, 'Callout stroke');
+  // a 4px pen sweeps a band 4 tall; the head is three widths across, so an
+  // outline that dropped it would come out 4 rather than 12
+  expect(outlined!.h).toBe(12);
+  await removeNodes(page, [outlined!.id]);
+});
+
+test('an arrow keeps its head when it is opened for point editing', async ({ page }) => {
+  const id = await makeNode(page, 'arrow', {
+    name: 'Pointer',
+    x: 300,
+    y: 680,
+    w: 160,
+    h: 0,
+    border: { width: 4, color: '#111111', style: 'solid', position: 'center' },
+  });
+  await select(page, [id]);
+  await page.evaluate(() => {
+    window.paperlike!.store.outlineShape(window.paperlike!.ui.getState().selection);
+    window.paperlike!.store.commit();
+  });
+
+  const nodes = await doc(page);
+  expect(nodes[id].type).toBe('vector');
+  // the two-point outline has no head in it, so the head has to live on the end
+  expect(nodes[id].border?.capEnd).toBe('arrowLine');
+  await removeNodes(page, [id]);
+});
+
 test('outlining a square cap keeps the overhang, and a butt cap does not grow one', async ({ page }) => {
   const line = {
     name: 'Rule',

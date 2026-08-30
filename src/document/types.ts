@@ -139,6 +139,19 @@ export interface Paint {
 
 export type LineStyle = 'solid' | 'dashed' | 'dotted';
 
+/**
+ * What a stroke's end wears, as Figma's cap dropdown lists it: the three plain
+ * caps, then the four decorated ones that make a path an arrow.
+ */
+export type EndCap =
+  | 'butt'
+  | 'round'
+  | 'square'
+  | 'arrowLine'
+  | 'arrowTriangle'
+  | 'circle'
+  | 'diamond';
+
 export interface BorderSpec {
   width: number;
   color: string;
@@ -155,6 +168,14 @@ export interface BorderSpec {
   gap?: number;
   /** how a vector's open ends and corners are finished */
   cap?: 'butt' | 'round' | 'square';
+  /**
+   * Figma's per-end caps, which is where an arrowhead lives — a cap belongs to
+   * the end of a run, not to the layer, so a bent path can carry a head on one
+   * end and nothing on the other. Both fall back to `cap`, which is all a layer
+   * drawn before these existed has.
+   */
+  capStart?: EndCap;
+  capEnd?: EndCap;
   join?: 'miter' | 'round' | 'bevel';
   /**
    * Figma's miter angle, in degrees.

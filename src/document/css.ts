@@ -23,6 +23,7 @@ import {
   type Align,
   type AlignContent,
   type Doc,
+  type EndCap,
   type FlexSpec,
   type Justify,
   type NumericField,
@@ -577,6 +578,13 @@ export interface ShapeStroke {
   width: number;
   dash: string | null;
   cap: 'butt' | 'round' | 'square';
+  /**
+   * The two ends, which Figma sets one at a time — an arrowhead lives here.
+   * They fall back to `cap`, and while they agree and stay plain the renderer
+   * draws them with `stroke-linecap` as it always did.
+   */
+  capStart: EndCap;
+  capEnd: EndCap;
   join: 'miter' | 'round' | 'bevel';
   /**
    * SVG's miter limit, derived from Figma's miter *angle*.
@@ -721,6 +729,8 @@ export function shapePaint(node: SceneNode): ShapePaint | null {
           width: border.width,
           dash: dashOf(border),
           cap: border.cap ?? 'butt',
+          capStart: border.capStart ?? border.cap ?? 'butt',
+          capEnd: border.capEnd ?? border.cap ?? 'butt',
           join: border.join ?? 'miter',
           align: border.position ?? 'center',
         }

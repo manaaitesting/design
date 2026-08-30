@@ -92,6 +92,7 @@ import {
   type Justify,
   type NumericField,
   type Constraint,
+  type EndCap,
   type LineStyle,
   type FontSpec,
   type Paint,
@@ -162,6 +163,17 @@ const STROKE_POSITIONS: FigOption<'inside' | 'center' | 'outside'>[] = [
   { value: 'inside', label: 'Inside' },
   { value: 'center', label: 'Center' },
   { value: 'outside', label: 'Outside' },
+];
+
+/** Figma's cap menu: the three plain caps, then the four that make an arrow. */
+const END_CAPS: FigOption<EndCap>[] = [
+  { value: 'butt', label: 'None' },
+  { value: 'round', label: 'Round' },
+  { value: 'square', label: 'Square' },
+  { value: 'arrowLine', label: 'Arrow (line)' },
+  { value: 'arrowTriangle', label: 'Arrow (triangle)' },
+  { value: 'circle', label: 'Circle' },
+  { value: 'diamond', label: 'Diamond' },
 ];
 
 
@@ -3572,23 +3584,35 @@ function AdvancedStroke({
                 {/* two unlabelled selects side by side read as the same control */}
                 <div style={{ display: 'flex', gap: 8 }}>
                   <span style={{ flex: '1 1 0' }}>
-                    <FigLabel>Cap</FigLabel>
+                    <FigLabel>Start</FigLabel>
                   </span>
+                  <span style={{ flex: '1 1 0' }}>
+                    <FigLabel>End</FigLabel>
+                  </span>
+                </div>
+                {/* a cap belongs to one end, which is how an arrow gets a head
+                    at the tip and nothing at the tail */}
+                <div className="fig-row" style={{ marginTop: 0 }}>
+                  <FigSelect
+                    value={stroke.capStart ?? stroke.cap ?? 'butt'}
+                    options={END_CAPS}
+                    title="Start cap"
+                    onChange={(capStart) => patch({ capStart })}
+                  />
+                  <FigSelect
+                    value={stroke.capEnd ?? stroke.cap ?? 'butt'}
+                    options={END_CAPS}
+                    title="End cap"
+                    onChange={(capEnd) => patch({ capEnd })}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
                   <span style={{ flex: '1 1 0' }}>
                     <FigLabel>Join</FigLabel>
                   </span>
+                  <span style={{ flex: '1 1 0' }} />
                 </div>
                 <div className="fig-row" style={{ marginTop: 0 }}>
-                  <FigSelect
-                    value={stroke.cap ?? 'round'}
-                    options={[
-                      { value: 'butt', label: 'None' },
-                      { value: 'round', label: 'Round' },
-                      { value: 'square', label: 'Square' },
-                    ]}
-                    title="Cap"
-                    onChange={(cap) => patch({ cap })}
-                  />
                   <FigSelect
                     value={stroke.join ?? 'round'}
                     options={[
@@ -3599,9 +3623,7 @@ function AdvancedStroke({
                     title="Join"
                     onChange={(join) => patch({ join })}
                   />
-                </div>
-                {(stroke.join ?? 'round') === 'miter' && (
-                  <div className="fig-row">
+                  {(stroke.join ?? 'round') === 'miter' ? (
                     <FigField
                       value={Math.round(stroke.miterAngle ?? 28.96)}
                       glyph={<Icon.Angle />}
@@ -3611,10 +3633,10 @@ function AdvancedStroke({
                       title="Miter angle — below this a mitre bevels instead"
                       onChange={(miterAngle) => patch({ miterAngle })}
                     />
+                  ) : (
                     <span style={{ flex: '1 1 0' }} />
-                    <span style={{ width: 24, flex: 'none' }} />
-                  </div>
-                )}
+                  )}
+                </div>
               </>
             ) : (
               <div style={{ padding: '6px 2px 0', color: 'var(--fig-dim)' }}>

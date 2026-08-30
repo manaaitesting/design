@@ -6,6 +6,8 @@ import { motionOf, newKeyframe, newMotion, newTrack, remapMotion, sortKeys, trac
 import {
   anchorBounds,
   cloneAnchor,
+  decoratedEnds,
+  endCapRegions,
   flattenAnchors,
   canEditPoints,
   isClosedShape,
@@ -2094,13 +2096,22 @@ export class DocStore {
           ? variableWidthRegion(subpathsOf(node), node.border.width, node.smooth ?? 0)
           : null;
       if (!varied && !outline.length) continue;
-      const band = varied ?? strokeRegion(outline, node.border.width, closed, node.border);
-      const region =
+      // A decorated end is a shape of its own, drawn instead of the plain cap —
+      // the same split the canvas makes when it hands the ends to markers.
+      const capStart = node.border.capStart ?? node.border.cap ?? 'butt';
+      const capEnd = node.border.capEnd ?? node.border.cap ?? 'butt';
+      const marked = !closed && decoratedEnds(capStart, capEnd);
+      const band =
+        varied ?? strokeRegion(outline, node.border.width, closed, marked ? { ...node.border, cap: 'butt' } : node.border);
+      const aligned =
         varied || !closed || node.border.position === 'center'
           ? band
           : node.border.position === 'inside'
             ? clip(band, outline, 'intersect')
             : clip(band, outline, 'difference');
+      const heads =
+        marked && !varied ? endCapRegions(outline, node.border.width, capStart, capEnd) : [];
+      const region = heads.length ? clipAll([aligned, heads], 'union') : aligned;
 
       const box = regionBounds(region);
       if (!box) continue;
@@ -2154,6 +2165,13 @@ export class DocStore {
       }
       const paths = outlinePaths(node);
       if (!paths.length || paths[0].anchors.length < 2) continue;
+      // An arrow's head is baked into its geometry and the outline of one is a
+      // bare two-point line, so the head moves onto the stroke's far end, which
+      // is where a vector can carry it.
+      const head =
+        node.type === 'arrow' && node.border
+          ? { border: { ...node.border, capEnd: 'arrowLine' as const } }
+          : null;
       // The outline is the one already on screen, corners and arcs included: a
       // rounded rectangle keeps its corners as per-point radii and a donut
       // keeps both of its rings, so converting changes what the layer *knows*
@@ -2174,6 +2192,7 @@ export class DocStore {
         arcStart: undefined,
         arcEnd: undefined,
         innerRadius: undefined,
+        ...head,
       });
       converted.push(id);
     }

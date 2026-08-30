@@ -12,7 +12,7 @@ import {
 import { colourMatrix, transferFunctions } from '../document/adjust';
 import { effectLayers, effectsOf } from '../document/effects';
 import { motionCss, timelinesIn } from '../document/motion';
-import { booleanClips, paintsWithPath } from '../document/geometry';
+import { booleanClips, decoratedEnds, endCapPath, END_CAP_BOX, paintsWithPath } from '../document/geometry';
 import { booleanOutlinePath } from '../document/boolean';
 import { maskStyles } from '../document/mask';
 import { pathTextSpec, type PathTextSpec } from '../document/textpath';
@@ -404,6 +404,8 @@ function booleanMarkup(
       width: border.width,
       dash: border.dash ? `${border.dash} ${border.gap ?? border.dash}` : null,
       cap: border.cap ?? 'butt',
+      capStart: border.capStart ?? border.cap ?? 'butt',
+      capEnd: border.capEnd ?? border.cap ?? 'butt',
       join: border.join ?? 'miter',
       align: border.position ?? 'center',
     },
@@ -473,11 +475,26 @@ function strokeSvg(
         ? ` mask="url(#${id}-sm)"`
         : '';
 
+  // the same markers the canvas draws the decorated ends with, so an exported
+  // arrow is the arrow that was on screen rather than a bare line
+  const marked = decoratedEnds(stroke.capStart, stroke.capEnd);
+  const box = `viewBox="${-END_CAP_BOX} ${-END_CAP_BOX} ${END_CAP_BOX * 2} ${END_CAP_BOX * 2}" refX="0" refY="0" markerWidth="${END_CAP_BOX * 2}" markerHeight="${END_CAP_BOX * 2}" markerUnits="strokeWidth" orient="auto-start-reverse"`;
+  const capOf = (which: 'start' | 'end') => (marked ? endCapPath(which === 'start' ? stroke.capStart : stroke.capEnd) : null);
+  const capDefs = (['start', 'end'] as const)
+    .map((which) => {
+      const cap = capOf(which);
+      return cap ? `<marker id="${id}-cap-${which}" ${box}><path d="${cap}" fill="${stroke.color}"/></marker>` : '';
+    })
+    .join('');
+
   return (
     `${pad}  <svg ${styleAttr(SVG_LAYER, mode)} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${defs}` +
+    (capDefs ? `<defs>${capDefs}</defs>` : '') +
     `<path d="${d}" fill="none" stroke="${stroke.color}" ${attrName('strokeWidth', mode)}="${drawWidth}" ` +
     (stroke.dash ? `${attrName('strokeDasharray', mode)}="${stroke.dash}" ` : '') +
-    `${attrName('strokeLinecap', mode)}="${stroke.cap}" ${attrName('strokeLinejoin', mode)}="${stroke.join}" ` +
+    (capOf('start') ? `${attrName('markerStart', mode)}="url(#${id}-cap-start)" ` : '') +
+    (capOf('end') ? `${attrName('markerEnd', mode)}="url(#${id}-cap-end)" ` : '') +
+    `${attrName('strokeLinecap', mode)}="${marked ? 'butt' : stroke.cap}" ${attrName('strokeLinejoin', mode)}="${stroke.join}" ` +
     (stroke.join === 'miter' && stroke.miterLimit
       ? `${attrName('strokeMiterlimit', mode)}="${stroke.miterLimit.toFixed(2)}" `
       : '') +
