@@ -43,10 +43,17 @@ export function SessionProvider({
     setSession(getSession(room, identity, token, readOnly));
   }, [room, identity, token, readOnly]);
 
+  const expired = useExpired(session);
+  const ready = useReady(session);
+  const stalled = useStalled(ready);
+
   useEffect(() => {
     // Development-only handle so the running document can be inspected and
-    // driven from the console (and by automated UI audits).
-    if (process.env.NODE_ENV === 'development' && session) {
+    // driven from the console (and by automated UI audits). Hung on `ready`
+    // rather than on the session, so that finding the handle means the editor
+    // is on screen — a caller that drives the viewport before the editor has
+    // mounted is overwritten by it the moment it does.
+    if (process.env.NODE_ENV === 'development' && session && ready) {
       (window as unknown as { paperlike?: unknown }).paperlike = {
         // which file this handle belongs to — a tab switch is a client-side
         // navigation, so without it there is no way to tell "the new file has
@@ -61,11 +68,7 @@ export function SessionProvider({
           evaluate(condition, (name) => vars[name]),
       };
     }
-  }, [session, room]);
-
-  const expired = useExpired(session);
-  const ready = useReady(session);
-  const stalled = useStalled(ready);
+  }, [session, ready, room]);
 
   // The only page in a fresh document is created on the first sync, so until
   // that lands there is nothing to draw on — and the store swallows a write
