@@ -309,7 +309,21 @@ export interface Comment {
   body: string;
   createdAt: number;
   resolved: boolean;
-  replies: { authorName: string; authorColor: string; body: string; createdAt: number }[];
+  /**
+   * The people this message names, by account id.
+   *
+   * A mention is a reference to a person, not a word that looks like one — the
+   * picker resolves it as it is typed, so `@Al` cannot flag every Alicia in the
+   * file and a colleague whose name was mistyped is simply not in the list.
+   */
+  mentions?: string[];
+  replies: {
+    authorName: string;
+    authorColor: string;
+    body: string;
+    createdAt: number;
+    mentions?: string[];
+  }[];
 }
 
 export type { Token };

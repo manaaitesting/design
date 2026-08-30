@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import { create } from 'zustand';
 import { Icon } from './ui/Icons';
 import { useRects } from './Overlay';
-import { useComments, useDoc, useSession, useStore } from './Session';
+import { useComments, useDoc, usePresence, useSession, useStore } from './Session';
+import { listMembersAction } from '../server/actions';
 import { toScreen, useUI } from '../state/ui';
 import { fitBounds } from '../lib/view';
 import { pagePoint, type Doc } from '../document/types';
@@ -43,10 +44,8 @@ export const useThreads = create<{
 /** Whether a thread belongs in the list you are looking at. */
 function matches(comment: Comment, filter: ThreadFilter, me: string): boolean {
   if (filter === 'resolved') return comment.resolved;
-  const named = [comment.body, ...comment.replies.map((reply) => reply.body)].some((text) =>
-    namesMe(text, me),
-  );
-  return filter === 'mine' ? named : !comment.resolved;
+  if (filter === 'mine') return namesMe(comment, me);
+  return !comment.resolved;
 }
 
 /** The pin's world point: on its layer if that layer is still in the file. */
@@ -70,6 +69,111 @@ function reveal(comment: Comment, doc: Doc): void {
       ui.leftWidth,
       ui.rightWidth,
     ),
+  );
+}
+
+interface Person {
+  id: string;
+  name: string;
+  color: string;
+}
+
+/**
+ * The people you can name here: everyone with access, plus whoever is in the
+ * room. Presence alone would only offer the people who are already reading over
+ * your shoulder, which is not who a mention is usually for.
+ */
+function usePeople(): Person[] {
+  const { provider, identity } = useSession();
+  const presence = usePresence();
+  const [members, setMembers] = useState<Person[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    void listMembersAction(provider.roomname).then((list) => live && setMembers(list));
+    return () => {
+      live = false;
+    };
+  }, [provider]);
+
+  const people = new Map<string, Person>([[identity.id, identity]]);
+  for (const member of members) people.set(member.id, member);
+  for (const peer of presence) people.set(peer.identity.id, peer.identity);
+  return [...people.values()];
+}
+
+/** A mention is one word, so it is the first word of the name that is written. */
+function firstName(person: Person): string {
+  return person.name.trim().split(/\s+/)[0] ?? person.name;
+}
+
+/**
+ * The `@name` being typed, if one is.
+ *
+ * Only at the end of the box: that is where an `@` is being typed, and reading
+ * it off the value alone keeps the picker a pure function of what you can see.
+ */
+const TYPING = /(?:^|\s)@([\p{L}\d'’-]*)$/u;
+
+function typing(value: string): string | null {
+  return TYPING.exec(value)?.[1].toLowerCase() ?? null;
+}
+
+function offer(people: Person[], query: string | null): Person[] {
+  if (query === null) return [];
+  return people.filter((person) => person.name.toLowerCase().startsWith(query)).slice(0, 6);
+}
+
+function withMention(value: string, person: Person): string {
+  return `${value.replace(TYPING, (match) => match.slice(0, match.indexOf('@')))}@${firstName(person)} `;
+}
+
+/** The accounts a finished message actually names, from the ones that were picked. */
+function mentionedIds(body: string, picked: Person[]): string[] {
+  const written = new Set(
+    [...body.matchAll(/@([\p{L}][\p{L}\d'’-]*)/gu)].map((match) => match[1].toLowerCase()),
+  );
+  return [
+    ...new Set(
+      picked.filter((person) => written.has(firstName(person).toLowerCase())).map((p) => p.id),
+    ),
+  ];
+}
+
+/**
+ * The `@` picker.
+ *
+ * A mention that is only text is a guess: it used to be matched against your
+ * name by prefix, so `@a` reached every Alex in the file and a name typed
+ * slightly wrong reached nobody. Resolving it against a real person as it is
+ * typed is what makes it a reference.
+ */
+function Mentions({
+  options,
+  onPick,
+}: {
+  options: Person[];
+  onPick: (person: Person) => void;
+}) {
+  if (!options.length) return null;
+  return (
+    <div className="fig-mention-list">
+      {options.map((person) => (
+        <button
+          key={person.id}
+          type="button"
+          className="fig-mention-option"
+          // the box must not lose focus, or the caret goes with it
+          onMouseDown={(event) => {
+            event.preventDefault();
+            onPick(person);
+          }}
+        >
+          <span className="fig-mention-dot" style={{ background: person.color }} />
+          {person.name}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -114,6 +218,16 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
   const setFilter = useThreads((s) => s.setFilter);
   const setInspectorTab = useUI((s) => s.setInspectorTab);
   const [draft, setDraft] = useState('');
+  const people = usePeople();
+  /** the people this reply has actually picked, so a mention resolves to an id */
+  const [named, setNamed] = useState<Person[]>([]);
+  const replyRef = useRef<HTMLInputElement>(null);
+  const replyOptions = offer(people, typing(draft));
+  const pickInReply = (person: Person) => {
+    setDraft(withMention(draft, person));
+    setNamed((list) => [...list, person]);
+    replyRef.current?.focus();
+  };
 
   // Reaching for the comment tool is asking to work on comments, and the list
   // is where the threads you cannot see from here are.
@@ -121,7 +235,7 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
     if (tool === 'comment') setInspectorTab('comments');
   }, [tool, setInspectorTab]);
 
-  const all = comments.filter((comment) => matches(comment, filter, identity.name));
+  const all = comments.filter((comment) => matches(comment, filter, identity.id));
   const visible = shown ? all : [];
   const rects = useRects(
     visible.flatMap((comment) => (comment.anchor ? [comment.anchor.node] : [])),
@@ -144,11 +258,7 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
             <button
               type="button"
               title={`${comment.authorName}: ${comment.body}`}
-              data-mine={
-                [comment.body, ...comment.replies.map((reply) => reply.body)].some((text) =>
-                  namesMe(text, identity.name),
-                ) || undefined
-              }
+              data-mine={namesMe(comment, identity.id) || undefined}
               className="fig-pin"
               onClick={() => setOpenId(open ? null : comment.id)}
               style={{
@@ -200,34 +310,43 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
                   />
                 ))}
 
-                <input
-                  value={draft}
-                  placeholder="Reply…"
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    e.stopPropagation();
-                    if (e.key === 'Enter' && draft.trim()) {
+                <div style={{ position: 'relative' }}>
+                  <Mentions options={replyOptions} onPick={pickInReply} />
+                  <input
+                    ref={replyRef}
+                    value={draft}
+                    placeholder="Reply…"
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key !== 'Enter') return;
+                      if (replyOptions.length) return pickInReply(replyOptions[0]);
+                      if (!draft.trim()) return;
                       store.replyToComment(comment.id, {
                         authorName: identity.name,
                         authorColor: identity.color,
                         body: draft.trim(),
                         createdAt: Date.now(),
+                        ...(mentionedIds(draft, named).length && {
+                          mentions: mentionedIds(draft, named),
+                        }),
                       });
                       setDraft('');
-                    }
-                  }}
-                  style={{
-                    width: '100%',
-                    height: 24,
-                    marginTop: 8,
-                    border: 0,
-                    borderRadius: 5,
-                    padding: '0 8px',
-                    background: 'var(--color-control)',
-                    boxShadow: 'var(--shadow-control)',
-                    outline: 'none',
-                  }}
-                />
+                      setNamed([]);
+                    }}
+                    style={{
+                      width: '100%',
+                      height: 24,
+                      marginTop: 8,
+                      border: 0,
+                      borderRadius: 5,
+                      padding: '0 8px',
+                      background: 'var(--color-control)',
+                      boxShadow: 'var(--shadow-control)',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
 
                 <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
                   <button
@@ -290,22 +409,16 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
 }
 
 /**
- * A comment's text, with the people in it picked out.
+ * True when this thread names you — the pin marks it.
  *
- * Mentions are plain text — `@name` — because that is what someone types and
- * what survives a copy out of the thread. Marking them up on the way to the
- * screen is enough to make a thread scannable, and the person named gets a flag
- * on the pin without a notification system behind it.
+ * A mention used to be a regex over the text matched against your name, and one
+ * of its clauses accepted any prefix: `@a` in anyone's comment lit up the pin
+ * for every Alex in the file, and a name typed slightly wrong reached nobody at
+ * all. The picker resolves a mention to an account as it is typed, so this is
+ * now an id check and nothing else.
  */
-export function mentions(body: string): string[] {
-  return [...body.matchAll(/@([\p{L}][\p{L}\d'’-]*)/gu)].map((match) => match[1].toLowerCase());
-}
-
-/** True when this thread names you — the pin marks it. */
-export function namesMe(text: string, me: string): boolean {
-  const first = me.trim().split(/\s+/)[0]?.toLowerCase();
-  if (!first) return false;
-  return mentions(text).some((name) => name === first || me.toLowerCase().startsWith(name));
+export function namesMe(comment: Comment, me: string): boolean {
+  return [comment, ...comment.replies].some((message) => message.mentions?.includes(me));
 }
 
 function Body({ text }: { text: string }) {
@@ -382,7 +495,7 @@ export function CommentsPanel() {
   const setOpen = useThreads((s) => s.setOpen);
 
   const threads = comments
-    .filter((comment) => matches(comment, filter, identity.name))
+    .filter((comment) => matches(comment, filter, identity.id))
     .sort((a, b) => b.createdAt - a.createdAt);
 
   return (
@@ -411,7 +524,7 @@ export function CommentsPanel() {
               type="button"
               className="fig-thread"
               data-mine={
-                matches(comment, 'mine', identity.name) && !comment.resolved ? true : undefined
+                matches(comment, 'mine', identity.id) && !comment.resolved ? true : undefined
               }
               onClick={() => {
                 reveal(comment, doc);
@@ -463,6 +576,9 @@ export function CommentComposer({
   const { identity } = useSession();
   const [body, setBody] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const people = usePeople();
+  const [named, setNamed] = useState<Person[]>([]);
+  const options = offer(people, typing(body));
 
   // autoFocus can lose the race with the popover's own mount; a frame settles it
   useEffect(() => {
@@ -472,8 +588,15 @@ export function CommentComposer({
 
   const screen = toScreen(viewport, at.x, at.y);
 
+  const pick = (person: Person) => {
+    setBody(withMention(body, person));
+    setNamed((list) => [...list, person]);
+    inputRef.current?.focus();
+  };
+
   const submit = () => {
     if (body.trim()) {
+      const mentions = mentionedIds(body, named);
       store.addComment({
         page: pageId,
         x: at.x,
@@ -483,6 +606,7 @@ export function CommentComposer({
         authorName: identity.name,
         authorColor: identity.color,
         body: body.trim(),
+        ...(mentions.length && { mentions }),
       });
     }
     onDone();
@@ -504,35 +628,41 @@ export function CommentComposer({
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <textarea
-        ref={inputRef}
-        value={body}
-        placeholder="Leave a comment…"
-        onChange={(e) => setBody(e.target.value)}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            submit();
-          }
-          if (e.key === 'Escape') {
-            onDone();
-            setTool('move');
-          }
-        }}
-        style={{
-          width: '100%',
-          minHeight: 52,
-          resize: 'vertical',
-          border: 0,
-          borderRadius: 5,
-          padding: 8,
-          background: 'var(--color-control)',
-          boxShadow: 'var(--shadow-control)',
-          outline: 'none',
-          font: 'inherit',
-        }}
-      />
+      <div style={{ position: 'relative' }}>
+        <Mentions options={options} onPick={pick} />
+        <textarea
+          ref={inputRef}
+          value={body}
+          placeholder="Leave a comment…"
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              // while the picker is up, ⏎ takes the person rather than posting
+              if (options.length) pick(options[0]);
+              else submit();
+            }
+            if (e.key === 'Escape') {
+              onDone();
+              setTool('move');
+            }
+          }}
+          style={{
+            width: '100%',
+            minHeight: 52,
+            resize: 'vertical',
+            border: 0,
+            borderRadius: 5,
+            padding: 8,
+            background: 'var(--color-control)',
+            boxShadow: 'var(--shadow-control)',
+            outline: 'none',
+            font: 'inherit',
+            display: 'block',
+          }}
+        />
+      </div>
       <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
         <div style={{ flex: 1 }} />
         <button type="button" className="btn" onClick={() => { onDone(); setTool('move'); }}>

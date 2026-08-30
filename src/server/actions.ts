@@ -20,6 +20,7 @@ import {
   getFileFor,
   getLibraryComponent,
   listLibrary,
+  listMembers,
   publishComponent,
   renameFile,
   setThumbnail,
@@ -200,6 +201,25 @@ export async function moveFileAction(fileId: string, folderId: string): Promise<
   if (!user) redirect('/signin');
   moveFileToFolder(fileId, user.id, folderId || null);
   revalidatePath('/files');
+}
+
+/**
+ * Who is in this file, for the comment composer's @-picker.
+ *
+ * Presence only knows who is here *now*, and a mention is most often for
+ * someone who is not — so the picker needs the membership, not the room.
+ */
+export async function listMembersAction(
+  fileId: string,
+): Promise<{ id: string; name: string; color: string }[]> {
+  const user = await currentUser();
+  if (!user) return [];
+  if (!getFileFor(fileId, user.id)) return [];
+  return listMembers(fileId).map((member) => ({
+    id: member.id,
+    name: member.name,
+    color: member.color,
+  }));
 }
 
 // ── Version history ──────────────────────────────────────────────────────

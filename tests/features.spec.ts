@@ -2517,6 +2517,27 @@ test.describe('comments', () => {
     await clearComments(page);
   });
 
+  test('a mention is a person the picker resolved, not a prefix of a name', async ({ page }) => {
+    // typed but never resolved: the prefix match used to light this pin up for
+    // everyone whose name begins with an a
+    await leaveComment(page, { x: 900, y: 250 }, 'ask @a about the crop');
+    await expect(page.locator('.fig-pin[data-mine]')).toHaveCount(0);
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('comment'));
+    await page.mouse.click(1000, 250);
+    const box = page.getByPlaceholder('Leave a comment…');
+    await box.fill('@a');
+    await page.locator('.fig-mention-option', { hasText: 'Ada' }).click();
+    await expect(box).toHaveValue('@Ada ');
+    await box.fill('@Ada does this crop work?');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator('.fig-pin')).toHaveCount(2);
+    await expect(page.locator('.fig-pin[data-mine]')).toHaveCount(1);
+
+    await clearComments(page);
+  });
+
   test('the panel lists a thread on another page, and a click goes to it', async ({ page }) => {
     const away = await page.evaluate(() => window.paperlike!.store.addPage('Elsewhere'));
     await page.evaluate(

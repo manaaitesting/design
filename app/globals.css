@@ -1260,6 +1260,43 @@ select {
     color: var(--fig-blue);
     font-weight: 500;
   }
+  /* the @-picker, above the box so it never covers what you are typing */
+  .fig-mention-list {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    margin-bottom: 4px;
+    padding: 4px;
+    border-radius: 6px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-pop);
+    z-index: 1;
+  }
+  .fig-mention-option {
+    width: 100%;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .fig-mention-option:hover {
+    background: var(--fig-hover);
+  }
+  .fig-mention-dot {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    border-radius: 999px;
+  }
   .fig-pin[data-mine] {
     box-shadow:
       0 1px 4px rgba(0, 0, 0, 0.25),
