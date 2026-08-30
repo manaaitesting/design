@@ -711,8 +711,9 @@ export function Canvas() {
         },
         () => {
           stopModifiers();
-          const size = box && box.w > 4 && box.h > 4
-            ? box
+          const drawn = !!box && box.w > 4 && box.h > 4;
+          const size = drawn
+            ? box!
             : { x: origin.x, y: origin.y, w: drawType === 'text' ? 120 : 100, h: drawType === 'text' ? 24 : 100 };
 
           // the press decides which frame the shape lands in — unless Space
@@ -731,7 +732,14 @@ export function Canvas() {
             w: Math.round(size.w),
             h: Math.round(size.h),
             ...(drawType === 'text'
-              ? { wMode: 'fit' as const, hMode: 'fit' as const, text: 'Text' }
+              ? {
+                  // A text dragged out is a column: Figma keeps the width you
+                  // chose and leaves the height to the copy. Clicking still
+                  // gives an auto-width layer that grows as you type.
+                  wMode: drawn ? ('fixed' as const) : ('fit' as const),
+                  hMode: 'fit' as const,
+                  text: 'Text',
+                }
               : null),
           });
           setDraft(null);

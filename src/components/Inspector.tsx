@@ -68,6 +68,7 @@ import {
   type FontFace,
 } from '../lib/fonts';
 import { FontPicker } from './FontPicker';
+import { applyToRange, runsOf, styleOfRange, type RunPatch } from '../document/text';
 import { TypeSettings } from './TypeSettings';
 import { ADJUST_LABEL, isNeutral, NO_ADJUST, type ImageAdjust } from '../document/adjust';
 import { DEFAULT_FONT, DEFAULT_GUIDES, TYPE_LABEL } from '../document/defaults';
@@ -4034,12 +4035,15 @@ function FontStyleMenu({
   node,
   font,
   face,
+  mixed,
   onChange,
   onAxes,
 }: {
   node: SceneNode;
   font: FontSpec;
   face: FontFace | undefined;
+  /** the selected characters do not agree on a cut */
+  mixed?: boolean;
   onChange: (weight: number, italic: boolean) => void;
   onAxes: () => void;
 }) {
@@ -4068,7 +4072,7 @@ function FontStyleMenu({
         }}
       >
         <span className="fig-value" data-variable={boundTo ? 'true' : undefined}>
-          {boundTo ?? styleLabel(font.weight, font.italic)}
+          {boundTo ?? (mixed ? 'Mixed' : styleLabel(font.weight, font.italic))}
         </span>
         <span className="fig-caret">
           <Icon.Caret />
@@ -4145,7 +4149,7 @@ function FontSizeField({
   onChange,
 }: {
   node: SceneNode;
-  value: number;
+  value: number | 'mixed';
   onChange: (size: number) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -4191,7 +4195,7 @@ function FontSizeField({
             <li>
               <button type="button" className="fig-menu-item" data-current="true" onClick={() => setOpen(false)}>
                 <span className="fig-menu-mark">✓</span>
-                {value}
+                {value === 'mixed' ? 'Mixed' : value}
               </button>
             </li>
             {FONT_SIZES.map((size, index) => (
@@ -4213,12 +4217,80 @@ function FontSizeField({
   );
 }
 
+/**
+ * The type properties a single run may carry.
+ *
+ * These are the ones Figma's Text panel applies to the selected characters;
+ * everything else in the section — alignment, truncation, the list style — is a
+ * property of the text object and stays layer-wide even with a range
+ * highlighted, because there is nowhere else for it to live.
+ */
+const RANGE_KEYS = [
+  'family',
+  'weight',
+  'italic',
+  'size',
+  'letterSpacing',
+  'lineHeight',
+  'case',
+] as const;
+
 function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
   const store = useStore();
   const custom = useCustomFonts();
   const uploaded = useMemo(() => customFamilies(custom), [custom]);
-  const font = node.font ?? DEFAULT_FONT;
-  const patch = (delta: Partial<typeof font>) => set({ font: { ...font, ...delta } });
+  const editing = useUI((s) => s.editing);
+  const editingRange = useUI((s) => s.editingRange);
+
+  /**
+   * With characters selected inside the layer, this panel is theirs.
+   *
+   * Figma's Text section acts on the selection whenever there is one — that is
+   * how a pull quote gets one word in a display face — so the fields read the
+   * range's style layered over the layer's, say "Mixed" where the range
+   * disagrees, and write through the runs instead of through `font`.
+   */
+  const range = editing === node.id ? editingRange : null;
+  const over = range ? styleOfRange(runsOf(node), range.start, range.end) : null;
+  const base = node.font ?? DEFAULT_FONT;
+  // a key the range disagrees about is left out of `styleOfRange` altogether,
+  // which is exactly the question "is this mixed?"
+  const mixed = (key: keyof RunPatch) => !!over && !(key in over);
+  const font: FontSpec = over
+    ? {
+        ...base,
+        family: over.family ?? base.family,
+        // ⌘B writes a mark rather than a number, so the two say the same thing
+        weight: over.weight ?? (over.bold ? 700 : base.weight),
+        italic: over.italic ?? base.italic,
+        size: over.size ?? base.size,
+        letterSpacing: over.letterSpacing ?? base.letterSpacing,
+        lineHeight: over.lineHeight ?? base.lineHeight,
+        case: over.case ?? base.case,
+      }
+    : base;
+
+  const patch = (delta: Partial<FontSpec>) => {
+    if (!range) {
+      set({ font: { ...font, ...delta } });
+      return;
+    }
+    const run: RunPatch = {};
+    const rest: Partial<FontSpec> = {};
+    for (const [key, value] of Object.entries(delta)) {
+      if ((RANGE_KEYS as readonly string[]).includes(key)) {
+        (run as Record<string, unknown>)[key] = value;
+      } else {
+        (rest as Record<string, unknown>)[key] = value;
+      }
+    }
+    // a run carrying an explicit weight has no use for ⌘B's mark as well
+    if (run.weight !== undefined) run.bold = undefined;
+    if (Object.keys(rest).length) set({ font: { ...base, ...rest } });
+    if (Object.keys(run).length) {
+      store.update(node.id, { runs: applyToRange(runsOf(node), range.start, range.end, run) });
+    }
+  };
   const [settings, setSettings] = useState(false);
   const [fontError, setFontError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -4234,6 +4306,7 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
       <div className="fig-row">
         <FontPicker
           value={font.family}
+          mixed={mixed('family')}
           onUpload={() => fileRef.current?.click()}
           onChange={(family) => {
             ensureFont(family, uploaded);
@@ -4272,6 +4345,7 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
           node={node}
           font={font}
           face={face}
+          mixed={mixed('weight') || mixed('italic')}
           onAxes={() => setSettings(true)}
           onChange={(weight, italic) =>
             patch({
@@ -4283,13 +4357,17 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
             })
           }
         />
-        <FontSizeField node={node} value={font.size} onChange={(size) => patch({ size })} />
+        <FontSizeField
+          node={node}
+          value={mixed('size') ? 'mixed' : font.size}
+          onChange={(size) => patch({ size })}
+        />
       </div>
       <div className="fig-row">
         <VarField
           node={node}
           field="lineHeight"
-          value={Math.round(font.lineHeight * font.size)}
+          value={mixed('lineHeight') || mixed('size') ? 'mixed' : Math.round(font.lineHeight * font.size)}
           glyph={<Icon.LineHeight />}
           min={0}
           title="Line height"
@@ -4298,7 +4376,7 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
         <VarField
           node={node}
           field="letterSpacing"
-          value={Math.round(font.letterSpacing * 100)}
+          value={mixed('letterSpacing') ? 'mixed' : Math.round(font.letterSpacing * 100)}
           glyph={<Icon.Letter />}
           suffix="%"
           title="Letter spacing"

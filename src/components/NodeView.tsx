@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, memo, useContext, useEffect, useRef } from 'react';
+import { createContext, Fragment, memo, useContext, useEffect, useRef } from 'react';
 import { nodeStyle, shaderSurface } from '../document/css';
 import { effectLayers, effectsOf } from '../document/effects';
 import { ShaderSurface } from './ShaderSurface';
@@ -23,7 +23,18 @@ import { pathTextSpec, type PathTextSpec } from '../document/textpath';
 import { maskStyles } from '../document/mask';
 import { modeVars } from '../document/variables';
 import { ensureFont } from '../lib/fonts';
-import { isPlain, listBoxStyle, plainText, runLines, runStyle, runsOf, type TextRun } from '../document/text';
+import {
+  isPlain,
+  LINE_BREAK,
+  listBoxStyle,
+  plainText,
+  runLines,
+  runSegments,
+  runStyle,
+  runsOf,
+  textGroups,
+  type TextRun,
+} from '../document/text';
 import { TextEditor } from './TextEditor';
 import type { CSSProperties } from 'react';
 import { guidesOf, type SceneNode } from '../document/types';
@@ -99,33 +110,39 @@ function PathText({ id, node, spec }: { id: string; node: SceneNode; spec: PathT
 
 function TextBody({ node }: { node: SceneNode }) {
   const font = node.font;
-  const spacing = font?.paragraphSpacing ?? 0;
-  const list = font?.list && font.list !== 'none' ? font.list : null;
   const runs = runsOf(node);
   const plain = isPlain(runs);
+  const groups = textGroups(runs, font);
+  const spacing = font?.paragraphSpacing ?? 0;
 
-  if (plain && !spacing && !list) return <>{plainText(runs)}</>;
+  const text = plainText(runs);
+  if (plain && !groups && !text.includes(LINE_BREAK)) return <>{text}</>;
 
-  const lines = runLines(runs);
-  const body = (line: TextRun[]) =>
-    plain ? (
-      line.map((run) => run.text).join('')
-    ) : (
-      <>
-        {line.map((run, index) => (
-          <span key={index} style={runStyle(run, font)}>
-            {run.text}
-          </span>
-        ))}
-      </>
-    );
+  // a soft break is a line inside the paragraph, so it becomes a <br> and takes
+  // none of the paragraph spacing with it
+  const body = (line: TextRun[]) => (
+    <>
+      {runSegments(line).map((segment, index) => (
+        <Fragment key={index}>
+          {index ? <br /> : null}
+          {plain
+            ? segment.map((run) => run.text).join('')
+            : segment.map((run, at) => (
+                <span key={at} style={runStyle(run, font)}>
+                  {run.text}
+                </span>
+              ))}
+        </Fragment>
+      ))}
+    </>
+  );
 
-  if (!list && !spacing) {
+  if (!groups) {
     // styled, but a single flowing block: the spans carry the styling and the
     // newlines are still newlines, because the box is `pre-wrap`
     return (
       <>
-        {lines.map((line, index) => (
+        {runLines(runs).map((line, index) => (
           <span key={index}>
             {index ? '\n' : ''}
             {body(line)}
@@ -135,27 +152,34 @@ function TextBody({ node }: { node: SceneNode }) {
     );
   }
 
-  if (!list) {
-    return (
-      <>
-        {lines.map((line, index) => (
-          <div key={index} style={index ? { marginTop: spacing } : undefined}>
-            {body(line)}
-          </div>
-        ))}
-      </>
-    );
-  }
+  const gap = (line: { gap: boolean }) => (line.gap && spacing ? { marginTop: spacing } : undefined);
 
-  const Tag = list === 'number' ? 'ol' : 'ul';
   return (
-    <Tag style={listBoxStyle(font)}>
-      {lines.map((line, index) => (
-        <li key={index} style={index ? { marginTop: spacing } : undefined}>
-          {body(line)}
-        </li>
-      ))}
-    </Tag>
+    <>
+      {groups.map((group, index) => {
+        if (!group.list) {
+          return (
+            <Fragment key={index}>
+              {group.lines.map((line, at) => (
+                <div key={at} style={gap(line)}>
+                  {body(line.runs)}
+                </div>
+              ))}
+            </Fragment>
+          );
+        }
+        const Tag = group.list;
+        return (
+          <Tag key={index} start={group.start} style={listBoxStyle(font, group.indent)}>
+            {group.lines.map((line, at) => (
+              <li key={at} style={gap(line)}>
+                {body(line.runs)}
+              </li>
+            ))}
+          </Tag>
+        );
+      })}
+    </>
   );
 }
 
