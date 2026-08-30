@@ -736,12 +736,6 @@ function Menu({ menu }: { menu: OpenMenu }) {
       },
     },
     {
-      label: first?.isMask ? 'Release mask' : 'Use as mask',
-      shortcut: '⌃⌘M',
-      disabled: !has,
-      run: () => store.toggleMask(selection),
-    },
-    {
       label: 'Set as thumbnail',
       // the file browser shows one frame per file; this is how you choose it
       disabled: selection.length !== 1 || first?.type !== 'frame',

@@ -2719,6 +2719,28 @@ test('delete removes the layer and clears the selection', async ({ page }) => {
   expect(await selection(page)).toEqual([]);
 });
 
+test('the mask toggle is one row, and it reads the same way each time', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxMask', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  const maskRows = page.locator('.ctx-row .ctx-label', { hasText: 'mask' });
+
+  await openMenu(page, id);
+  await expect(maskRows).toHaveCount(1);
+  await row(page, 'Use as mask').click();
+  await expect.poll(async () => (await doc(page))[id].isMask).toBe(true);
+
+  // masked, the one row says the one thing — not "Remove mask" and
+  // "Release mask" as if they were different commands
+  await select(page, [id]);
+  await runOnSelection(page, 'Remove mask');
+  await expect.poll(async () => (await doc(page))[id].isMask).toBe(false);
+
+  await select(page, [id]);
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(maskRows).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
 test('an empty patch of canvas gets the short canvas menu, not the object menu greyed out', async ({ page }) => {
   await page.evaluate(() => window.paperlike!.ui.getState().clearSelection());
   await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
