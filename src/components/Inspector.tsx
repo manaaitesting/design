@@ -39,6 +39,7 @@ import {
 } from './Session';
 import { canHoldModes, inScope } from '../document/variables';
 import { useUI } from '../state/ui';
+import { revealNode } from '../lib/view';
 import {
   alignAnchors,
   applyMirror,
@@ -694,7 +695,10 @@ function ComponentSection({ node }: { node: SceneNode }) {
             ) : (
               <FigButton
                 style={{ flex: 1, justifyContent: 'flex-start', color: '#9747FF' }}
-                onClick={() => main && select([main.id])}
+                title="Go to main component"
+                // selecting it is not the same as going to it: a main on
+                // another page would be selected where nobody can see it
+                onClick={() => main && revealNode(main.id, doc)}
               >
                 {main ? main.name : 'main component missing'}
               </FigButton>

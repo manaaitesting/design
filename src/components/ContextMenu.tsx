@@ -29,8 +29,9 @@ import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
 import { pageActions, useUI } from '../state/ui';
+import { revealNode } from '../lib/view';
 import { canEditPoints } from '../document/geometry';
-import type { BooleanOp } from '../document/types';
+import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
 
 interface Item {
   label: string;
@@ -42,6 +43,21 @@ interface Item {
   divider?: boolean;
   items?: Item[];
   onHover?: (id: string | null) => void;
+}
+
+/** The main this layer follows, if it follows one. */
+function mainOf(node: SceneNode | undefined): string | null {
+  return node?.instanceOf ?? null;
+}
+
+/**
+ * Whether anything inside this instance has been changed away from its main.
+ *
+ * An override can be on any layer in the subtree, not only the instance root —
+ * the usual one is a label three levels down — so the whole tree is asked.
+ */
+function hasOverrides(id: string, doc: Doc): boolean {
+  return [id, ...descendants(id, doc)].some((child) => (doc[child]?.overridden ?? []).length > 0);
 }
 
 /**
@@ -426,6 +442,32 @@ function Menu({ menu }: { menu: OpenMenu }) {
       run: () => {
         for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
         store.commit();
+      },
+    },
+    {
+      label: 'Go to main component',
+      disabled: !one || !mainOf(first) || !doc[mainOf(first)!],
+      run: () => revealNode(mainOf(first)!, doc),
+    },
+    {
+      label: 'Push changes to main component',
+      // nothing to push is not the same as nothing selected, and the row says
+      // which by greying rather than by running and doing nothing
+      disabled: !one || !doc[mainOf(first) ?? ''] || !hasOverrides(first?.id ?? '', doc),
+      run: () => {
+        store.pushToMain(target);
+        store.commit();
+      },
+    },
+    {
+      label: 'Restore component',
+      // only for an instance whose main has gone: with the main still there
+      // this would make a second one
+      disabled: !one || !mainOf(first) || !!doc[mainOf(first)!],
+      run: () => {
+        const restored = store.restoreComponent(target);
+        store.commit();
+        if (restored) select([restored]);
       },
     },
 

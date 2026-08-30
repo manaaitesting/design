@@ -25,6 +25,9 @@ declare global {
         setFlowStart(id: string, name: string | null): void;
         createInstance(main: string, parent: string, at?: { x: number; y: number }): string | null;
         detachInstance(id: string): void;
+        resetInstance(id: string): void;
+        pushToMain(instanceId: string): boolean;
+        restoreComponent(instanceId: string): string | null;
         addComponentProp(main: string, prop: Record<string, unknown>): string | null;
         removeComponentProp(main: string, propId: string): void;
         bindProp(layer: string, binding: Record<string, unknown> | null): void;

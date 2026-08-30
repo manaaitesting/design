@@ -2665,6 +2665,108 @@ export class DocStore {
     });
   }
 
+  /**
+   * Figma's "Push changes to main component".
+   *
+   * The overrides on this instance are written onto the main and then dropped,
+   * so every *other* instance picks the same change up — the difference between
+   * fixing a button here and fixing the button everywhere.
+   *
+   * Only the properties an instance can pin travel. Position and name are the
+   * instance's own and are never inherited in either direction, and the
+   * structure cannot have diverged: `sync` trims and grows an instance to match
+   * its main on every pass, so there is nothing structural left to push.
+   */
+  pushToMain(instanceId: string): boolean {
+    const instance = this.snap[instanceId];
+    const mainId = instance?.instanceOf;
+    if (!mainId || !this.snap[mainId]) return false;
+
+    let pushed = false;
+    this.transact(() => {
+      // the two trees are walked in step by index, which is the same
+      // correspondence `sync` maintains in the other direction
+      const walk = (fromId: string, ontoId: string): void => {
+        const from = this.snap[fromId];
+        const onto = this.nodes.get(ontoId);
+        if (!from || !onto) return;
+        for (const key of from.overridden ?? []) {
+          if (NOT_INHERITED.has(key)) continue;
+          onto.set(key, from[key as keyof SceneNode]);
+          pushed = true;
+        }
+        this.nodes.get(fromId)?.set('overridden', []);
+        const kids = this.snap[ontoId]?.children ?? [];
+        from.children.forEach((child, index) => {
+          if (kids[index]) walk(child, kids[index]);
+        });
+      };
+      walk(instanceId, mainId);
+    });
+
+    if (pushed) this.propagate();
+    return pushed;
+  }
+
+  /**
+   * Figma's "Restore component": rebuilds a main that has been deleted, from
+   * an instance that was still following it.
+   *
+   * An orphaned instance is the only surviving record of what the main looked
+   * like, so the new main is a copy of *this* instance — overrides included,
+   * since they are the only version of the layer anyone can still see. It is
+   * placed beside the instance rather than on top of it, and every other orphan
+   * that pointed at the same missing id is repointed at the new main, because
+   * they were all one component before it went.
+   */
+  restoreComponent(instanceId: string): string | null {
+    const instance = this.snap[instanceId];
+    const missing = instance?.instanceOf;
+    // a main that is still here needs no restoring, and would be duplicated
+    if (!missing || this.snap[missing] || !instance.parent) return null;
+    const parentId = instance.parent;
+
+    let mainId: string | null = null;
+    this.transact(() => {
+      const copy = (sourceId: string, parent: string, isRoot: boolean): string => {
+        const source = this.snap[sourceId];
+        const id = newId();
+        this.nodes.set(
+          id,
+          toY(
+            makeNode(id, source.type, parent, {
+              ...source,
+              id,
+              parent,
+              children: [],
+              isComponent: isRoot,
+              instanceOf: undefined,
+              overridden: [],
+              // the main is being rebuilt here, not re-imported: it no longer
+              // has a library revision to answer to
+              libraryId: undefined,
+              libraryVersion: undefined,
+              x: isRoot ? Math.round(source.x + source.w + 40) : source.x,
+              y: isRoot ? source.y : source.y,
+            }),
+          ),
+        );
+        const kids = this.childrenOf(id);
+        for (const child of source.children) kids?.push([copy(child, id, false)]);
+        return id;
+      };
+
+      mainId = copy(instanceId, parentId, true);
+      this.childrenOf(parentId)?.push([mainId]);
+      for (const node of Object.values(this.snap)) {
+        if (node.instanceOf === missing) this.nodes.get(node.id)?.set('instanceOf', mainId);
+      }
+    });
+
+    this.propagate();
+    return mainId;
+  }
+
   /** Throws away local edits so the instance matches its main again. */
   resetInstance(id: string): void {
     if (!this.snap[id]?.instanceOf) return;

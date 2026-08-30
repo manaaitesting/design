@@ -1233,6 +1233,129 @@ test('an instance follows its main until a property is overridden', async ({ pag
   await removeNodes(page, [main, instance!]);
 });
 
+/**
+ * Push changes to main.
+ *
+ * The point of the command is the *other* instances: fixing a button on one
+ * instance and having every other one follow is the difference between an edit
+ * and a design system.
+ */
+test('pushing an override to the main carries it to every other instance', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'PushMain', x: 40, y: 500, w: 140, h: 44, fill: '#111111', radius: 8,
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const [edited, other] = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const a = store.createInstance(id, 'root', { x: 40, y: 600 });
+    const b = store.createInstance(id, 'root', { x: 240, y: 600 });
+    store.commit();
+    return [a!, b!];
+  }, main);
+
+  // one instance is changed away from the main, and only that one changes
+  await page.evaluate((id) => window.paperlike!.store.update(id, { fill: '#00CC44' }), edited);
+  await page.waitForTimeout(300);
+  expect((await doc(page))[other].fill).toBe('#111111');
+
+  const pushed = await page.evaluate((id) => {
+    const ok = window.paperlike!.store.pushToMain(id);
+    window.paperlike!.store.commit();
+    return ok;
+  }, edited);
+  expect(pushed).toBe(true);
+
+  await expect.poll(async () => (await doc(page))[other].fill).toBe('#00CC44');
+  const after = await doc(page);
+  expect(after[main].fill).toBe('#00CC44');
+  // the override is spent: the instance is following again, not pinned
+  expect(after[edited].overridden ?? []).toEqual([]);
+  expect(after[edited].fill).toBe('#00CC44');
+
+  await removeNodes(page, [main, edited, other]);
+});
+
+test('an override on a layer inside the instance pushes too', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'PushDeepMain', x: 40, y: 500, w: 160, h: 60, fill: '#FFFFFF', flex: null,
+  });
+  const mainLabel = await page.evaluate((parent) => {
+    const id = window.paperlike!.store.create('text', parent, { name: 'Label', x: 8, y: 8, w: 100, h: 20, text: 'Buy' });
+    window.paperlike!.store.createComponent(parent);
+    window.paperlike!.store.commit();
+    return id;
+  }, main);
+
+  const [edited, other] = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const a = store.createInstance(id, 'root', { x: 40, y: 620 });
+    const b = store.createInstance(id, 'root', { x: 260, y: 620 });
+    store.commit();
+    return [a!, b!];
+  }, main);
+
+  const child = (await doc(page))[edited].children[0];
+  await page.evaluate((id) => window.paperlike!.store.update(id, { text: 'Buy now' }), child);
+  await page.waitForTimeout(300);
+
+  await page.evaluate((id) => {
+    window.paperlike!.store.pushToMain(id);
+    window.paperlike!.store.commit();
+  }, edited);
+
+  await expect
+    .poll(async () => {
+      const after = await doc(page);
+      return after[after[other].children[0]].text;
+    })
+    .toBe('Buy now');
+  expect((await doc(page))[mainLabel].text).toBe('Buy now');
+
+  await removeNodes(page, [main, edited, other]);
+});
+
+test('an instance whose main has gone can rebuild it, and the orphans follow', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'GoneMain', x: 40, y: 500, w: 120, h: 40, fill: '#0D99FF', radius: 4,
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const [orphan, sibling] = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const a = store.createInstance(id, 'root', { x: 40, y: 600 });
+    const b = store.createInstance(id, 'root', { x: 240, y: 600 });
+    store.commit();
+    return [a!, b!];
+  }, main);
+
+  await removeNodes(page, [main]);
+  await page.waitForTimeout(200);
+  // the instances are still on the canvas, following nothing
+  expect((await doc(page))[orphan].instanceOf).toBe(main);
+
+  const restored = await page.evaluate((id) => {
+    const made = window.paperlike!.store.restoreComponent(id);
+    window.paperlike!.store.commit();
+    return made;
+  }, orphan);
+  expect(restored).toBeTruthy();
+
+  const after = await doc(page);
+  expect(after[restored!].isComponent).toBe(true);
+  expect(after[restored!].fill).toBe('#0D99FF');
+  // every orphan of the same main is repointed, not only the one asked
+  expect(after[orphan].instanceOf).toBe(restored);
+  expect(after[sibling].instanceOf).toBe(restored);
+  // and it sits beside the instance rather than on top of it
+  expect(after[restored!].x).toBe(after[orphan].x + after[orphan].w + 40);
+
+  // restoring again would make a second main, so it refuses
+  expect(
+    await page.evaluate((id) => window.paperlike!.store.restoreComponent(id), orphan),
+  ).toBeNull();
+
+  await removeNodes(page, [restored!, orphan, sibling]);
+});
+
 test('constraints reposition children when their frame resizes', async ({ page }) => {
   const frame = await makeNode(page, 'frame', {
     name: 'ConstraintFrame', x: 40, y: 500, w: 400, h: 200, fill: '#FFFFFF', flex: null,
@@ -2176,6 +2299,65 @@ test('right-clicking a layer row opens the same menu and acts on that row', asyn
   const order = (await doc(page)).root.children.filter((c: string) => c === a || c === b);
   expect(order[0]).toBe(b);
   await removeNodes(page, [a, b]);
+});
+
+test('Go to main component crosses to the page the main is on', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'CtxMain', x: 40, y: 500, w: 120, h: 40, fill: '#0D99FF',
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const instance = await page.evaluate((id) => {
+    const made = window.paperlike!.store.createInstance(id, 'root', { x: 260, y: 560 });
+    window.paperlike!.store.commit();
+    return made!;
+  }, main);
+
+  // the main goes to another page; selecting it there is not the same as
+  // going to it, which is what the panel button used to do
+  const other = await page.evaluate((id) => {
+    const store = window.paperlike!.store;
+    const made = store.addPage('Main Lives Here');
+    store.moveToPage([id], made);
+    store.commit();
+    return made;
+  }, main);
+
+  await select(page, [instance]);
+  await runOnSelection(page, 'Go to main component');
+
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(other);
+  expect(await selection(page)).toEqual([main]);
+
+  await page.evaluate((p) => window.paperlike!.store.removePage(p), other);
+  await removeNodes(page, [instance]);
+});
+
+test('Push and Restore grey out when there is nothing for them to do', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'CtxPush', x: 40, y: 500, w: 120, h: 40, fill: '#0D99FF',
+  });
+  await page.evaluate((id) => window.paperlike!.store.createComponent(id), main);
+  const instance = await page.evaluate((id) => {
+    const made = window.paperlike!.store.createInstance(id, 'root', { x: 260, y: 560 });
+    window.paperlike!.store.commit();
+    return made!;
+  }, main);
+
+  await openMenu(page, instance);
+  // an instance that matches its main has nothing to push, and a main that is
+  // still there has nothing to restore
+  await expect(row(page, 'Push changes to main component')).toBeDisabled();
+  await expect(row(page, 'Restore component')).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  await page.evaluate((id) => window.paperlike!.store.update(id, { fill: '#FF00AA' }), instance);
+  await page.waitForTimeout(300);
+  await openMenu(page, instance);
+  await expect(row(page, 'Push changes to main component')).toBeEnabled();
+  await row(page, 'Push changes to main component').click();
+
+  await expect.poll(async () => (await doc(page))[main].fill).toBe('#FF00AA');
+  await removeNodes(page, [main, instance]);
 });
 
 test('Move to page lists the other pages, and moving empties the selection', async ({ page }) => {
