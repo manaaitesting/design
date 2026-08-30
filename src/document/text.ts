@@ -30,6 +30,8 @@ export interface TextRun {
   family?: string;
   color?: string;
   letterSpacing?: number;
+  lineHeight?: number;
+  case?: FontSpec['case'];
   /** makes the run a link in the export */
   link?: string;
 }
@@ -47,6 +49,8 @@ const RUN_KEYS: (keyof RunPatch)[] = [
   'family',
   'color',
   'letterSpacing',
+  'lineHeight',
+  'case',
   'link',
 ];
 
@@ -243,11 +247,21 @@ export function runStyle(run: TextRun, font?: FontSpec): CSSProperties {
   const style: CSSProperties = {};
   if (run.bold) style.fontWeight = 700;
   if (run.weight !== undefined) style.fontWeight = run.weight;
-  if (run.italic) style.fontStyle = 'italic';
+  // an explicit `false` is a run saying "not italic" over an italic layer, which
+  // is what picking Regular for a range in an italic paragraph means
+  if (run.italic !== undefined) style.fontStyle = run.italic ? 'italic' : 'normal';
   if (run.size !== undefined) style.fontSize = run.size;
   if (run.family) style.fontFamily = run.family;
   if (run.color) style.color = run.color;
   if (run.letterSpacing !== undefined) style.letterSpacing = `${run.letterSpacing}em`;
+  if (run.lineHeight !== undefined) style.lineHeight = run.lineHeight;
+  // small caps are the face's own glyphs rather than a transform, the same
+  // distinction the layer's own case makes in css.ts
+  if (run.case === 'small') style.fontVariantCaps = 'small-caps';
+  else if (run.case && run.case !== 'none') {
+    style.textTransform =
+      run.case === 'upper' ? 'uppercase' : run.case === 'lower' ? 'lowercase' : 'capitalize';
+  }
 
   const lines = [run.underline && 'underline', run.strike && 'line-through'].filter(Boolean);
   if (lines.length) style.textDecorationLine = lines.join(' ');

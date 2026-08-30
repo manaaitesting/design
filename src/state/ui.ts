@@ -175,6 +175,17 @@ export interface UIState {
   setEditing: (id: string | null) => void;
 
   /**
+   * The characters selected inside that layer.
+   *
+   * The type panel needs it: in Figma the Text section acts on the selected
+   * characters whenever there are any, so the panel has to be able to see a
+   * range the editor owns. It is published here rather than read off the DOM
+   * because the selection survives the click that moves focus into the panel.
+   */
+  editingRange: { start: number; end: number } | null;
+  setEditingRange: (range: { start: number; end: number } | null) => void;
+
+  /**
    * The vector whose points are being edited, and which of them are selected.
    *
    * Point editing is a mode rather than a tool: while it is on, the pointer
@@ -617,7 +628,10 @@ export const useUI = create<UIState>((set) => ({
     set((state) => ({ viewport: typeof next === 'function' ? next(state.viewport) : next })),
 
   editing: null,
-  setEditing: (editing) => set({ editing }),
+  setEditing: (editing) => set({ editing, editingRange: null }),
+
+  editingRange: null,
+  setEditingRange: (editingRange) => set({ editingRange }),
 
   vectorEdit: null,
   setVectorEdit: (vectorEdit) =>

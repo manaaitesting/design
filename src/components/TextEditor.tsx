@@ -36,6 +36,7 @@ import type { SceneNode } from '../document/types';
 export function TextEditor({ node, style }: { node: SceneNode; style: CSSProperties }) {
   const store = useStore();
   const setEditing = useUI((s) => s.setEditing);
+  const setEditingRange = useUI((s) => s.setEditingRange);
   const editorRef = useRef<HTMLDivElement>(null);
   /** the runs as they stand — the DOM is a view of this, not the other way round */
   const runs = useRef<TextRun[]>(runsOf(node));
@@ -66,6 +67,26 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
       }),
     );
   }, [generation, node.font]);
+
+  /**
+   * A styling change that came from outside — the type panel acting on the
+   * selected characters — has to land in the editor's own copy of the runs, or
+   * the next keystroke would write the stale copy back over it. The comparison
+   * is against the model rather than the array's identity because the document
+   * is rebuilt from Yjs on every write, so nothing survives by reference.
+   */
+  useLayoutEffect(() => {
+    const incoming = runsOf(node);
+    if (JSON.stringify(incoming) === JSON.stringify(runs.current)) return;
+    runs.current = incoming;
+    setGeneration((value) => value + 1);
+  }, [node.runs, node.text]);
+
+  // the panel needs to know what is selected; publishing it here is what makes
+  // the Text section act on the characters rather than on the layer
+  useEffect(() => {
+    setEditingRange(selection.end > selection.start ? selection : null);
+  }, [selection, setEditingRange]);
 
   // focus once, and select everything, as Figma does when you enter a layer
   useEffect(() => {
@@ -255,9 +276,11 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
         onBlur={(event) => {
           // Clicking the range bar moves focus out of the editable, and ending
           // the edit there would close the very bar that was clicked. Focus
-          // going *into* the bar is not leaving.
+          // going *into* the bar is not leaving — nor is going into the right
+          // panel, whose type controls act on the selection and would otherwise
+          // end the edit they were reaching for.
           const next = event.relatedTarget as HTMLElement | null;
-          if (next?.closest?.('.fig-range-bar')) return;
+          if (next?.closest?.('.fig-range-bar, .fig')) return;
 
           const text = (event.currentTarget as HTMLElement).innerText ?? '';
           const before = plainText(runs.current);

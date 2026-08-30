@@ -69,12 +69,15 @@ function listHeight(): number {
 
 export function FontPicker({
   value,
+  mixed,
   onChange,
   onUpload,
   title = 'Font',
 }: {
   /** the CSS stack currently set on the layer */
   value: string;
+  /** the selected characters do not agree on a family */
+  mixed?: boolean;
   onChange: (stack: string) => void;
   /** the + beside the field: reads a font file into the document */
   onUpload?: () => void;
@@ -103,7 +106,7 @@ export function FontPicker({
           setOpen((v) => !v);
         }}
       >
-        <span className="fig-value">{current?.name ?? value}</span>
+        <span className="fig-value">{mixed ? 'Mixed' : (current?.name ?? value)}</span>
         <span className="fig-caret">
           <Icon.Caret />
         </span>

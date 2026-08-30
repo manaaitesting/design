@@ -383,6 +383,32 @@ test.describe('rich text', () => {
       selection?.addRange(range);
     }, [from, to] as const);
 
+  /**
+   * Figma's Text panel belongs to the selected characters whenever there are
+   * any — that is how a price gets a small currency symbol — so the size field
+   * has to write the range and read it back, Mixed included, rather than
+   * restyling the whole layer under the highlight.
+   */
+  test('the type panel sizes the selected characters, and says Mixed over two sizes', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    await selectRange(page, 6, 11);
+
+    const size = page.locator('.fig .fig-input[title="Size"] input');
+    await size.fill('40');
+    await size.press('Enter');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.size ?? ''}`))
+      .toEqual(['hello ', 'brave40', ' new world']);
+    // the layer's own size is what the rest of the sentence still reads at
+    expect((await doc(page))[id].font?.size).toBe(16);
+
+    await selectRange(page, 0, 21);
+    await expect(size).toHaveValue('Mixed');
+    await removeNodes(page, [id]);
+  });
+
   test('the bar over a selection bolds exactly that range', async ({ page }) => {
     const id = await seed(page);
     await enter(page, id);
