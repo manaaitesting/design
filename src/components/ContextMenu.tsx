@@ -44,7 +44,7 @@ import { canEditPoints } from '../document/geometry';
 import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
 import { boardsOf } from '../document/layers';
 
-interface Item {
+export interface Item {
   label: string;
   shortcut?: string;
   /** return value is ignored — commands report success to themselves */
@@ -87,8 +87,11 @@ function hasOverrides(id: string, doc: Doc): boolean {
  * A submenu is a DOM child of the row that owns it, so moving the pointer into
  * it never fires the row's `pointerleave` — the reason a naive implementation
  * closes the moment you reach for it.
+ *
+ * Exported because it is every menu in the app: the clamping, the scroll on
+ * overflow and the keyboard are worth having once rather than per menu.
  */
-function Panel({
+export function Panel({
   items,
   x,
   y,

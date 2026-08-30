@@ -3250,42 +3250,6 @@ select {
     white-space: nowrap;
     pointer-events: none;
   }
-
-  .fig-tab-menu {
-    position: fixed;
-    z-index: 60;
-    min-width: 168px;
-    padding: 4px;
-    display: flex;
-    flex-direction: column;
-    border-radius: 8px;
-    background: var(--color-panel);
-    box-shadow: var(--shadow-pop);
-  }
-  .fig-tab-menu > button {
-    height: 26px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    text-align: left;
-    font-weight: 450;
-    color: var(--color-ink);
-    cursor: default;
-  }
-  .fig-tab-menu > button:hover:enabled {
-    background: var(--color-select);
-    color: #fff;
-  }
-  .fig-tab-menu > button:disabled {
-    color: var(--color-ink-dim);
-  }
-  .fig-tab-menu > hr {
-    height: 1px;
-    margin: 4px 0;
-    border: 0;
-    background: var(--color-line);
-  }
 }
 
 /* The frame presets the Frame tool offers: a name and the size it stands for,
