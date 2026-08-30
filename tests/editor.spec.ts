@@ -4718,6 +4718,21 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 
+  test('⇧2 on something small magnifies it rather than stopping at 100%', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'TinyIcon', x: 1800, y: 1200, w: 24, h: 24 });
+    await select(page, [id]);
+    await page.keyboard.press('Shift+2');
+
+    // fit used to clamp at 1, so framing an icon only re-centred it
+    const zoom = await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom);
+    expect(zoom).toBeGreaterThan(4);
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    expect(box!.width).toBeGreaterThan(100);
+
+    await page.keyboard.press('Shift+0');
+    await removeNodes(page, [id]);
+  });
+
   test('typing a minus in a field does not zoom the canvas', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'TypeHere', x: 60, y: 560, w: 120, h: 90 });
     await select(page, [id]);

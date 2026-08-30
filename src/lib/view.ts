@@ -1,4 +1,4 @@
-import { PANEL, useUI } from '../state/ui';
+import { PANEL, ZOOM, useUI } from '../state/ui';
 import { pageOf, pagePoint, ROOT_ID, type Doc } from '../document/types';
 
 /**
@@ -42,21 +42,46 @@ export function selectionBounds(ids: string[], doc: Doc): Bounds | null {
 }
 
 /** Viewport that centres the page's content in the canvas area. */
-export function fitView(doc: Doc, leftPanel: boolean, leftWidth: number, rightWidth: number) {
+export function fitView(
+  doc: Doc,
+  leftPanel: boolean,
+  leftWidth: number,
+  rightWidth: number,
+  maxZoom?: number,
+) {
   const bounds = contentBounds(doc);
   if (!bounds) return null;
-  return fitBounds(bounds, leftPanel, leftWidth, rightWidth);
+  return fitBounds(bounds, leftPanel, leftWidth, rightWidth, maxZoom);
 }
 
-/** Viewport that centres `bounds` in the canvas area between the panels. */
-export function fitBounds(bounds: Bounds, leftPanel: boolean, leftWidth: number, rightWidth: number) {
+/**
+ * Viewport that centres `bounds` in the canvas area between the panels.
+ *
+ * Fitting magnifies as readily as it shrinks — framing a 24px icon in Figma
+ * fills the screen with it — so the ceiling is the canvas's own, not 100%.
+ * `maxZoom` is there for the one caller that wants the old behaviour: a file
+ * opening on a single small layer should not greet you at 40×.
+ */
+export function fitBounds(
+  bounds: Bounds,
+  leftPanel: boolean,
+  leftWidth: number,
+  rightWidth: number,
+  maxZoom: number = ZOOM.max,
+) {
   // each panel is a border wider than its content box
   const left = leftPanel ? leftWidth + PANEL.border : 0;
   const width = window.innerWidth - left - PANEL.toolRail - (rightWidth + PANEL.border);
   const height = window.innerHeight;
-  const zoom = Math.min(
-    1,
-    Math.min(width / (bounds.maxX - bounds.minX + 160), height / (bounds.maxY - bounds.minY + 160)),
+  const zoom = Math.max(
+    ZOOM.min,
+    Math.min(
+      maxZoom,
+      Math.min(
+        width / (bounds.maxX - bounds.minX + 160),
+        height / (bounds.maxY - bounds.minY + 160),
+      ),
+    ),
   );
   return {
     zoom,
