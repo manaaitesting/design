@@ -15,6 +15,10 @@
      the accent used for controls — otherwise 1.5px of #0d99ff disappears
      against light fills */
   --color-select-line: #0a7ad4;
+  /* Figma paints a component, a component set and an instance purple, and
+     everything else blue. It is how you tell an instance from a detached copy
+     without leaving the canvas. */
+  --color-select-component: #9747ff;
 
   --rail-left: 240px;
   --rail-tools: 42px;
@@ -2595,6 +2599,14 @@ select {
 .section-label:hover,
 .section-label[data-on] {
   color: var(--color-select-line);
+}
+/* a component's board wears the purple and Figma's diamond at all times, not
+   only when it is under the pointer */
+.section-label[data-component] {
+  color: var(--color-select-component);
+}
+.section-label[data-component]::before {
+  content: '◆ ';
 }
 /* A frame is one board among many, so its name is quieter than a section's,
    which titles a whole region of the page. */

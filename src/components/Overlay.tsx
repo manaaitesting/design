@@ -28,6 +28,19 @@ const HANDLES: { id: HandleId; cx: number; cy: number; cursor: string }[] = [
   { id: 'w', cx: 0, cy: 0.5, cursor: 'ew-resize' },
 ];
 
+/**
+ * The colour the chrome around a layer is drawn in.
+ *
+ * Figma paints a main component, a component set and an instance purple and
+ * everything else blue, so the outline alone says whether the thing you are
+ * about to edit will propagate.
+ */
+function chromeOf(node: SceneNode | undefined): string {
+  return node && (node.isComponent || node.isComponentSet || node.instanceOf)
+    ? 'var(--color-select-component)'
+    : 'var(--color-select-line)';
+}
+
 /** The dimension pill shown under a box — shared with the draw preview. */
 export const SIZE_BADGE: React.CSSProperties = {
   position: 'absolute',
@@ -166,6 +179,11 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
       h: Math.max(...boxes.map((b) => b.y + b.h)) - y,
     };
   })();
+
+  // a mixed selection has no one answer, so it falls back to the blue
+  const groupChrome = selection.every((id) => chromeOf(doc[id]) !== 'var(--color-select-line)')
+    ? 'var(--color-select-component)'
+    : 'var(--color-select-line)';
 
   /**
    * Figma's smart selection: three or more layers that read as a row.
@@ -649,7 +667,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
             top: rects[hover].y,
             width: rects[hover].w,
             height: rects[hover].h,
-            outline: '1px solid var(--color-select-line)',
+            outline: `1px solid ${chromeOf(doc[hover])}`,
             outlineOffset: -0.5,
           }}
         />
@@ -665,7 +683,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               top: bounds.y,
               width: bounds.w,
               height: bounds.h,
-              outline: '1.75px solid var(--color-select-line)',
+              outline: `1.75px solid ${groupChrome}`,
               outlineOffset: -0.875,
             }}
           />
@@ -678,7 +696,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               fontSize: 10,
               fontWeight: 500,
               color: '#fff',
-              background: 'var(--color-select-line)',
+              background: groupChrome,
               borderRadius: 3,
               padding: '1px 5px',
               whiteSpace: 'nowrap',
@@ -699,7 +717,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 width: 7,
                 height: 7,
                 background: '#fff',
-                border: '1px solid var(--color-select-line)',
+                border: `1px solid ${groupChrome}`,
                 borderRadius: 1,
                 cursor: handle.cursor,
                 pointerEvents: 'auto',
@@ -818,6 +836,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
             // a section titles a region of the page and reads larger; a frame
             // is a board among boards, and Figma labels it more quietly
             data-kind={node.type}
+            data-component={node.isComponent || node.isComponentSet || undefined}
             data-on={selection.includes(id) || undefined}
             style={{ left: rect.x, top: rect.y - (node.type === 'section' ? 20 : 16) }}
             onPointerDown={(event) => {
@@ -851,6 +870,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         if (!rect || !node || id === vectorEdit) return null;
         const single = selection.length === 1;
         const flowed = isInFlow(node, doc);
+        const chrome = chromeOf(node);
 
         // A turned layer is measured by the box *around* it. That box is not the
         // layer's own, but its middle is — a layer turns about its middle — so
@@ -874,7 +894,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 width: w,
                 height: h,
                 transform: turn,
-                outline: '1.75px solid var(--color-select-line)',
+                outline: `1.75px solid ${chrome}`,
                 outlineOffset: -0.875,
               }}
             />
@@ -886,7 +906,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                   left: rect.x,
                   top: rect.y - 16,
                   fontSize: 10,
-                  color: 'var(--color-select-line)',
+                  color: chrome,
                   fontWeight: 500,
                   whiteSpace: 'nowrap',
                 }}
@@ -909,7 +929,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                   fontSize: 10,
                   fontWeight: 500,
                   color: '#fff',
-                  background: 'var(--color-select-line)',
+                  background: chrome,
                   borderRadius: 3,
                   padding: '1px 5px',
                   whiteSpace: 'nowrap',
@@ -969,7 +989,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                         width: 7,
                         height: 7,
                         background: '#fff',
-                        border: '1px solid var(--color-select-line)',
+                        border: `1px solid ${chrome}`,
                         borderRadius: 1,
                         cursor: handle.cursor,
                         pointerEvents: 'auto',

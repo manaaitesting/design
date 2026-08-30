@@ -2671,6 +2671,28 @@ test('create component marks the layer as a main', async ({ page }) => {
   await removeNodes(page, [id]);
 });
 
+test('a component wears purple chrome where a plain frame wears blue', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'PurpleMain', x: 40, y: 1700, w: 160, h: 100, fill: '#EEEEEE', isComponent: true,
+  });
+  const plain = await makeNode(page, 'frame', {
+    name: 'BlueBoard', x: 260, y: 1700, w: 160, h: 100, fill: '#EEEEEE',
+  });
+
+  const handleColour = () =>
+    page.evaluate(() => getComputedStyle(document.querySelector('[data-handle="nw"]')!).borderTopColor);
+
+  await select(page, [main]);
+  expect(await handleColour()).toBe('rgb(151, 71, 255)');
+
+  await select(page, [plain]);
+  expect(await handleColour()).toBe('rgb(10, 122, 212)');
+  // and the board label says the same thing without anything being selected
+  await expect(page.locator('.section-label[data-component]')).toHaveText(/PurpleMain/);
+
+  await removeNodes(page, [main, plain]);
+});
+
 test('paste here drops the copy under the pointer', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'CtxSrc', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
   await select(page, [id]);
