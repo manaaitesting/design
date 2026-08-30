@@ -103,6 +103,8 @@ import {
   DEVICES,
   type BooleanOp,
   type PrototypeDevice,
+  type GuideSpec,
+  guidesOf,
 } from '../document/types';
 import { FRAME_PRESETS } from '../document/presets';
 import { viewCentre } from '../lib/view';
@@ -4347,7 +4349,7 @@ function pageColors(doc: Doc, page: string, tokens: Token[] = []): string[] {
       add(effect.color);
       add(effect.color2);
     }
-    add(node.guides?.color);
+    for (const guide of guidesOf(node)) add(guide.color);
   }
   return [...seen].slice(0, 40);
 }
@@ -4909,108 +4911,133 @@ function ShaderSection({ node, set }: { node: SceneNode; set: Setter }) {
 // ── Guides / Video ───────────────────────────────────────────────────────
 
 function GuidesSection({ node, set }: { node: SceneNode; set: Setter }) {
-  const guides = node.guides;
+  const guides = guidesOf(node);
+  // a frame with no grids left holds null rather than an empty list, so the
+  // section reads empty and a grid style still round-trips through it
+  const write = (next: GuideSpec[]) => set({ guides: next.length ? next : null });
+  const patch = (index: number, delta: Partial<GuideSpec>) =>
+    write(guides.map((guide, i) => (i === index ? { ...guide, ...delta } : guide)));
+
   return (
     <FigSection
       title="Layout grid"
-      empty={!guides}
-      onAdd={() => set({ guides: { ...DEFAULT_GUIDES } })}
-      onRemove={() => set({ guides: null })}
+      empty={!guides.length}
+      // no onRemove, so the + stays: a frame carries a stack of grids — columns
+      // and an 8px baseline, as often as not — and each is removed by its own row
+      onAdd={() => write([...guides, { ...DEFAULT_GUIDES, id: newId() }])}
       actions={
-        <>
-          {/* Figma keeps this one in the header whether or not the frame has a
-              guide: applying a style is how you give it one. */}
-          <StylePicker slot="grid" node={node} />
-          {guides && (
-            <FigButton
-              title={guides.visible ? 'Hide grid' : 'Show grid'}
-              onClick={() => set({ guides: { ...guides, visible: !guides.visible } })}
-            >
-              <Icon.Eye off={!guides.visible} />
-            </FigButton>
-          )}
-        </>
+        // Figma keeps this one in the header whether or not the frame has a
+        // guide: applying a style is how you give it one.
+        <StylePicker slot="grid" node={node} />
       }
     >
       <StyleBadge node={node} slot="grid" />
-      {guides && (
+      {guides.map((guide, index) => (
+        <GuideBlock
+          key={guide.id ?? index}
+          guide={guide}
+          onChange={(delta) => patch(index, delta)}
+          onRemove={() => write(guides.filter((_, i) => i !== index))}
+        />
+      ))}
+    </FigSection>
+  );
+}
+
+/** One layout grid: its type, its measurements, and its own paint row. */
+function GuideBlock({
+  guide,
+  onChange,
+  onRemove,
+}: {
+  guide: GuideSpec;
+  onChange: (delta: Partial<GuideSpec>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <>
+      <div className="fig-row">
+        <FigGroup
+          value={guide.type}
+          onChange={(type) => onChange({ type })}
+          options={[
+            { value: 'columns', label: 'Columns', title: 'Columns' },
+            { value: 'rows', label: 'Rows', title: 'Rows' },
+            { value: 'grid', label: 'Grid', title: 'Grid' },
+          ]}
+        />
+      </div>
+      {guide.type === 'grid' ? (
+        <div className="fig-row">
+          <FigField value={guide.size} glyph={<Icon.Gap />} min={1} title="Size" onChange={(size) => onChange({ size })} />
+          <span style={{ flex: '1 1 0' }} />
+          <span style={{ width: 24, flex: 'none' }} />
+        </div>
+      ) : (
         <>
           <div className="fig-row">
-            <FigGroup
-              value={guides.type}
-              onChange={(type) => set({ guides: { ...guides, type } })}
+            <FigSelect
+              value={guide.align ?? 'stretch'}
               options={[
-                { value: 'columns', label: 'Columns', title: 'Columns' },
-                { value: 'rows', label: 'Rows', title: 'Rows' },
-                { value: 'grid', label: 'Grid', title: 'Grid' },
+                { value: 'stretch', label: 'Stretch' },
+                { value: 'start', label: guide.type === 'columns' ? 'Left' : 'Top' },
+                { value: 'center', label: 'Center' },
+                { value: 'end', label: guide.type === 'columns' ? 'Right' : 'Bottom' },
               ]}
+              title="Type"
+              onChange={(align) => onChange({ align })}
             />
+            <FigField
+              value={guide.count}
+              glyph="N"
+              min={1}
+              max={48}
+              title="Count"
+              onChange={(count) => onChange({ count })}
+            />
+            <span style={{ width: 24, flex: 'none' }} />
           </div>
-          {guides.type === 'grid' ? (
-            <div className="fig-row">
-              <FigField value={guides.size} glyph={<Icon.Gap />} min={1} title="Size" onChange={(size) => set({ guides: { ...guides, size } })} />
-              <span style={{ flex: '1 1 0' }} />
-              <span style={{ width: 24, flex: 'none' }} />
-            </div>
-          ) : (
-            <>
-              <div className="fig-row">
-                <FigSelect
-                  value={guides.align ?? 'stretch'}
-                  options={[
-                    { value: 'stretch', label: 'Stretch' },
-                    { value: 'start', label: guides.type === 'columns' ? 'Left' : 'Top' },
-                    { value: 'center', label: 'Center' },
-                    { value: 'end', label: guides.type === 'columns' ? 'Right' : 'Bottom' },
-                  ]}
-                  title="Type"
-                  onChange={(align) => set({ guides: { ...guides, align } })}
-                />
-                <FigField
-                  value={guides.count}
-                  glyph="N"
-                  min={1}
-                  max={48}
-                  title="Count"
-                  onChange={(count) => set({ guides: { ...guides, count } })}
-                />
-                <span style={{ width: 24, flex: 'none' }} />
-              </div>
-              <div className="fig-row">
-                {/* Stretch is described by its margin; the others by a width.
-                    Figma shows whichever one the type actually uses. */}
-                {(guides.align ?? 'stretch') === 'stretch' ? (
-                  <FigField
-                    value={guides.margin}
-                    glyph={<Icon.PadH />}
-                    min={0}
-                    title="Margin"
-                    onChange={(margin) => set({ guides: { ...guides, margin } })}
-                  />
-                ) : (
-                  <FigField
-                    value={guides.width ?? 64}
-                    glyph="W"
-                    min={1}
-                    title={guides.type === 'columns' ? 'Column width' : 'Row height'}
-                    onChange={(width) => set({ guides: { ...guides, width } })}
-                  />
-                )}
-                <FigField
-                  value={guides.gutter}
-                  glyph={<Icon.Gap />}
-                  min={0}
-                  title="Gutter"
-                  onChange={(gutter) => set({ guides: { ...guides, gutter } })}
-                />
-                <span style={{ width: 24, flex: 'none' }} />
-              </div>
-            </>
-          )}
-          <FigPaintRow color={guides.color} alpha={1} onColor={(color) => set({ guides: { ...guides, color } })} />
+          <div className="fig-row">
+            {/* Stretch is described by its margin; the others by a width.
+                Figma shows whichever one the type actually uses. */}
+            {(guide.align ?? 'stretch') === 'stretch' ? (
+              <FigField
+                value={guide.margin}
+                glyph={<Icon.PadH />}
+                min={0}
+                title="Margin"
+                onChange={(margin) => onChange({ margin })}
+              />
+            ) : (
+              <FigField
+                value={guide.width ?? 64}
+                glyph="W"
+                min={1}
+                title={guide.type === 'columns' ? 'Column width' : 'Row height'}
+                onChange={(width) => onChange({ width })}
+              />
+            )}
+            <FigField
+              value={guide.gutter}
+              glyph={<Icon.Gap />}
+              min={0}
+              title="Gutter"
+              onChange={(gutter) => onChange({ gutter })}
+            />
+            <span style={{ width: 24, flex: 'none' }} />
+          </div>
         </>
       )}
-    </FigSection>
+      <FigPaintRow
+        color={guide.color}
+        alpha={guide.opacity ?? 1}
+        onColor={(color) => onChange({ color })}
+        onAlpha={(opacity) => onChange({ opacity })}
+        visible={guide.visible}
+        onVisible={() => onChange({ visible: !guide.visible })}
+        onRemove={onRemove}
+      />
+    </>
   );
 }
 

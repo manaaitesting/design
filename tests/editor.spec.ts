@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { dragBy, doc, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
+import { guidesOf } from '../src/document/types';
 
 test.beforeEach(async ({ page }) => {
   await openEditor(page);
@@ -4236,12 +4237,42 @@ test.describe('layout grid and text blocks', () => {
     await page.getByTitle('Column width').locator('input').fill('40');
     await page.keyboard.press('Enter');
 
-    const guides = (await doc(page))[board!.id].guides!;
+    // the frame was given a lone spec, as a document written before the stack has
+    const [guides] = guidesOf((await doc(page))[board!.id]);
     expect(guides.align).toBe('end');
     expect(guides.width).toBe(40);
 
     const track = page.locator(`[data-node-id="${board!.id}"] > div`).last().locator('> div').first();
     await expect(track).toHaveCSS('width', '40px');
+  });
+
+  test('a frame carries columns and a square grid at once, each with its own eye', async ({ page }) => {
+    const frame = await makeNode(page, 'frame', { name: 'Template', x: 700, y: 40, w: 400, h: 300, fill: '#FFFFFF' });
+    await select(page, [frame]);
+
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Layout grid$/ }),
+    });
+    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    // the + stays once there is one, because the second grid is not a replacement
+    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    await section.getByRole('button', { name: 'Grid', exact: true }).nth(1).click();
+
+    const guides = guidesOf((await doc(page))[frame]);
+    expect(guides.map((guide) => guide.type)).toEqual(['columns', 'grid']);
+    const overlays = page.locator(`[data-node-id="${frame}"] > div`);
+    await expect(overlays).toHaveCount(2);
+
+    // each grid's eye takes its own overlay off, and leaves the other one
+    await section.locator('input[aria-label="Toggle visibility"]').first().click();
+    expect(guidesOf((await doc(page))[frame]).map((guide) => guide.visible)).toEqual([false, true]);
+    await expect(overlays).toHaveCount(1);
+
+    // and each row's minus removes that grid alone
+    await section.getByRole('button', { name: 'Remove' }).first().click();
+    expect(guidesOf((await doc(page))[frame]).map((guide) => guide.type)).toEqual(['grid']);
+
+    await removeNodes(page, [frame]);
   });
 
   test('paragraph spacing and lists turn the lines into real blocks', async ({ page }) => {

@@ -482,6 +482,7 @@ export type GuideAlign = 'stretch' | 'start' | 'end' | 'center';
 
 /** Layout guides — a design aid drawn over a frame, never exported. */
 export interface GuideSpec {
+  id?: string;
   type: 'columns' | 'rows' | 'grid';
   count: number;
   gutter: number;
@@ -489,6 +490,8 @@ export interface GuideSpec {
   /** grid cell size, used when type is 'grid' */
   size: number;
   color: string;
+  /** the guide paint's own opacity, so picking a colour cannot make it opaque */
+  opacity?: number;
   visible: boolean;
   /** columns and rows only; defaults to stretch, as Figma's do */
   align?: GuideAlign;
@@ -902,7 +905,7 @@ export interface SceneNode {
   filters: FilterSpec | null;
   /** the Effects list; when present it supersedes `shadow` and `filters` */
   effects?: Effect[];
-  guides: GuideSpec | null;
+  guides: GuideSpec | GuideSpec[] | null;
   video: VideoSpec | null;
   flipH: boolean;
   flipV: boolean;
@@ -1293,6 +1296,19 @@ export function childOfContainer(id: string, container: string, doc: Doc): strin
     current = doc[current.parent];
   }
   return null;
+}
+
+/**
+ * The layout grids on a frame.
+ *
+ * Figma stacks them — a 12-column grid for the horizontal rhythm and an 8px
+ * square grid for the vertical one, on the same frame — so this is a list. A
+ * document written before it was carried a single spec, and reads back as a
+ * one-entry stack rather than as a frame that lost its grid.
+ */
+export function guidesOf(node: SceneNode): GuideSpec[] {
+  if (!node.guides) return [];
+  return Array.isArray(node.guides) ? node.guides : [node.guides];
 }
 
 export function descendants(id: string, doc: Doc, out: string[] = []): string[] {

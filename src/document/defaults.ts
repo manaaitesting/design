@@ -78,7 +78,10 @@ export const DEFAULT_GUIDES = {
   gutter: 16,
   margin: 24,
   size: 8,
-  color: 'rgba(255,0,80,0.18)',
+  // the colour and its opacity are separate so the picker has somewhere to put
+  // a hex without turning the guide into an opaque slab over the design
+  color: '#FF0050',
+  opacity: 0.18,
   visible: true,
   align: 'stretch' as const,
   width: 64,

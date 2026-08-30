@@ -26,7 +26,7 @@ import { ensureFont } from '../lib/fonts';
 import { isPlain, listBoxStyle, plainText, runLines, runStyle, runsOf, type TextRun } from '../document/text';
 import { TextEditor } from './TextEditor';
 import type { CSSProperties } from 'react';
-import type { SceneNode } from '../document/types';
+import { guidesOf, type SceneNode } from '../document/types';
 
 /**
  * Renders one scene node as real DOM.
@@ -326,7 +326,9 @@ export const NodeView = memo(function NodeView({
       {(swappedTo?.children ?? node.children).map((childId) => (
         <NodeView key={childId} id={childId} mask={masking?.styles[childId]} />
       ))}
-      {node.guides && <Guides guides={node.guides} />}
+      {guidesOf(node).map((guide, index) => (
+        <Guides key={guide.id ?? index} guides={guide} />
+      ))}
       {overlays}
     </div>
   );
