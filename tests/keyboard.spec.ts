@@ -94,3 +94,30 @@ test('⇧X swaps the fill and the stroke, and ⌘X still cuts', async ({ page })
   expect((await selection(page))[0]).toBe(plain);
   await removeNodes(page, [id, plain]);
 });
+
+test('a modal owns the keyboard, and Escape is the way out of it', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'KB Modal', x: 700, y: 500, w: 60, h: 60, fill: '#4CC3F0' });
+  await select(page, [id]);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setExportOpen(true));
+
+  // ⌫ used to delete the very layer the export sheet was previewing
+  await page.keyboard.press('Backspace');
+  expect((await doc(page))[id]).toBeTruthy();
+  // and the tool keys used to arm a tool behind the sheet
+  await page.keyboard.press('r');
+  expect(await tool(page)).toBe('move');
+  // as did ⌘D, which duplicated a layer nobody could see
+  const before = Object.keys(await doc(page)).length;
+  await page.keyboard.press('Meta+d');
+  expect(Object.keys(await doc(page)).length).toBe(before);
+
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().exportOpen)).toBe(false);
+
+  // with the sheet gone the same keys work again
+  await page.keyboard.press('r');
+  expect(await tool(page)).toBe('rect');
+  await page.keyboard.press('v');
+  await removeNodes(page, [id]);
+});

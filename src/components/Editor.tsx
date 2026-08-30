@@ -272,6 +272,18 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       // Present runs its own keys; the editor's would fire underneath it
       if (ui.presenting) return;
 
+      /**
+       * A modal owns the keyboard while it is up.
+       *
+       * Export, Version history, Shaders and Rename cover the canvas and focus
+       * nothing, so every canvas shortcut went on firing behind them — ⌫ with
+       * the Export sheet open deleted the very layer the sheet was previewing,
+       * and R, ⌘D and ⌘G edited the document out of sight. Escape is the way
+       * out, so it is the one key that still reaches the ladder below.
+       */
+      const modal = ui.exportOpen || ui.historyOpen || ui.shadersOpen || ui.renameOpen || !!ui.linkEditor;
+      if (modal && event.key !== 'Escape') return;
+
       // ⇧⌘⏎ — play the prototype, as in Figma
       if (mod && event.shiftKey && event.key === 'Enter') {
         event.preventDefault();
@@ -303,6 +315,8 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
 
       if (event.key === 'Escape') {
         if (ui.paletteOpen) ui.setPaletteOpen(false);
+        else if (ui.linkEditor) ui.setLinkEditor(null);
+        else if (ui.renameOpen) ui.setRenameOpen(false);
         else if (ui.vectorEdit) ui.setVectorEdit(null);
         else if (ui.historyOpen) ui.setHistoryOpen(false);
         else if (ui.exportOpen) ui.setExportOpen(false);
