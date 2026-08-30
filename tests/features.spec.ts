@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-import { doc, dragBy, FILE, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { FILE, doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
 
 /**
  * The Figma-parity work: shapes, booleans, masks, point editing, the scale
@@ -2550,4 +2550,215 @@ test('an image the browser cannot decode is refused rather than placed', async (
   await expect(page.getByText(/Undecodable\.png could not be decoded/)).toBeVisible();
   await expect(page.locator('[data-canvas-root]')).not.toHaveAttribute('data-placing', 'true');
   expect(await nodeNamed(page, 'Undecodable')).toBeUndefined();
+});
+
+/**
+ * Comments.
+ *
+ * A remark is about something, and the something moves. These go through the
+ * real comment tool rather than the store, because what is being checked is
+ * where the pin ends up on screen.
+ */
+test.describe('comments', () => {
+  /** Leaves a comment by clicking at a screen point, as a reviewer does. */
+  async function leaveComment(page: Page, at: { x: number; y: number }, body: string) {
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('comment'));
+    await page.mouse.click(at.x, at.y);
+    await page.getByPlaceholder('Leave a comment…').fill(body);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.fig-pin')).toHaveCount(1);
+  }
+
+  const clearComments = (page: Page) =>
+    page.evaluate(() => {
+      const store = window.paperlike!.store;
+      for (const comment of store.listComments()) store.removeComment(comment.id);
+    });
+
+  test('a pin travels with the layer it was left on', async ({ page }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'this crop is tight');
+
+    const before = (await page.locator('.fig-pin').boundingBox())!;
+    await page.evaluate((id) => window.paperlike!.store.update(id, { x: 140 }), cover.id);
+
+    await expect
+      .poll(async () => Math.round((await page.locator('.fig-pin').boundingBox())!.x - before.x))
+      .toBe(100);
+
+    await clearComments(page);
+  });
+
+  test('a pin left on empty canvas stays where it was dropped', async ({ page }) => {
+    const board = (await nodeNamed(page, 'Fixture Board'))!;
+    const box = (await page.locator(`[data-node-id="${board.id}"]`).boundingBox())!;
+    // well clear of the board, so nothing is under the click
+    await leaveComment(page, { x: box.x + box.width + 200, y: box.y + 40 }, 'nothing here');
+
+    const anchored = await page.evaluate(
+      () =>
+        window.paperlike!.store.listComments(window.paperlike!.ui.getState().page)[0]?.anchor ??
+        null,
+    );
+    expect(anchored).toBeNull();
+
+    await clearComments(page);
+  });
+
+  test('an agreement is a reaction on the message, not another reply', async ({ page }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'shall we ship this crop?');
+
+    await page.locator('.fig-pin').click();
+    await page.getByTitle('React').click();
+    await page.locator('.fig-react-pick > button', { hasText: '👍' }).click();
+    await expect(page.locator('.fig-react-chip[data-mine]')).toHaveText('👍 1');
+
+    // it cost the thread nothing: still one message
+    const stored = await page.evaluate(() => window.paperlike!.store.listComments()[0]);
+    expect(stored.replies).toHaveLength(0);
+    expect(Object.keys(stored.reactions ?? {})).toEqual(['👍']);
+
+    // and clicking it again takes it back
+    await page.locator('.fig-react-chip[data-mine]').click();
+    await expect(page.locator('.fig-react-chip[data-mine]')).toHaveCount(0);
+
+    await clearComments(page);
+  });
+
+  test('a mention is a person the picker resolved, not a prefix of a name', async ({ page }) => {
+    // typed but never resolved: the prefix match used to light this pin up for
+    // everyone whose name begins with an a
+    await leaveComment(page, { x: 900, y: 250 }, 'ask @a about the crop');
+    await expect(page.locator('.fig-pin[data-mine]')).toHaveCount(0);
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('comment'));
+    await page.mouse.click(1000, 250);
+    const box = page.getByPlaceholder('Leave a comment…');
+    await box.fill('@a');
+    await page.locator('.fig-mention-option', { hasText: 'Ada' }).click();
+    await expect(box).toHaveValue('@Ada ');
+    await box.fill('@Ada does this crop work?');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator('.fig-pin')).toHaveCount(2);
+    await expect(page.locator('.fig-pin[data-mine]')).toHaveCount(1);
+
+    await clearComments(page);
+  });
+
+  test('the panel lists a thread on another page, and a click goes to it', async ({ page }) => {
+    const away = await page.evaluate(() => window.paperlike!.store.addPage('Elsewhere'));
+    await page.evaluate(
+      (id) =>
+        window.paperlike!.store.addComment({
+          page: id,
+          x: 40,
+          y: 40,
+          authorId: 'ada',
+          authorName: 'Ada',
+          authorColor: '#BDEE63',
+          body: 'the hero on page two is still the old one',
+        }),
+      away,
+    );
+
+    await page.getByRole('button', { name: 'Comments', exact: true }).click();
+    const row = page.locator('.fig-thread', { hasText: 'the hero on page two' });
+    await expect(row).toBeVisible();
+    await row.click();
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(away);
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setPage('root'));
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    await clearComments(page);
+  });
+
+  test('a resolved thread is still reachable once the comment tool is put down', async ({
+    page,
+  }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'the crop is tight');
+
+    await page.locator('.fig-pin').click();
+    await page.getByRole('button', { name: 'Resolve', exact: true }).click();
+    await expect(page.locator('.fig-pin')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Comments', exact: true }).click();
+    await expect(page.locator('.fig-thread')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Resolved', exact: true }).click();
+    await expect(page.locator('.fig-thread', { hasText: 'the crop is tight' })).toBeVisible();
+
+    await clearComments(page);
+  });
+});
+
+/**
+ * Presence is scoped to a page.
+ *
+ * Every page in a file draws into the same world space, so until awareness
+ * carried a page id a peer two pages away left a named pointer wandering over
+ * artwork they were not even looking at, and Follow — which exists for exactly
+ * the review where someone walks between pages — copied their viewport and left
+ * you staring at empty canvas.
+ */
+test.describe('presence across pages', () => {
+  /** A second tab in the same file: a real peer, with its own awareness state. */
+  async function peer(context: BrowserContext): Promise<Page> {
+    const other = await context.newPage();
+    await other.goto(FILE);
+    await other.waitForFunction(() => !!window.paperlike, null, { timeout: 20_000 });
+    await other.waitForFunction(() => !!window.paperlike!.doc().root);
+    return other;
+  }
+
+  const leave = (other: Page) =>
+    other.evaluate(() => {
+      const id = window.paperlike!.store.addPage('Elsewhere');
+      window.paperlike!.ui.getState().setPage(id);
+      return id;
+    });
+
+  test('a cursor on another page does not draw on yours', async ({ page, context }) => {
+    const other = await peer(context);
+    try {
+      // beside you, on the page you are both on
+      await other.mouse.move(700, 500);
+      await expect(page.getByText('Ada', { exact: true })).toBeVisible();
+
+      const away = await leave(other);
+      await other.mouse.move(720, 520);
+      await expect(page.getByText('Ada', { exact: true })).toHaveCount(0);
+
+      await other.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    } finally {
+      await other.close();
+    }
+  });
+
+  test('following someone who walks to another page takes you with them', async ({
+    page,
+    context,
+  }) => {
+    const other = await peer(context);
+    try {
+      await other.mouse.move(700, 500);
+      await page.getByTitle('Follow Ada').click();
+      await expect(page.getByText('Following Ada')).toBeVisible();
+
+      const away = await leave(other);
+      await expect.poll(() => page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(away);
+
+      await page.evaluate(() => {
+        window.paperlike!.ui.getState().setFollowing(null);
+        window.paperlike!.ui.getState().setPage('root');
+      });
+      await other.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    } finally {
+      await other.close();
+    }
+  });
 });

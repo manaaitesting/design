@@ -294,15 +294,39 @@ function same(a: SceneNode | undefined, b: SceneNode): boolean {
 export interface Comment {
   id: string;
   page: string;
+  /** where it was dropped, and where it stays if its layer is gone */
   x: number;
   y: number;
+  /**
+   * The layer it is about, and where inside it — 0..1 of the layer's box on
+   * each axis. A remark points at something, so the pin has to travel when that
+   * something moves, resizes or reflows.
+   */
+  anchor?: { node: string; u: number; v: number };
   authorId: string;
   authorName: string;
   authorColor: string;
   body: string;
   createdAt: number;
   resolved: boolean;
-  replies: { authorName: string; authorColor: string; body: string; createdAt: number }[];
+  /**
+   * The people this message names, by account id.
+   *
+   * A mention is a reference to a person, not a word that looks like one — the
+   * picker resolves it as it is typed, so `@Al` cannot flag every Alicia in the
+   * file and a colleague whose name was mistyped is simply not in the list.
+   */
+  mentions?: string[];
+  /** emoji → the account ids that reacted with it */
+  reactions?: Record<string, string[]>;
+  replies: {
+    authorName: string;
+    authorColor: string;
+    body: string;
+    createdAt: number;
+    mentions?: string[];
+    reactions?: Record<string, string[]>;
+  }[];
 }
 
 export type { Token };
@@ -990,9 +1014,10 @@ export class DocStore {
     });
   }
 
-  listComments(page: string): Comment[] {
+  /** One page's threads, or — with no page — every thread in the file. */
+  listComments(page?: string): Comment[] {
     return [...this.comments.values()]
-      .filter((comment) => comment.page === page)
+      .filter((comment) => !page || comment.page === page)
       .sort((a, b) => a.createdAt - b.createdAt);
   }
 
@@ -1016,6 +1041,41 @@ export class DocStore {
     this.ydoc.transact(() => {
       const comment = this.comments.get(id);
       if (comment) this.comments.set(id, { ...comment, ...patch, id });
+    });
+  }
+
+  /**
+   * Adds or takes back one person's reaction to one message in a thread.
+   *
+   * `message` is -1 for the comment itself and the reply's index otherwise: a
+   * reply has no id of its own, and giving it one would change what every
+   * existing thread on disk looks like for the sake of a thumbs-up.
+   */
+  toggleReaction(id: string, message: number, emoji: string, authorId: string): void {
+    this.ydoc.transact(() => {
+      const comment = this.comments.get(id);
+      const target = message < 0 ? comment : comment?.replies[message];
+      if (!comment || !target) return;
+
+      const who = target.reactions?.[emoji] ?? [];
+      const next = who.includes(authorId)
+        ? who.filter((author) => author !== authorId)
+        : [...who, authorId];
+      const reactions = { ...target.reactions, [emoji]: next };
+      // an emoji nobody is holding any more is not a reaction
+      if (!next.length) delete reactions[emoji];
+
+      this.comments.set(
+        id,
+        message < 0
+          ? { ...comment, reactions }
+          : {
+              ...comment,
+              replies: comment.replies.map((reply, index) =>
+                index === message ? { ...reply, reactions } : reply,
+              ),
+            },
+      );
     });
   }
 

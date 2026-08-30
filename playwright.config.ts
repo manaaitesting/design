@@ -14,6 +14,10 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI ? 'github' : [['list']],
+  // The projects that run without a browser import server modules directly, and
+  // `server-only` throws on sight to stop a server module reaching a client
+  // bundle. This config points that specifier at a no-op; nothing else differs.
+  tsconfig: './tsconfig.test.json',
   use: {
     baseURL: process.env.BASE_URL ?? 'http://localhost:3111',
     trace: 'retain-on-failure',
@@ -40,8 +44,8 @@ export default defineConfig({
     { name: 'motion', testMatch: /motion\.spec\.ts/ },
     // no browser either: the shared library, against a scratch database
     { name: 'library', testMatch: /library\.spec\.ts/ },
-    // no browser either: this one drives the sync server
-    { name: 'sync', testMatch: /snapshots\.spec\.ts/ },
+    // no browser either: these drive the sync server
+    { name: 'sync', testMatch: /(snapshots|collab)\.spec\.ts/ },
     // no browser to drive, but it spawns one: the MCP server renders headlessly
     { name: 'mcp', testMatch: /mcp\.spec\.ts/ },
     { name: 'setup', testMatch: /auth\.setup\.ts/ },

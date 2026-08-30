@@ -1,7 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { compareVersionAction, listVersionsAction, restoreVersionAction } from '../server/actions';
+import {
+  compareVersionAction,
+  listVersionsAction,
+  restoreVersionAction,
+  saveVersionAction,
+} from '../server/actions';
 import type { Version, VersionDiff } from '../server/history';
 import { useReadOnly, useSession } from './Session';
 import { useUI } from '../state/ui';
@@ -26,6 +31,8 @@ export function History() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [diff, setDiff] = useState<{ stamp: string; result: VersionDiff | null } | null>(null);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -56,10 +63,25 @@ export function History() {
     setNotice(null);
     const result = await restoreVersionAction(room, version.stamp);
     setBusy(null);
+    if (result.error || !result.restored) return setNotice(result.error ?? 'Nothing came back.');
+    const { layers, pages } = result.restored;
     setNotice(
-      result.error ??
-        `Restored ${result.restored} layer${result.restored === 1 ? '' : 's'} into this page.`,
+      `Restored ${layers} layer${layers === 1 ? '' : 's'} into ` +
+        (pages.length === 1 ? pages[0] : `${pages.length} pages`) +
+        '.',
     );
+  };
+
+  const save = async () => {
+    setBusy('save');
+    setNotice(null);
+    const result = await saveVersionAction(room, title, description);
+    setBusy(null);
+    if (result.error) return setNotice(result.error);
+    setTitle('');
+    setDescription('');
+    setVersions(await listVersionsAction(room));
+    setNotice(`Saved “${result.version!.title}”.`);
   };
 
   return (
@@ -94,6 +116,39 @@ export function History() {
           </button>
         </div>
 
+        {/* Figma's ⌥⌘S: a checkpoint you can find months later, because you
+            said what it was. Here rather than on the shortcut, which this
+            editor already spends on boolean subtract. */}
+        {!readOnly && (
+          <div className="fig-version-save">
+            <input
+              aria-label="Version name"
+              placeholder="Name this version…"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === 'Enter' && title.trim()) void save();
+              }}
+            />
+            <input
+              aria-label="Version description"
+              placeholder="What changed (optional)"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+            <button
+              type="button"
+              className="btn btn-raised"
+              disabled={!title.trim() || busy === 'save'}
+              onClick={() => void save()}
+            >
+              {busy === 'save' ? '…' : 'Save'}
+            </button>
+          </div>
+        )}
+
         <div className="scroll" style={{ flex: 1, padding: '4px 0 8px' }}>
           {versions === null && <p className="fig-hint">Reading the snapshot shelf…</p>}
           {versions?.length === 0 && (
@@ -106,8 +161,9 @@ export function History() {
             <div key={version.stamp} className="fig-version">
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 500 }}>
-                  {version.at ? new Date(version.at).toLocaleString() : version.stamp}
-                  {version.pinned && (
+                  {version.title ??
+                    (version.at ? new Date(version.at).toLocaleString() : version.stamp)}
+                  {version.pinned && !version.title && (
                     <span
                       className="fig-version-pin"
                       title="Kept because the document shrank sharply just after it"
@@ -116,6 +172,15 @@ export function History() {
                     </span>
                   )}
                 </div>
+                {version.title && (
+                  // a named version leads with its name, so the time and the
+                  // person who made it move down beside the description
+                  <div style={{ color: 'var(--fig-icon-3)', marginTop: 2 }}>
+                    {version.authorName ?? 'someone'} ·{' '}
+                    {version.at ? new Date(version.at).toLocaleString() : version.stamp}
+                    {version.description && ` · ${version.description}`}
+                  </div>
+                )}
                 <div style={{ color: 'var(--fig-icon-3)', marginTop: 2 }}>
                   {version.nodes} layers · {version.names.join(', ') || 'empty'}
                 </div>

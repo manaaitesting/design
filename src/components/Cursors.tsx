@@ -8,6 +8,7 @@ import { readableOn } from '../lib/color';
 export function Cursors({ containerRef }: { containerRef: RefObject<HTMLDivElement | null> }) {
   const presence = usePresence();
   const viewport = useUI((s) => s.viewport);
+  const page = useUI((s) => s.page);
   const shown = useUI((s) => s.view.cursors);
   void containerRef;
   if (!shown) return null;
@@ -15,7 +16,10 @@ export function Cursors({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 20 }}>
       {presence.map((p) => {
-        if (!p.cursor) return null;
+        // Every page draws into the same world space, so someone working on
+        // another one would otherwise leave a named pointer wandering over
+        // artwork they are not even looking at.
+        if (!p.cursor || (p.page && p.page !== page)) return null;
         const { x, y } = toScreen(viewport, p.cursor.x, p.cursor.y);
         return (
           <div key={p.clientId} style={{ position: 'absolute', left: x, top: y }}>

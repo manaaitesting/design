@@ -290,8 +290,8 @@ export interface UIState {
    * canvas draws prototype connections whenever Prototype is showing, exactly
    * as Figma does.
    */
-  inspectorTab: 'design' | 'prototype' | 'inspect';
-  setInspectorTab: (tab: 'design' | 'prototype' | 'inspect') => void;
+  inspectorTab: 'design' | 'prototype' | 'inspect' | 'comments';
+  setInspectorTab: (tab: 'design' | 'prototype' | 'inspect' | 'comments') => void;
 
   /** the frame Present is playing, or null when it is closed */
   presenting: string | null;

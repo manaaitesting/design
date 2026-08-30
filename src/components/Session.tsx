@@ -256,7 +256,7 @@ export function useStyles(kind?: StyleKind): Style[] {
   return store.listStyles(kind);
 }
 
-export function useComments(page: string): Comment[] {
+export function useComments(page?: string): Comment[] {
   const store = useStore();
   useSyncExternalStore(store.subscribe, store.getRevision, () => 0);
   return store.listComments(page);
@@ -317,6 +317,7 @@ export function usePresence(): Presence[] {
       out.push({
         clientId,
         identity: presence.identity,
+        page: presence.page ?? '',
         cursor: presence.cursor ?? null,
         selection: presence.selection ?? [],
         view: presence.view ?? null,

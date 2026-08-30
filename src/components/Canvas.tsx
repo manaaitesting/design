@@ -15,7 +15,7 @@ import {
 import { withAlpha } from '../document/css';
 import { Annotations } from './Annotations';
 import { PixelPreview } from './PixelPreview';
-import { CommentComposer, Comments } from './Comments';
+import { anchorIn, CommentComposer, Comments } from './Comments';
 import { CursorChat } from './CursorChat';
 import { FollowLayer } from './Follow';
 import { Measure } from './Measure';
@@ -23,7 +23,7 @@ import { Rulers } from './Rulers';
 import { VectorEdit } from './VectorEdit';
 import { CanvasMotion } from './MotionStyle';
 import { useDoc, useSession, useStore, useTokenVars } from './Session';
-import type { DocStore } from '../document/store';
+import type { Comment, DocStore } from '../document/store';
 import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
 import { descendants, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
 import { snap, snapCandidates } from '../document/snapping';
@@ -153,7 +153,7 @@ export function Canvas() {
   /** in-progress pen path, in world coordinates */
   const [pen, setPen] = useState<Anchor[]>([]);
   const [penCursor, setPenCursor] = useState<[number, number] | null>(null);
-  const [composing, setComposing] = useState<{ x: number; y: number } | null>(null);
+  const [composing, setComposing] = useState<{ x: number; y: number; anchor?: Comment['anchor'] } | null>(null);
 
   const pageId = useUI((s) => s.page);
   const page = doc[pageId] ?? doc[ROOT_ID];
@@ -541,7 +541,13 @@ export function Canvas() {
     }
 
     if (tool === 'comment') {
-      setComposing({ x: Math.round(start.x), y: Math.round(start.y) });
+      // a remark is about something: the pin holds the layer under the click,
+      // and where in it, so it travels when that layer does
+      setComposing({
+        x: Math.round(start.x),
+        y: Math.round(start.y),
+        anchor: anchorIn(hitStack(event.clientX, event.clientY, doc)[0], event.clientX, event.clientY),
+      });
       return;
     }
 
@@ -1374,7 +1380,7 @@ export function Canvas() {
       {vectorEdit && <VectorEdit containerRef={rootRef} />}
       {prototyping && <Connections containerRef={rootRef} />}
       <Annotations containerRef={rootRef} />
-      <Comments />
+      <Comments containerRef={rootRef} />
       {composing && <CommentComposer at={composing} onDone={() => setComposing(null)} />}
       <Cursors containerRef={rootRef} />
       <FollowLayer containerRef={rootRef} />

@@ -11,6 +11,11 @@ export interface Presence {
   /** awareness connection id — unique per tab, unlike the account id */
   clientId: number;
   identity: Identity;
+  /**
+   * Which page they are on. Pages share one world space, so without it a
+   * pointer three pages away draws a cursor over yours at its own coordinates.
+   */
+  page: string;
   /** Pointer position in world (canvas) coordinates. */
   cursor: { x: number; y: number } | null;
   selection: string[];
@@ -102,6 +107,7 @@ export function getSession(
   });
 
   provider.awareness.setLocalStateField('identity', identity);
+  provider.awareness.setLocalStateField('page', '');
   provider.awareness.setLocalStateField('cursor', null);
   provider.awareness.setLocalStateField('selection', []);
   provider.awareness.setLocalStateField('view', null);

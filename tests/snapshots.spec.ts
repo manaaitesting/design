@@ -23,7 +23,14 @@ const PORT = 11_234;
 const ROOM = 'wipe-probe';
 
 let server: ChildProcess;
-let dataDir: string;
+// at module scope, and set into the environment before the history module is
+// imported: it reads the snapshot directory and the sync address once, on load
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paperlike-snap-'));
+process.env.DATA_DIR = dataDir;
+process.env.SYNC_URL = `ws://localhost:${PORT}`;
+process.env.AUTH_SECRET = SECRET;
+
+const history = await import('../src/server/history');
 
 function token(fileId: string, role: 'editor' | 'viewer' = 'editor'): string {
   // the role is inside the signature the sync server checks, which is what
@@ -65,7 +72,6 @@ const snapshots = () => {
 };
 
 test.beforeAll(async () => {
-  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paperlike-snap-'));
   server = spawn('node', ['server/ws.mjs'], {
     env: { ...process.env, AUTH_SECRET: SECRET, SYNC_PORT: String(PORT), DATA_DIR: dataDir },
     stdio: 'pipe',
@@ -149,6 +155,105 @@ test('restoring re-inserts content that a connected client already deleted', asy
 
   await expect.poll(() => store.getSnapshot()[ROOT_ID].children.length).toBe(6);
   provider.destroy();
+});
+
+/**
+ * The timer's snapshots are anonymous: twenty minutes of locale timestamps, and
+ * with two people editing there is nothing to say whose state any of them is.
+ * A version you can find months later is one somebody named.
+ */
+test('a version can be saved deliberately, with a name and an author on it', async () => {
+  const room = 'named-probe';
+  const { store, provider } = await join('editor', room);
+  store.create('rect', ROOT_ID, { name: 'Hero', x: 0, y: 0, w: 40, h: 40 });
+
+  // let the sync server take one of its own first, so the two kinds sit together
+  await expect.poll(() => history.listVersions(room).length, { timeout: 15_000 }).toBe(1);
+
+  const saved = await history.saveVersion(room, {
+    title: 'v2 sent to client',
+    description: 'the hero, before the rewrite',
+    authorId: 'tester',
+    authorName: 'Ada',
+  });
+
+  const versions = history.listVersions(room);
+  expect(versions).toHaveLength(2);
+
+  const named = versions.find((version) => version.stamp === saved.stamp)!;
+  expect(named.title).toBe('v2 sent to client');
+  expect(named.description).toBe('the hero, before the rewrite');
+  expect(named.authorName).toBe('Ada');
+  // it holds the document as it stood, and outlives rotation
+  expect(named.names).toContain('Hero');
+  expect(named.pinned).toBe(true);
+
+  // and the timer's own is still an anonymous timestamp
+  const auto = versions.find((version) => version.stamp !== saved.stamp)!;
+  expect(auto.title).toBeUndefined();
+  expect(auto.authorName).toBeUndefined();
+
+  provider.destroy();
+});
+
+/**
+ * Restoring a version means the file looks like that version, and a file is its
+ * pages. It used to read the children of the hard-coded root page and paste
+ * them straight back into it: pages 2..n were silently dropped, and a snapshot
+ * whose work lived on page two failed outright.
+ */
+test.describe('restoring a multi-page version', () => {
+  /** A room with a layer on each of two pages, snapshotted, then emptied. */
+  async function wiped(room: string) {
+    const { store, provider } = await join('editor', room);
+    const second = store.addPage('Spreads');
+    store.create('rect', ROOT_ID, { name: 'Cover', x: 20, y: 30, w: 40, h: 40 });
+    store.create('rect', second, { name: 'Spread', x: 200, y: 90, w: 40, h: 40 });
+
+    // the first save after a room opens writes a snapshot straight away
+    await expect
+      .poll(() => history.listVersions(room)[0]?.nodes ?? 0, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(4);
+    const stamp = history.listVersions(room)[0].stamp;
+
+    const doc = store.getSnapshot();
+    store.remove([...doc[ROOT_ID].children, ...doc[second].children]);
+    return { store, provider, second, stamp };
+  }
+
+  const childNames = (store: DocStore, page: string) =>
+    (store.getSnapshot()[page]?.children ?? []).map((id) => store.getSnapshot()[id].name);
+
+  test('every page comes back, each into its own page', async () => {
+    const { store, provider, second, stamp } = await wiped('pages-probe');
+
+    const restored = await history.restoreVersion('pages-probe', stamp);
+    expect(restored.layers).toBe(2);
+    expect(restored.pages).toEqual(['Page 1', 'Spreads']);
+
+    await expect.poll(() => childNames(store, second)).toEqual(['Spread']);
+    expect(childNames(store, ROOT_ID)).toEqual(['Cover']);
+    // and back where it was, not dragged to the origin
+    const spread = store.getSnapshot()[store.getSnapshot()[second].children[0]];
+    expect([spread.x, spread.y]).toEqual([200, 90]);
+
+    provider.destroy();
+  });
+
+  test('a page that was deleted comes back rather than emptying into another', async () => {
+    const { store, provider, second, stamp } = await wiped('lost-page-probe');
+    store.removePage(second);
+
+    const restored = await history.restoreVersion('lost-page-probe', stamp);
+    expect(restored.pages).toEqual(['Page 1', 'Spreads']);
+
+    await expect.poll(() => store.listPages().length).toBe(2);
+    const remade = store.listPages().find((id) => id !== ROOT_ID)!;
+    expect(childNames(store, remade)).toEqual(['Spread']);
+    expect(childNames(store, ROOT_ID)).toEqual(['Cover']);
+
+    provider.destroy();
+  });
 });
 
 /**

@@ -23,6 +23,7 @@ import {
   getFileFor,
   getLibraryComponent,
   listLibrary,
+  listMembers,
   publishComponent,
   renameFile,
   setThumbnail,
@@ -40,6 +41,8 @@ import {
   compareVersion,
   listVersions,
   restoreVersion,
+  saveVersion,
+  type Restored,
   type Version,
   type VersionDiff,
 } from './history';
@@ -222,6 +225,25 @@ export async function moveFileAction(fileId: string, folderId: string): Promise<
   revalidatePath('/files');
 }
 
+/**
+ * Who is in this file, for the comment composer's @-picker.
+ *
+ * Presence only knows who is here *now*, and a mention is most often for
+ * someone who is not — so the picker needs the membership, not the room.
+ */
+export async function listMembersAction(
+  fileId: string,
+): Promise<{ id: string; name: string; color: string }[]> {
+  const user = await currentUser();
+  if (!user) return [];
+  if (!getFileFor(fileId, user.id)) return [];
+  return listMembers(fileId).map((member) => ({
+    id: member.id,
+    name: member.name,
+    color: member.color,
+  }));
+}
+
 // ── Version history ──────────────────────────────────────────────────────
 //
 // The sync server keeps snapshots on disk; these put them behind the editor.
@@ -232,6 +254,31 @@ export async function listVersionsAction(fileId: string): Promise<Version[]> {
   if (!user) return [];
   if (!getFileFor(fileId, user.id)) return [];
   return listVersions(fileId);
+}
+
+export async function saveVersionAction(
+  fileId: string,
+  title: string,
+  description: string,
+): Promise<{ version?: Version; error?: string }> {
+  const user = await currentUser();
+  if (!user) return { error: 'Sign in first.' };
+  const file = getFileFor(fileId, user.id);
+  if (!file) return { error: 'You do not have access to that file.' };
+  // a version is a claim about the document, so it belongs to someone who edits it
+  if (!canEdit(roleOf(file.role))) return { error: 'You have view-only access to this file.' };
+
+  try {
+    const version = await saveVersion(fileId, {
+      title: title.trim() || 'Untitled version',
+      description: description.trim() || undefined,
+      authorId: user.id,
+      authorName: user.name,
+    });
+    return { version };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not save that version.' };
+  }
 }
 
 export async function compareVersionAction(
@@ -247,7 +294,7 @@ export async function compareVersionAction(
 export async function restoreVersionAction(
   fileId: string,
   stamp: string,
-): Promise<{ restored?: number; error?: string }> {
+): Promise<{ restored?: Restored; error?: string }> {
   const user = await currentUser();
   if (!user) return { error: 'Sign in first.' };
   const file = getFileFor(fileId, user.id);
