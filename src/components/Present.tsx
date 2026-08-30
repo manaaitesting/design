@@ -79,6 +79,8 @@ export function Present() {
   const pageId = useUI((s) => s.page);
   const chosen = useUI((s) => s.device);
   const setDevice = useUI((s) => s.setDevice);
+  const presentScale = useUI((s) => s.presentScale);
+  const setPresentScale = useUI((s) => s.setPresentScale);
 
   const [stack, setStack] = useState<string[]>([]);
   /** overlays sitting on top of the frame, innermost last */
@@ -457,6 +459,16 @@ export function Present() {
         setMove(null);
         return;
       }
+      // Figma's scaling keys, checked after the layer bindings above so a
+      // designer's own trigger on ⇧1 still wins. The physical key, because ⇧1
+      // arrives as "!" — the same reason the canvas's zoom keys match `code`.
+      if (event.shiftKey && (event.code === 'Digit1' || event.code === 'Digit2' || event.code === 'Digit0')) {
+        event.preventDefault();
+        useUI
+          .getState()
+          .setPresentScale(event.code === 'Digit1' ? 'fit' : event.code === 'Digit2' ? 'fill' : 'actual');
+        return;
+      }
       // the arrow keys walk the flow, the way Figma's presentation does
       if (event.key === 'ArrowLeft') setStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
       if (event.key === 'ArrowRight') {
@@ -499,10 +511,18 @@ export function Present() {
 
   if (!presenting || !frame) return null;
 
-  const scale = Math.min(
-    1,
-    Math.min((size.w - MARGIN * 2) / frame.w, (size.h - MARGIN * 2 - 44) / frame.h),
-  );
+  /**
+   * How big the artwork is drawn, which is now a choice rather than a clamp.
+   *
+   * Fit uses the smaller ratio and is allowed to magnify — a phone frame on a
+   * large display used to be a small rectangle in the middle of it, because the
+   * ratio was capped at 1. Fill takes the larger one and lets the stage clip.
+   * Actual is 1:1, which is what you want when you are checking type.
+   */
+  const across = (size.w - MARGIN * 2) / frame.w;
+  const down = (size.h - MARGIN * 2 - 44) / frame.h;
+  const scale =
+    presentScale === 'actual' ? 1 : presentScale === 'fill' ? Math.max(across, down) : Math.min(across, down);
 
   /** A gesture on the artwork: find what it hit, then do what that says. */
   const fire = (event: React.PointerEvent, trigger: Interaction['trigger']) => {
@@ -554,6 +574,17 @@ export function Present() {
         >
           <Icon.Reset />
         </button>
+        <select
+          className="fig-present-device"
+          value={presentScale}
+          title="Scaling  ⇧1 fit · ⇧2 fill · ⇧0 actual"
+          aria-label="Scaling"
+          onChange={(event) => setPresentScale(event.target.value as 'fit' | 'fill' | 'actual')}
+        >
+          <option value="fit">Fit to screen</option>
+          <option value="fill">Fill screen</option>
+          <option value="actual">Actual size</option>
+        </select>
         <select
           className="fig-present-device"
           value={device}

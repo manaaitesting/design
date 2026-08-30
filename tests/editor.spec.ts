@@ -2573,11 +2573,15 @@ test.describe('prototype', () => {
     const screen = (await page.locator('.fig-present-screen').boundingBox())!;
     const child = (await page.locator(`.fig-present [data-node-id="${heading}"]`).boundingBox())!;
 
-    // the artboard's world position must not leak into playback: the heading
-    // sits 40px inside the screen, not 740px off the side of it
-    expect(child.x - screen.x).toBeGreaterThan(20);
-    expect(child.x - screen.x).toBeLessThan(80);
-    expect(child.y - screen.y).toBeGreaterThan(20);
+    // The artboard's world position must not leak into playback: the heading
+    // sits 40px inside the screen, not 740px off the side of it. Measured
+    // against the scale the stage is actually drawing at, which since the
+    // scaling row is a choice rather than a clamp is no longer always 1:1 —
+    // 40 world px is 40 × scale on screen.
+    const scale = screen.width / 600;
+    expect(child.x - screen.x).toBeGreaterThan(20 * scale);
+    expect(child.x - screen.x).toBeLessThan(80 * scale);
+    expect(child.y - screen.y).toBeGreaterThan(20 * scale);
   });
 
   test('Escape closes the player and leaves the document alone', async ({ page }) => {

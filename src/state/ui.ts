@@ -334,6 +334,17 @@ export interface UIState {
   device: PrototypeDevice;
   setDevice: (device: PrototypeDevice) => void;
 
+  /**
+   * How the presentation fits its frame to the window.
+   *
+   * Figma's scaling menu, which it remembers: fit shrinks *or magnifies* to the
+   * window, fill covers it and clips, actual is 1:1. The stage used to be
+   * hard-clamped to shrink-only, so a phone prototype on a large display was
+   * always a small rectangle in the middle of it.
+   */
+  presentScale: 'fit' | 'fill' | 'actual';
+  setPresentScale: (scale: 'fit' | 'fill' | 'actual') => void;
+
   /** the page currently on the canvas */
   page: string;
   setPage: (id: string) => void;
@@ -830,6 +841,9 @@ export const useUI = create<UIState>((set) => ({
 
   device: 'none',
   setDevice: (device) => set({ device }),
+
+  presentScale: 'fit',
+  setPresentScale: (presentScale) => set({ presentScale }),
 
   page: 'root',
   setPage: (page) => set({ page, selection: [], entered: null, editing: null }),

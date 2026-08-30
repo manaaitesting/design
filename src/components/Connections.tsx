@@ -115,13 +115,20 @@ export function Connections({ containerRef }: { containerRef: RefObject<HTMLDivE
           const to = rects[link.to];
           if (!from || !to) return null;
           const { sx, sy, tx, ty, dir } = anchors(from, to);
+          // An overlay is a layer over what you were looking at rather than a
+          // move to somewhere else, and a scroll-to stays on the same board —
+          // Figma draws both, and drawing them all alike would say they are the
+          // same thing. A dash is the difference.
+          const action = link.interaction.action;
+          const dashed = action === 'open-overlay' || action === 'swap-overlay' || action === 'scroll-to';
           return (
-            <g key={`${link.from}:${link.interaction.id}`}>
+            <g key={`${link.from}:${link.interaction.id}`} data-connection={action}>
               <path
                 d={noodle(sx, sy, tx, ty, dir)}
                 fill="none"
                 stroke={BLUE}
                 strokeWidth={1.5}
+                strokeDasharray={dashed ? '5 3' : undefined}
                 markerEnd="url(#proto-arrow)"
               />
               <circle cx={sx} cy={sy} r={3.5} fill="#fff" stroke={BLUE} strokeWidth={1.5} />
@@ -203,7 +210,9 @@ export function Connections({ containerRef }: { containerRef: RefObject<HTMLDivE
       {/* Figma offers the starting point on the frame you have selected */}
       {selection.length === 1 &&
         doc[selection[0]]?.type === 'frame' &&
-        doc[doc[selection[0]].parent ?? '']?.type === 'page' &&
+        // a board inside a section is a board: the section organises the flows
+        // on a page, it does not take boards out of them
+        ['page', 'section'].includes(doc[doc[selection[0]].parent ?? '']?.type ?? '') &&
         !doc[selection[0]].flowStart &&
         rects[selection[0]] && (
           <button
@@ -227,13 +236,25 @@ export function Connections({ containerRef }: { containerRef: RefObject<HTMLDivE
   );
 }
 
-/** The artboard under the pointer, which is all a connection can land on. */
+/**
+ * The artboard under the pointer, which is all a connection can land on.
+ *
+ * It climbs to the outermost frame rather than to a child of the page, because
+ * a board inside a section is still a board — the section is where flows are
+ * organised, not a place boards go to stop being destinations.
+ */
 function frameUnder(clientX: number, clientY: number, doc: Doc, pageId: string): string | null {
   const el = document
     .elementsFromPoint(clientX, clientY)
     .find((node) => (node as HTMLElement).dataset?.nodeId) as HTMLElement | undefined;
   if (!el) return null;
   let current = doc[el.dataset.nodeId!];
-  while (current && current.parent && current.parent !== pageId) current = doc[current.parent];
-  return current && current.parent === pageId && current.type === 'frame' ? current.id : null;
+  while (current?.parent) {
+    const parent = doc[current.parent];
+    if (!parent || parent.id === pageId || parent.type === 'page' || parent.type === 'section') break;
+    current = parent;
+  }
+  if (!current || current.type !== 'frame') return null;
+  const parent = current.parent ? doc[current.parent] : null;
+  return parent && (parent.id === pageId || parent.type === 'section') ? current.id : null;
 }

@@ -113,6 +113,8 @@ declare global {
         removeComment(id: string): void;
         listPages(): string[];
         addPage(name?: string): string;
+        wrapInSection(ids: string[]): string | null;
+        movePage(id: string, to: number): void;
         duplicatePage(id: string): string | null;
         removePage(id: string): void;
         moveToPage(ids: string[], pageId: string): string[];

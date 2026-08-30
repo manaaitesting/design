@@ -970,7 +970,11 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
 
   const flows = flowsOn(doc, pageId);
   const frames = destinationsOn(doc, pageId);
-  const isFrame = node?.type === 'frame' && doc[node.parent ?? '']?.type === 'page';
+  // a board in a section is still a board: it can start a flow and carry a
+  // timeline, and only the prototype surface ever thought otherwise
+  const parentOfNode = node?.parent ? doc[node.parent] : null;
+  const isFrame =
+    node?.type === 'frame' && (parentOfNode?.type === 'page' || parentOfNode?.type === 'section');
   const interactions = interactionsOf(node);
 
   return (
