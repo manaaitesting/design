@@ -9,9 +9,15 @@ import { pageOf, pagePoint, ROOT_ID, type Doc } from '../document/types';
  * so it lives here rather than in whichever component happened to need it first.
  */
 
-/** World-space bounding box of everything on the page. */
-export function contentBounds(doc: Doc) {
-  const page = doc[ROOT_ID];
+/**
+ * World-space bounding box of everything on a page.
+ *
+ * `doc` is the whole document, every page's nodes in one map, so the page has
+ * to be named — reading the first one measured Page 1's layers however far
+ * away you had navigated.
+ */
+export function contentBounds(doc: Doc, pageId: string) {
+  const page = doc[pageId] ?? doc[ROOT_ID];
   const kids = (page?.children ?? []).map((id) => doc[id]).filter(Boolean);
   if (!kids.length) return null;
   return {
@@ -44,12 +50,13 @@ export function selectionBounds(ids: string[], doc: Doc): Bounds | null {
 /** Viewport that centres the page's content in the canvas area. */
 export function fitView(
   doc: Doc,
+  pageId: string,
   leftPanel: boolean,
   leftWidth: number,
   rightWidth: number,
   maxZoom?: number,
 ) {
-  const bounds = contentBounds(doc);
+  const bounds = contentBounds(doc, pageId);
   if (!bounds) return null;
   return fitBounds(bounds, leftPanel, leftWidth, rightWidth, maxZoom);
 }

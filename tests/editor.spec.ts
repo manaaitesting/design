@@ -4718,6 +4718,45 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 
+  test('⇧1 fits the page you are looking at, not the first one', async ({ page }) => {
+    const other = await page.evaluate(() => {
+      const id = window.paperlike!.store.addPage('Fit Elsewhere');
+      window.paperlike!.store.commit();
+      return id;
+    });
+    const id = await page.evaluate((parent) => {
+      const made = window.paperlike!.store.create('rect', parent, {
+        name: 'OnTheSecondPage',
+        x: 3200,
+        y: 2600,
+        w: 200,
+        h: 150,
+        fill: '#4CC3F0',
+      });
+      window.paperlike!.store.commit();
+      return made;
+    }, other);
+    await page.evaluate((id) => window.paperlike!.ui.getState().setPage(id), other);
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+    await expect(page.locator(`[data-node-id="${id}"]`)).toBeAttached();
+
+    await page.keyboard.press('Shift+1');
+
+    // fit used to measure Page 1's layers whatever page you were on
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThan(0);
+    expect(box!.y).toBeGreaterThan(0);
+    expect(box!.x + box!.width).toBeLessThan(page.viewportSize()!.width);
+
+    await page.evaluate(() => {
+      const ui = window.paperlike!.ui.getState();
+      ui.setPage(window.paperlike!.store.listPages()[0]);
+      ui.setViewport({ x: 0, y: 0, zoom: 1 });
+    });
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), other);
+  });
+
   test('⇧2 on something small magnifies it rather than stopping at 100%', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'TinyIcon', x: 1800, y: 1200, w: 24, h: 24 });
     await select(page, [id]);

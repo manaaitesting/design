@@ -225,7 +225,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
     framed.current = true;
     // fitting magnifies now, but an opening view that greets you at 40× on a
     // file holding one small layer reads as broken rather than as helpful
-    const fitted = fitView(doc, leftPanel, leftWidth, rightWidth, 1);
+    const fitted = fitView(doc, useUI.getState().page, leftPanel, leftWidth, rightWidth, 1);
     if (fitted) useUI.getState().setViewport(fitted);
   }, [doc, leftPanel, leftWidth, rightWidth, room, store]);
 
@@ -879,7 +879,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
       if (event.key === '1' && (mod || event.shiftKey)) {
         event.preventDefault();
-        const fitted = fitView(doc, leftPanel, ui.leftWidth, ui.rightWidth);
+        const fitted = fitView(doc, ui.page, leftPanel, ui.leftWidth, ui.rightWidth);
         if (fitted) ui.setViewport(fitted);
         return;
       }
