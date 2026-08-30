@@ -36,6 +36,7 @@ import {
   stepFontSize,
   TEXT_ALIGN_KEYS,
 } from '../lib/actions';
+import { measureChildren } from '../lib/measure';
 import { download, safeFilename } from '../export/raster';
 import { toTailwind } from '../export/tailwind';
 
@@ -756,7 +757,25 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         return;
       }
 
-      if (event.shiftKey && event.key.toLowerCase() === 'a' && selection.length) {
+      // ⌥⇧A takes auto layout back off, which is how Figma pairs it with ⇧A:
+      // you try a layout on and take it off again without going to the panel.
+      // Checked first — ⇧A never tested ⌥, so on a platform where ⌥ leaves the
+      // character alone it wrapped the frame in a second auto layout instead.
+      if (!mod && event.altKey && event.shiftKey && event.code === 'KeyA' && selection.length) {
+        const laid = selection.filter((id) => doc[id]?.flex);
+        if (laid.length) {
+          event.preventDefault();
+          // dropping the layout has to leave the children where they look, and
+          // only the browser knows where that is — the same measurement the
+          // inspector's own "no layout" makes
+          for (const id of laid) {
+            store.setAutoLayout(id, false, { measured: measureChildren(id, ui.viewport.zoom) });
+          }
+          store.commit();
+          return;
+        }
+      }
+      if (!event.altKey && event.shiftKey && event.key.toLowerCase() === 'a' && selection.length) {
         event.preventDefault();
         const id = store.autoLayoutSelection(selection);
         if (id) select([id]);
