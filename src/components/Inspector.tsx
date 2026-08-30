@@ -272,7 +272,7 @@ export function Inspector() {
               {node.shader && <ShaderSection node={node} set={set} />}
               {node.type !== 'shader' && <FillSection node={node} nodes={nodes} set={set} />}
               <StrokeSection node={node} nodes={nodes} set={set} />
-              <EffectsSection node={node} set={set} />
+              <EffectsSection node={node} nodes={nodes} set={set} />
               <SelectionColors />
               {node.type === 'frame' && <GuidesSection node={node} set={set} />}
               {node.type === 'frame' && <VideoSection node={node} set={set} />}

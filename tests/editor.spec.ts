@@ -3162,6 +3162,39 @@ test.describe('effects', () => {
     await removeNodes(page, [id]);
   });
 
+  test("effects the selected layers disagree on read Mixed, not the first layer's list", async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'Dropped', x: 700, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      const b = store.create('rect', 'root', { name: 'Blurred', x: 800, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      const c = store.create('rect', 'root', { name: 'Dropped too', x: 900, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      store.commit();
+      return [a, b, c];
+    });
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Effects$/ }),
+    });
+
+    await select(page, [ids[0]]);
+    await addEffect(page, 'Drop shadow');
+    await select(page, [ids[1]]);
+    await addEffect(page, 'Layer blur');
+    await select(page, [ids[2]]);
+    await addEffect(page, 'Drop shadow');
+
+    await select(page, [ids[0], ids[1]]);
+    await expect(section).toContainText('Click + to replace mixed content');
+    // with no row there is nothing to nudge, so the blur is still a blur
+    await expect(section.getByTitle('Drop shadow settings')).toHaveCount(0);
+    expect((await doc(page))[ids[1]].effects![0].type).toBe('layer-blur');
+
+    // two shadows built the same way are the same shadow, whatever their ids
+    await select(page, [ids[0], ids[2]]);
+    await expect(section.getByTitle('Drop shadow settings')).toBeVisible();
+
+    await removeNodes(page, ids);
+  });
+
   test('the eye keeps an effect but takes it off the layer', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'Hidden', x: 40, y: 500, w: 200, h: 140, fill: '#FFFFFF' });
     await select(page, [id]);

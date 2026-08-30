@@ -13,7 +13,14 @@ import {
   FigSection,
   FigSelect,
 } from './ui/Figma';
-import { EFFECT_LABEL, EFFECT_MENU, EFFECT_PRESETS, effectsOf, newEffect } from '../document/effects';
+import {
+  EFFECT_LABEL,
+  EFFECT_MENU,
+  EFFECT_PRESETS,
+  effectsOf,
+  newEffect,
+  sameEffects,
+} from '../document/effects';
 import { defaultParams, SHADER_BY_ID, SHADERS } from '../webgl/shaders';
 import type { Effect, EffectType, SceneNode } from '../document/types';
 
@@ -41,12 +48,19 @@ const TINTED: EffectType[] = ['inner-shadow', 'drop-shadow', 'noise', 'shader'];
  */
 export function EffectsSection({
   node,
+  nodes,
   set,
 }: {
   node: SceneNode;
+  nodes: SceneNode[];
   set: (patch: Partial<SceneNode>) => void;
 }) {
   const effects = effectsOf(node);
+  // Every write here is a whole list, applied to the whole selection. So when
+  // the selected layers disagree, showing the first one's effects would invite
+  // you to stamp it over the rest by nudging a blur — Fill says "Mixed" for the
+  // same reason, and + still replaces the lot.
+  const mixed = nodes.length > 1 && !nodes.every((entry) => sameEffects(effectsOf(entry), effects));
   const [openId, setOpenId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [styling, setStyling] = useState(false);
@@ -82,7 +96,7 @@ export function EffectsSection({
   return (
     <FigSection
       title="Effects"
-      empty={!effects.length}
+      empty={!mixed && !effects.length}
       actions={
         <span ref={setStyleAnchor} style={{ display: 'inline-flex' }}>
           <FigButton title="Effects, apply styles" on={styling} onClick={() => setStyling((v) => !v)}>
@@ -143,20 +157,26 @@ export function EffectsSection({
         </span>
       }
     >
-      {effects.map((effect) => (
-        <EffectRow
-          key={effect.id}
-          effect={effect}
-          open={openId === effect.id}
-          onOpen={() => setOpenId((id) => (id === effect.id ? null : effect.id))}
-          onClose={() => setOpenId(null)}
-          onChange={(delta) => patch(effect.id, delta)}
-          onRemove={() => {
-            write(effects.filter((other) => other.id !== effect.id));
-            setOpenId(null);
-          }}
-        />
-      ))}
+      {mixed ? (
+        <div style={{ color: 'var(--fig-dim)', padding: '0 2px 4px' }}>
+          Click + to replace mixed content
+        </div>
+      ) : (
+        effects.map((effect) => (
+          <EffectRow
+            key={effect.id}
+            effect={effect}
+            open={openId === effect.id}
+            onOpen={() => setOpenId((id) => (id === effect.id ? null : effect.id))}
+            onClose={() => setOpenId(null)}
+            onChange={(delta) => patch(effect.id, delta)}
+            onRemove={() => {
+              write(effects.filter((other) => other.id !== effect.id));
+              setOpenId(null);
+            }}
+          />
+        ))
+      )}
     </FigSection>
   );
 }
