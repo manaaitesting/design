@@ -2816,14 +2816,14 @@ test.describe('export section', () => {
 });
 
 test.describe('sections', () => {
-  test('⇧S puts the selection on a board without moving it', async ({ page }) => {
+  test('⌘S puts the selection on a board without moving it', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     const before = await page.locator(`[data-node-id="${board!.id}"]`).boundingBox();
 
     await select(page, [board!.id]);
     await page.locator('.canvas-root, body').first().click({ position: { x: 5, y: 5 } });
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
 
     const section = (await selection(page))[0];
     const nodes = await doc(page);
@@ -2836,10 +2836,57 @@ test.describe('sections', () => {
     expect(after!.y).toBeCloseTo(before!.y, 0);
   });
 
+  /**
+   * ⇧S is the Section *tool* in Figma — "click and drag the location of the
+   * canvas where you'd like the section to go" — and ⌘S is what wraps a
+   * selection in one. This canvas had ⌘S's behaviour on ⇧S's key, and so no way
+   * to draw an empty section at all.
+   */
+  test('⇧S arms the section tool, and a drag draws one', async ({ page }) => {
+    await select(page, []);
+    await page.keyboard.press('Shift+S');
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('section');
+
+    await dragBy(page, { x: 900, y: 620 }, { x: 240, y: 160 });
+    const drawn = (await doc(page))[(await selection(page))[0]];
+    expect(drawn.type).toBe('section');
+    expect([drawn.w, drawn.h]).toEqual([240, 160]);
+    // it holds nothing: there was nothing under it
+    expect(drawn.children).toEqual([]);
+    // and the tool stands down once the section is made
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+    await removeNodes(page, [drawn.id]);
+  });
+
+  test('a section drawn over boards takes in the ones it covers whole', async ({ page }) => {
+    const { inside, across } = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('frame', 'root', { name: 'Inside', x: 800, y: 560, w: 120, h: 80, fill: '#FFFFFF' });
+      const b = store.create('frame', 'root', { name: 'Across', x: 1010, y: 560, w: 200, h: 80, fill: '#FFFFFF' });
+      store.commit();
+      return { inside: a, across: b };
+    });
+
+    await select(page, []);
+    await page.keyboard.press('Shift+S');
+    // the box covers 'Inside' whole and clips through 'Across'
+    await dragBy(page, { x: 1180, y: 640 }, { x: 260, y: 160 });
+
+    const section = (await selection(page))[0];
+    const nodes = await doc(page);
+    expect(nodes[section].children).toEqual([inside]);
+    expect(nodes[across].parent).toBe('root');
+    // the board it took in did not move on screen
+    expect([nodes[inside].x, nodes[inside].y]).toEqual([23, 60]);
+
+    await removeNodes(page, [section, across]);
+  });
+
   test('a section names itself on the canvas, and the label selects it', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
     const section = (await selection(page))[0];
 
     await select(page, []);
@@ -2856,7 +2903,7 @@ test.describe('sections', () => {
   test('a frame inside a section is still what a click selects', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
     await select(page, []);
 
     // clicking a layer inside the artboard selects the artboard, not the section
@@ -2868,7 +2915,7 @@ test.describe('sections', () => {
   test('the export button says Section for one', async ({ page }) => {
     const board = await nodeNamed(page, 'Fixture Board');
     await select(page, [board!.id]);
-    await page.keyboard.press('Shift+S');
+    await page.keyboard.press('Meta+S');
     await expect(page.locator('.fig-export')).toHaveText('Export Section');
   });
 });

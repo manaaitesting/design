@@ -42,6 +42,7 @@ const GROUPS: Entry[][] = [
   ],
   [
     { tool: 'frame', label: 'Frame', shortcut: 'F', icon: <Icon.Frame /> },
+    { tool: 'section', label: 'Section', shortcut: '⇧S', icon: <Icon.Section /> },
     // the shape flyout is spliced in here
     { tool: 'pen', label: 'Pen', shortcut: 'P', icon: <Icon.Pen /> },
     { tool: 'slice', label: 'Slice', shortcut: 'S', icon: <Icon.Slice /> },

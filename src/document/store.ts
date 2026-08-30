@@ -1489,6 +1489,51 @@ export class DocStore {
   }
 
   /**
+   * Everything on the canvas that a freshly drawn section now covers.
+   *
+   * Figma's section tool takes what you drag it over — "click and drag a
+   * section over the objects you want to add to it" — so a section drawn round
+   * three boards holds those three boards. Only what is *wholly* inside counts:
+   * a board the box clips through was not being collected, it was being drawn
+   * across.
+   */
+  adoptIntoSection(sectionId: string): string[] {
+    const section = this.snap[sectionId];
+    if (section?.type !== 'section' || !section.parent) return [];
+    const siblings = this.snap[section.parent]?.children ?? [];
+
+    const taken = siblings.filter((id) => {
+      if (id === sectionId) return false;
+      const node = this.snap[id];
+      if (!node || node.locked) return false;
+      return (
+        node.x >= section.x &&
+        node.y >= section.y &&
+        node.x + node.w <= section.x + section.w &&
+        node.y + node.h <= section.y + section.h
+      );
+    });
+    if (!taken.length) return [];
+
+    this.transact(() => {
+      const kids = this.childrenOf(sectionId);
+      if (!kids) return;
+      for (const id of taken) {
+        const node = this.snap[id];
+        const ymap = this.nodes.get(id);
+        if (!node || !ymap) continue;
+        this.detach(id);
+        ymap.set('parent', sectionId);
+        // rebase onto the section's origin so nothing appears to move
+        ymap.set('x', Math.round(node.x - section.x));
+        ymap.set('y', Math.round(node.y - section.y));
+        kids.push([id]);
+      }
+    });
+    return taken;
+  }
+
+  /**
    * ⌘G — wraps the selection in a transparent frame sized to its bounds.
    * A group is just a frame with no paint of its own, so nothing about the
    * layout model has to know it is special.

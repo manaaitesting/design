@@ -20,6 +20,7 @@ export type Tool =
   | 'pan'
   | 'scale'
   | 'frame'
+  | 'section'
   | 'rect'
   | 'ellipse'
   | 'polygon'

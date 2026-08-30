@@ -39,6 +39,7 @@ import {
 
 const DRAW_TOOLS: Partial<Record<Tool, NodeType>> = {
   frame: 'frame',
+  section: 'section',
   rect: 'rect',
   ellipse: 'ellipse',
   polygon: 'polygon',
@@ -660,6 +661,9 @@ export function Canvas() {
               : null),
           });
           setDraft(null);
+          // a section drawn over boards takes them in, which is what the tool
+          // is for — you draw one around the work, not beside it
+          if (drawType === 'section') store.adoptIntoSection(id);
           select([id]);
           setTool('move');
           if (drawType === 'text') setEditing(id);
