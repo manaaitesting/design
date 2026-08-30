@@ -4170,7 +4170,48 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
       )}
 
       <FigPaintRow color={font.color} alpha={1} onColor={(color) => patch({ color })} />
+      {node.textPath && <PathTypeRow node={node} set={set} />}
     </FigSection>
+  );
+}
+
+/**
+ * The two things there are to say about type on a path: where along the line it
+ * starts, and which side of it the letters sit on.
+ *
+ * Shown only once the text is on a path. Putting it there is a two-layer
+ * command — pick the text and the shape — so it lives in the right-click menu,
+ * beside the other commands that need two things selected.
+ */
+function PathTypeRow({ node, set }: { node: SceneNode; set: Setter }) {
+  const store = useStore();
+  const on = node.textPath!;
+  return (
+    <>
+      <FigLabel>On path</FigLabel>
+      <div className="fig-row" style={{ marginTop: 0 }}>
+        <FigField
+          value={Math.round(on.offset)}
+          glyph={<FigIcon name="Rotation" />}
+          suffix="%"
+          min={0}
+          max={100}
+          title="Start along the path"
+          onChange={(offset) => set({ textPath: { ...on, offset } })}
+        />
+        <FigGroup
+          value={on.side}
+          onChange={(side) => set({ textPath: { ...on, side } })}
+          options={[
+            { value: 'top' as const, label: <Icon.AlignV at="top" />, title: 'Outside the line' },
+            { value: 'bottom' as const, label: <Icon.AlignV at="bottom" />, title: 'Inside the line' },
+          ]}
+        />
+        <FigButton title="Take off the path" onClick={() => store.detachFromPath(node.id)}>
+          <FigIcon name="Remove" />
+        </FigButton>
+      </div>
+    </>
   );
 }
 

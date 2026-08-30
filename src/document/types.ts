@@ -846,6 +846,26 @@ export interface SceneNode {
    * migrating when they arrived. See `document/text`.
    */
   runs?: TextRun[];
+  /**
+   * Figma Draw's "Type on a path": the text runs along another layer's outline
+   * instead of sitting in a box.
+   *
+   * `source` is the layer whose outline is followed. Attaching gives the text
+   * layer that layer's box, so the outline — which is drawn in its own local
+   * coordinates — means the same thing in both, and the glyphs land on the line
+   * rather than beside it.
+   *
+   * A path holds one line: `offset` is how far along it the text starts, as a
+   * percentage, and `side` is which side of the line the glyphs sit on. This is
+   * a relationship between two layers rather than a property of the type, which
+   * is why it is here and not on `font` — a text style or a copied set of
+   * properties must not carry another layer's id onto a second layer.
+   */
+  textPath?: {
+    source: string;
+    offset: number;
+    side: 'top' | 'bottom';
+  } | null;
   font?: FontSpec;
   vAlign?: 'top' | 'middle' | 'bottom';
   underline?: UnderlineSpec | null;

@@ -25,6 +25,8 @@ declare global {
         setFlowStart(id: string, name: string | null): void;
         createInstance(main: string, parent: string, at?: { x: number; y: number }): string | null;
         detachInstance(id: string): void;
+        attachToPath(textId: string, sourceId: string): boolean;
+        detachFromPath(textId: string): void;
         rasterize(id: string, src: string): string | null;
         resetInstance(id: string): void;
         pushToMain(instanceId: string): boolean;

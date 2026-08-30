@@ -6,6 +6,7 @@ import {
   anchorBounds,
   cloneAnchor,
   flattenAnchors,
+  canEditPoints,
   isClosedShape,
   isPathType,
   outlinePaths,
@@ -1486,6 +1487,46 @@ export class DocStore {
       }
     });
     return sectionId;
+  }
+
+  /**
+   * Figma Draw's "Type on a path": puts a text layer on another layer's outline.
+   *
+   * The text takes the path layer's box. The outline is drawn in the path
+   * layer's own local coordinates, so sharing the box is what makes those
+   * coordinates mean the same thing in both — otherwise the glyphs would land
+   * wherever the text box happened to be, which is beside the line rather than
+   * on it.
+   *
+   * The text keeps its own paint and type. Only where it sits changes.
+   */
+  attachToPath(textId: string, sourceId: string): boolean {
+    const text = this.snap[textId];
+    const source = this.snap[sourceId];
+    // any shape whose points can be opened has an outline to offer, which is
+    // the ellipse included — a circle is what most text on a path runs round
+    if (text?.type !== 'text' || !source || !canEditPoints(source.type)) return false;
+    // a layer cannot follow itself, and following a path inside itself is the
+    // same knot by a longer route
+    if (textId === sourceId || descendants(textId, this.snap).includes(sourceId)) return false;
+
+    this.update(textId, {
+      textPath: { source: sourceId, offset: 0, side: 'top' },
+      // the box has to match, and a hugging box would resize away from it
+      x: source.parent === text.parent ? source.x : text.x,
+      y: source.parent === text.parent ? source.y : text.y,
+      w: source.w,
+      h: source.h,
+      wMode: 'fixed',
+      hMode: 'fixed',
+    });
+    return true;
+  }
+
+  /** Takes the text off the path, leaving it where the path had it. */
+  detachFromPath(textId: string): void {
+    if (!this.snap[textId]?.textPath) return;
+    this.update(textId, { textPath: null });
   }
 
   /**

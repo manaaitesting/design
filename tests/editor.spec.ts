@@ -2605,6 +2605,33 @@ test('show/hide, lock/unlock and both flips toggle their flag', async ({ page })
  * real menu rather than the store: a picture of the layer is the whole point,
  * and a store-only test would prove nothing about what was drawn.
  */
+test('Type on path needs a text layer and a shape, and offers to undo itself', async ({ page }) => {
+  const { text, ring } = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const shape = store.create('ellipse', 'root', { name: 'CtxRing', x: 700, y: 500, w: 160, h: 160 });
+    const label = store.create('text', 'root', { name: 'CtxRound', x: 40, y: 900, w: 200, h: 40, text: 'go round' });
+    store.commit();
+    return { text: label, ring: shape };
+  });
+
+  // one layer is not a pair, so the command has nothing to work with
+  await select(page, [text]);
+  await openMenu(page, text);
+  await expect(row(page, 'Type on path')).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  await select(page, [text, ring]);
+  await runOnSelection(page, 'Type on path');
+  await expect.poll(async () => (await doc(page))[text].textPath?.source).toBe(ring);
+
+  // and with the text alone selected again the row is the way back off
+  await select(page, [text]);
+  await runOnSelection(page, 'Take off path');
+  await expect.poll(async () => (await doc(page))[text].textPath ?? null).toBeNull();
+
+  await removeNodes(page, [text, ring]);
+});
+
 test('rasterize replaces a layer with a picture of it, in its place in the stack', async ({ page }) => {
   const board = await makeNode(page, 'frame', {
     name: 'RasterBoard', x: 40, y: 500, w: 300, h: 200, fill: '#FFFFFF', flex: null,

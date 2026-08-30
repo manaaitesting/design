@@ -361,6 +361,23 @@ function Menu({ menu }: { menu: OpenMenu }) {
     if (made.length) select(made);
   }
 
+  /** A text layer already following a path, when that is the whole selection. */
+  const onPath = one && first?.textPath ? first.id : null;
+
+  /**
+   * The pair a "Type on path" needs: exactly one text layer and exactly one
+   * shape whose points can be opened, in either order.
+   */
+  const typeOnPath = (() => {
+    if (selection.length !== 2) return null;
+    const [a, b] = selection.map((id) => doc[id]);
+    if (!a || !b) return null;
+    const text = a.type === 'text' ? a : b.type === 'text' ? b : null;
+    const source = text === a ? b : a;
+    if (!text || text.textPath || !canEditPoints(source.type)) return null;
+    return { text: text.id, source: source.id };
+  })();
+
   const codeItems: Item[] = [
     { label: 'CSS', disabled: !one, run: () => writeText(cssFor(target, doc, false, varNames)) },
     { label: 'CSS (all layers)', disabled: !one, run: () => writeText(cssFor(target, doc, true, varNames)) },
@@ -514,6 +531,18 @@ function Menu({ menu }: { menu: OpenMenu }) {
       disabled: !selection.some((id) => doc[id]?.instanceOf),
       run: () => {
         for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
+        store.commit();
+      },
+    },
+    {
+      label: onPath ? 'Take off path' : 'Type on path',
+      // two layers, one of them text and one with an outline — Figma's own
+      // requirement, and the reason this is a menu command rather than a panel
+      // control: a panel only ever knows about one layer
+      disabled: !onPath && !typeOnPath,
+      run: () => {
+        if (onPath) store.detachFromPath(onPath);
+        else if (typeOnPath) store.attachToPath(typeOnPath.text, typeOnPath.source);
         store.commit();
       },
     },

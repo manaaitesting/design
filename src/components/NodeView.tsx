@@ -19,6 +19,7 @@ import { useUI } from '../state/ui';
  */
 export const SwapContext = createContext<Record<string, string>>({});
 import { paintsWithPath } from '../document/geometry';
+import { pathTextSpec, type PathTextSpec } from '../document/textpath';
 import { maskStyles } from '../document/mask';
 import { modeVars } from '../document/variables';
 import { ensureFont } from '../lib/fonts';
@@ -44,6 +45,58 @@ import type { SceneNode } from '../document/types';
  * inside whichever of those shapes is in play, so a bold word works in a list
  * exactly as it works in a paragraph.
  */
+/**
+ * A text layer that follows a path.
+ *
+ * The glyphs are laid out by the browser along `d`, which is the outline of the
+ * layer the text is attached to, drawn in the same coordinates because
+ * attaching gave the two layers the same box.
+ *
+ * The paint is the type colour rather than a CSS `color`: inside SVG the fill
+ * is what shows, and taking it from the same `font.color` the box layout uses
+ * is what keeps the two renderings of the same layer the same colour.
+ */
+function PathText({ id, node, spec }: { id: string; node: SceneNode; spec: PathTextSpec }) {
+  const font = node.font;
+  const pathId = `${id}-textpath`;
+  return (
+    <svg
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}
+      viewBox={`0 0 ${spec.width} ${spec.height}`}
+      preserveAspectRatio="none"
+      aria-hidden
+    >
+      <defs>
+        <path id={pathId} d={spec.d} />
+      </defs>
+      <text
+        fill={font?.color ?? '#000000'}
+        fontFamily={font?.family}
+        fontSize={font?.size}
+        fontWeight={font?.weight}
+        letterSpacing={font?.letterSpacing ? `${font.letterSpacing}em` : undefined}
+        textAnchor={spec.anchor}
+      >
+        <textPath
+          href={`#${pathId}`}
+          startOffset={spec.startOffset}
+          // SVG 2's `side`, which the browsers draw and React's types have not
+          // caught up with — spreading it is how it reaches the element
+          {...({ side: spec.side } as Record<string, string>)}
+        >
+          {spec.plain
+            ? spec.runs.map((run) => run.text).join('')
+            : spec.runs.map((run, index) => (
+                <tspan key={index} style={runStyle(run, font)}>
+                  {run.text}
+                </tspan>
+              ))}
+        </textPath>
+      </text>
+    </svg>
+  );
+}
+
 function TextBody({ node }: { node: SceneNode }) {
   const font = node.font;
   const spacing = font?.paragraphSpacing ?? 0;
@@ -177,9 +230,10 @@ export const NodeView = memo(function NodeView({
 
   if (node.type === 'text') {
     if (isEditing) return <TextEditor node={node} style={style} />;
+    const onPath = pathTextSpec(node, doc);
     return (
       <div data-node-id={id} style={style}>
-        <TextBody node={node} />
+        {onPath ? <PathText id={id} node={node} spec={onPath} /> : <TextBody node={node} />}
         {overlays}
       </div>
     );

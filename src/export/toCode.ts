@@ -14,6 +14,7 @@ import { effectLayers, effectsOf } from '../document/effects';
 import { booleanClips, paintsWithPath } from '../document/geometry';
 import { booleanOutlinePath } from '../document/boolean';
 import { maskStyles } from '../document/mask';
+import { pathTextSpec, type PathTextSpec } from '../document/textpath';
 import { defaultModes, modeVars, publish, resolveToken } from '../document/variables';
 import type { CSSProperties } from 'react';
 import type { Doc, SceneNode, ShaderSpec } from '../document/types';
@@ -61,6 +62,59 @@ interface Emitted {
  * artboard say the same thing. JSX and HTML disagree about how an inline style
  * is written, so the caller supplies that rather than the two growing apart.
  */
+/**
+ * A text layer that follows a path, as markup.
+ *
+ * The same `pathTextSpec` the canvas draws from, so the exported SVG puts every
+ * letter where the canvas put it. Vector text, and selectable in a browser —
+ * the glyphs are real text, laid out by the same engine.
+ */
+function pathTextMarkup(
+  node: SceneNode,
+  spec: PathTextSpec,
+  className: string,
+  pad: string,
+  mode: 'jsx' | 'html',
+  escape: (value: string) => string,
+  inlineStyle: (declarations: Record<string, string | number>) => string,
+): string {
+  const font = node.font;
+  const id = `${className}-textpath`;
+  const attributes = [
+    `fill="${font?.color ?? '#000000'}"`,
+    font?.family ? `${attrName('fontFamily', mode)}="${escapeAttr(font.family)}"` : '',
+    font?.size ? `${attrName('fontSize', mode)}="${font.size}"` : '',
+    font?.weight ? `${attrName('fontWeight', mode)}="${font.weight}"` : '',
+    font?.letterSpacing ? `${attrName('letterSpacing', mode)}="${font.letterSpacing}em"` : '',
+    `${attrName('textAnchor', mode)}="${spec.anchor}"`,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  const body = spec.plain
+    ? escape(spec.runs.map((run) => run.text).join(''))
+    : spec.runs
+        .map((run) => {
+          const style = runStyle(run, font) as Record<string, string | number>;
+          const inner = escape(run.text);
+          if (!Object.keys(style).length) return inner;
+          return `<tspan ${inlineStyle(style)}>${inner}</tspan>`;
+        })
+        .join('');
+
+  return (
+    `${pad}  <svg ${styleAttr(SVG_LAYER, mode)} viewBox="0 0 ${Math.max(spec.width, 1)} ${Math.max(spec.height, 1)}" ` +
+    `preserveAspectRatio="none">` +
+    `<defs><path id="${id}" d="${spec.d}"/></defs>` +
+    `<text ${attributes}>` +
+    // `startOffset` and `side` are SVG's own spellings and stay as they are in
+    // both modes: SVG has a handful of genuinely camelCase attributes, and
+    // kebab-casing this one silently drops the offset
+    `<textPath href="#${id}" startOffset="${spec.startOffset}" side="${spec.side}">` +
+    `${body}</textPath></text></svg>`
+  );
+}
+
 function textMarkup(
   node: SceneNode,
   escape: (value: string) => string,
@@ -485,6 +539,11 @@ export function toReact(
       .join('\n');
 
     if (node.type === 'text') {
+      const onPath = pathTextSpec(node, doc);
+      if (onPath) {
+        const svg = pathTextMarkup(node, onPath, className, pad, 'jsx', escapeText, jsxStyle);
+        return `${pad}<div className="${className}">\n${[svg, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      }
       const text = linked(node, textMarkup(node, escapeText, jsxStyle), 'jsx');
       if (!overlays) return `${pad}<div className="${className}">${text}</div>`;
       return `${pad}<div className="${className}">\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
@@ -854,6 +913,11 @@ export function toHtml(
       .join('\n');
 
     if (node.type === 'text') {
+      const onPath = pathTextSpec(node, doc);
+      if (onPath) {
+        const svg = pathTextMarkup(node, onPath, slug(node.name, node.id), pad, 'html', (value) => value, htmlStyle);
+        return `${pad}<div ${inline}>\n${[svg, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      }
       const text = linked(node, textMarkup(node, (value) => value, htmlStyle), 'html');
       if (!overlays) return `${pad}<div ${inline}>${text}</div>`;
       return `${pad}<div ${inline}>\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
