@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Icon } from './ui/Icons';
+import { useRects } from './Overlay';
 import { useComments, useSession, useStore } from './Session';
 import { toScreen, useUI } from '../state/ui';
 import { readableOn } from '../lib/color';
+import type { Comment } from '../document/store';
 
 function when(timestamp: number): string {
   const minutes = Math.floor((Date.now() - timestamp) / 60000);
@@ -15,12 +17,30 @@ function when(timestamp: number): string {
 }
 
 /**
- * Comment pins, anchored in world space.
+ * Where a pin sits: on the layer it is about, if that layer is still there.
+ *
+ * Measured from the DOM rather than computed, for the same reason the selection
+ * chrome is — the browser has already resolved auto layout, so a pin on a child
+ * of a reflowed frame lands where the child actually ended up.
+ */
+export function anchorIn(
+  node: string | undefined,
+  clientX: number,
+  clientY: number,
+): Comment['anchor'] {
+  if (!node) return undefined;
+  const box = document.querySelector(`[data-node-id="${node}"]`)?.getBoundingClientRect();
+  if (!box?.width || !box.height) return undefined;
+  return { node, u: (clientX - box.left) / box.width, v: (clientY - box.top) / box.height };
+}
+
+/**
+ * Comment pins, anchored to the layer they were left on.
  *
  * They live in the CRDT alongside the document but outside the undo scope —
  * ⌘Z should rewind your design, never someone else's remark.
  */
-export function Comments() {
+export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElement | null> }) {
   const pageId = useUI((s) => s.page);
   const viewport = useUI((s) => s.viewport);
   const tool = useUI((s) => s.tool);
@@ -37,12 +57,21 @@ export function Comments() {
 
   const all = showResolved ? comments : comments.filter((c) => !c.resolved);
   const visible = shown ? all : [];
+  const rects = useRects(
+    visible.flatMap((comment) => (comment.anchor ? [comment.anchor.node] : [])),
+    containerRef,
+  );
   if (tool !== 'comment' && visible.length === 0) return null;
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 30 }}>
       {visible.map((comment) => {
-        const { x, y } = toScreen(viewport, comment.x, comment.y);
+        // the layer it was left on, if it is still on this page; otherwise the
+        // point it was dropped at, so a remark outlives the thing it was about
+        const rect = comment.anchor && rects[comment.anchor.node];
+        const { x, y } = rect
+          ? { x: rect.x + rect.w * comment.anchor!.u, y: rect.y + rect.h * comment.anchor!.v }
+          : toScreen(viewport, comment.x, comment.y);
         const open = openId === comment.id;
         return (
           <div key={comment.id} style={{ position: 'absolute', left: x, top: y }}>
@@ -263,7 +292,7 @@ export function CommentComposer({
   at,
   onDone,
 }: {
-  at: { x: number; y: number };
+  at: { x: number; y: number; anchor?: Comment['anchor'] };
   onDone: () => void;
 }) {
   const viewport = useUI((s) => s.viewport);
@@ -288,6 +317,7 @@ export function CommentComposer({
         page: pageId,
         x: at.x,
         y: at.y,
+        anchor: at.anchor,
         authorId: identity.id,
         authorName: identity.name,
         authorColor: identity.color,

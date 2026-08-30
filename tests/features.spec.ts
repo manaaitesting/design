@@ -2464,6 +2464,62 @@ test.describe('flex handles', () => {
 });
 
 /**
+ * Comments.
+ *
+ * A remark is about something, and the something moves. These go through the
+ * real comment tool rather than the store, because what is being checked is
+ * where the pin ends up on screen.
+ */
+test.describe('comments', () => {
+  /** Leaves a comment by clicking at a screen point, as a reviewer does. */
+  async function leaveComment(page: Page, at: { x: number; y: number }, body: string) {
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('comment'));
+    await page.mouse.click(at.x, at.y);
+    await page.getByPlaceholder('Leave a comment…').fill(body);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.fig-pin')).toHaveCount(1);
+  }
+
+  const clearComments = (page: Page) =>
+    page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const here = window.paperlike!.ui.getState().page;
+      for (const comment of store.listComments(here)) store.removeComment(comment.id);
+    });
+
+  test('a pin travels with the layer it was left on', async ({ page }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'this crop is tight');
+
+    const before = (await page.locator('.fig-pin').boundingBox())!;
+    await page.evaluate((id) => window.paperlike!.store.update(id, { x: 140 }), cover.id);
+
+    await expect
+      .poll(async () => Math.round((await page.locator('.fig-pin').boundingBox())!.x - before.x))
+      .toBe(100);
+
+    await clearComments(page);
+  });
+
+  test('a pin left on empty canvas stays where it was dropped', async ({ page }) => {
+    const board = (await nodeNamed(page, 'Fixture Board'))!;
+    const box = (await page.locator(`[data-node-id="${board.id}"]`).boundingBox())!;
+    // well clear of the board, so nothing is under the click
+    await leaveComment(page, { x: box.x + box.width + 200, y: box.y + 40 }, 'nothing here');
+
+    const anchored = await page.evaluate(
+      () =>
+        window.paperlike!.store.listComments(window.paperlike!.ui.getState().page)[0]?.anchor ??
+        null,
+    );
+    expect(anchored).toBeNull();
+
+    await clearComments(page);
+  });
+});
+
+/**
  * Presence is scoped to a page.
  *
  * Every page in a file draws into the same world space, so until awareness

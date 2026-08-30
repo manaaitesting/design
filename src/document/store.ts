@@ -294,8 +294,15 @@ function same(a: SceneNode | undefined, b: SceneNode): boolean {
 export interface Comment {
   id: string;
   page: string;
+  /** where it was dropped, and where it stays if its layer is gone */
   x: number;
   y: number;
+  /**
+   * The layer it is about, and where inside it — 0..1 of the layer's box on
+   * each axis. A remark points at something, so the pin has to travel when that
+   * something moves, resizes or reflows.
+   */
+  anchor?: { node: string; u: number; v: number };
   authorId: string;
   authorName: string;
   authorColor: string;

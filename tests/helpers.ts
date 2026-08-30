@@ -100,6 +100,15 @@ declare global {
             entries(): Iterable<[string, unknown]>;
           };
         };
+        listComments(page: string): {
+          id: string;
+          body: string;
+          resolved: boolean;
+          anchor?: { node: string; u: number; v: number };
+          replies: { body: string }[];
+        }[];
+        addComment(comment: Record<string, unknown>): string;
+        removeComment(id: string): void;
         listPages(): string[];
         addPage(name?: string): string;
         duplicatePage(id: string): string | null;
