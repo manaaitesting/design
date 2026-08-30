@@ -493,7 +493,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           const near = nearestEdge(edge, candidates, 'x', tolerance);
           if (near) {
             w = Math.max(1, Math.round(ex > 0 ? near.at - origin.x : origin.x + startW - near.at));
-            guides.push({ axis: 'x', at: near.at, from: near.other.y, to: near.other.y + near.other.h });
+            guides.push({ kind: 'align', axis: 'x', at: near.at, from: near.other.y, to: near.other.y + near.other.h });
           }
         }
         if (ey) {
@@ -501,7 +501,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           const near = nearestEdge(edge, candidates, 'y', tolerance);
           if (near) {
             h = Math.max(1, Math.round(ey > 0 ? near.at - origin.y : origin.y + startH - near.at));
-            guides.push({ axis: 'y', at: near.at, from: near.other.x, to: near.other.x + near.other.w });
+            guides.push({ kind: 'align', axis: 'y', at: near.at, from: near.other.x, to: near.other.x + near.other.w });
           }
         }
       }
@@ -601,6 +601,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
 
       {/* alignment guides, in Figma's red, drawn in screen space */}
       {guides.map((guide, index) => {
+        if (guide.kind === 'gap') return null;
         const start = toScreen(viewport, guide.axis === 'x' ? guide.at : guide.from, guide.axis === 'x' ? guide.from : guide.at);
         const end = toScreen(viewport, guide.axis === 'x' ? guide.at : guide.to, guide.axis === 'x' ? guide.to : guide.at);
         return (
@@ -615,6 +616,62 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               background: '#FF3B30',
             }}
           />
+        );
+      })}
+
+      {/* the spaces a spacing snap took, each measured — the bar has a serif at
+          either end so it reads as a span rather than as one more alignment */}
+      {guides.map((guide, index) => {
+        if (guide.kind !== 'gap') return null;
+        const horizontal = guide.axis === 'x';
+        const a = toScreen(viewport, horizontal ? guide.from : guide.at, horizontal ? guide.at : guide.from);
+        const b = toScreen(viewport, horizontal ? guide.to : guide.at, horizontal ? guide.at : guide.to);
+        const length = horizontal ? b.x - a.x : b.y - a.y;
+        return (
+          <div key={`gap-${index}`}>
+            <div
+              data-gap-guide={guide.axis}
+              style={{
+                position: 'absolute',
+                left: a.x,
+                top: a.y,
+                width: horizontal ? length : 1,
+                height: horizontal ? 1 : length,
+                background: '#FF3B30',
+              }}
+            />
+            {[a, b].map((end, side) => (
+              <div
+                key={side}
+                style={{
+                  position: 'absolute',
+                  left: horizontal ? end.x : end.x - 3,
+                  top: horizontal ? end.y - 3 : end.y,
+                  width: horizontal ? 1 : 7,
+                  height: horizontal ? 7 : 1,
+                  background: '#FF3B30',
+                }}
+              />
+            ))}
+            <span
+              data-gap-label={guide.axis}
+              style={{
+                position: 'absolute',
+                left: horizontal ? a.x + length / 2 : a.x + 6,
+                top: horizontal ? a.y - 9 : a.y + length / 2 - 8,
+                transform: horizontal ? 'translateX(-50%)' : undefined,
+                fontSize: 10,
+                fontWeight: 500,
+                color: '#fff',
+                background: '#FF3B30',
+                borderRadius: 3,
+                padding: '1px 5px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {Math.round(guide.to - guide.from)}
+            </span>
+          </div>
         );
       })}
 

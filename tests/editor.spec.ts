@@ -1162,6 +1162,59 @@ test('dragging snaps to a sibling edge', async ({ page }) => {
   await removeNodes(page, [anchor, mover]);
 });
 
+/**
+ * Alignment is half of what smart guides do; spacing is the other half. Figma
+ * users space a row by dragging until the numbers read the same, so the snap
+ * has to take an even arrangement and say what it took.
+ */
+test('a drag snaps to match the space its neighbours already hold, and says so', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const a = await makeNode(page, 'rect', { name: 'GapA', x: 4105, y: 4000, w: 100, h: 80, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'GapB', x: 4305, y: 4000, w: 100, h: 80, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'GapC', x: 4700, y: 4000, w: 100, h: 80, fill: '#F2637F' });
+  await select(page, [c]);
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // five world px short of an even row — inside the threshold, so it should take
+  for (const step of [0.25, 0.5, 0.75, 1]) await page.mouse.move(from.x - 190 * step, from.y);
+
+  // both spaces are drawn, and both carry the measurement
+  await expect(page.locator('[data-gap-guide="x"]')).toHaveCount(2);
+  await expect(page.locator('[data-gap-label="x"]').first()).toHaveText('100');
+
+  await page.mouse.up();
+  expect((await doc(page))[c].x).toBe(4505);
+  await expect(page.locator('[data-gap-guide="x"]')).toHaveCount(0);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [a, b, c]);
+});
+
+test('a layer dropped between two others evens the space either side of it', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const a = await makeNode(page, 'rect', { name: 'EvenA', x: 4105, y: 4200, w: 100, h: 80, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'EvenB', x: 4705, y: 4200, w: 100, h: 80, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'EvenC', x: 4600, y: 4200, w: 100, h: 80, fill: '#F2637F' });
+  await select(page, [c]);
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await dragBy(page, from, { x: -190, y: 0 });
+
+  // 4405 leaves 200 on each side, where the drag alone would have left 205 and 195
+  expect((await doc(page))[c].x).toBe(4405);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [a, b, c]);
+});
+
 test('holding the snap-bypass modifier lets a drag land off the guide', async ({ page }) => {
   const anchor = await makeNode(page, 'rect', { name: 'FreeAnchor', x: 40, y: 500, w: 120, h: 80, fill: '#4CC3F0' });
   const mover = await makeNode(page, 'rect', { name: 'FreeMover', x: 40, y: 620, w: 120, h: 80, fill: '#F2637F' });
