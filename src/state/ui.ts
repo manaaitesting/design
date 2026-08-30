@@ -363,6 +363,21 @@ export interface UIState {
   setPaletteOpen: (open: boolean) => void;
 
   /**
+   * ⌃⇧? — the shortcuts panel, and the chords it has seen you press.
+   *
+   * Figma lights a key the first time you use it, which turns the panel from a
+   * list into a record of what you have learned. `usedShortcuts` is that
+   * record; it survives a reload, because a progress marker that resets every
+   * session is not one.
+   */
+  shortcutsOpen: boolean;
+  setShortcutsOpen: (open: boolean) => void;
+  usedShortcuts: string[];
+  markShortcut: (chord: string) => void;
+  /** for the test that has to start from nothing learned */
+  resetUsedShortcuts: () => void;
+
+  /**
    * Observation. `following` is the awareness client id whose viewport we are
    * mirroring; `spotlight` is the other direction — everyone follows us.
    */
@@ -480,6 +495,25 @@ function fitPanel(width: number, bounds: PanelBounds, otherWidth: number): numbe
 }
 
 const PANEL_KEY = 'paperlike:panels';
+const USED_KEY = 'paperlike:shortcuts';
+
+function persistUsedShortcuts(used: string[]): void {
+  try {
+    localStorage.setItem(USED_KEY, JSON.stringify(used));
+  } catch {
+    // a tick beside a shortcut is not worth breaking a keypress over
+  }
+}
+
+function readUsedShortcuts(): string[] {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(USED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed.filter((chord): chord is string => typeof chord === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Storage is unavailable in private windows and blocked by some settings. */
 function persistPanels(leftWidth: number, rightWidth: number, pagesHeight: number): void {
@@ -798,6 +832,21 @@ export const useUI = create<UIState>((set) => ({
 
   paletteOpen: false,
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+
+  shortcutsOpen: false,
+  setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  usedShortcuts: readUsedShortcuts(),
+  markShortcut: (chord) =>
+    set((state) => {
+      if (state.usedShortcuts.includes(chord)) return {};
+      const usedShortcuts = [...state.usedShortcuts, chord];
+      persistUsedShortcuts(usedShortcuts);
+      return { usedShortcuts };
+    }),
+  resetUsedShortcuts: () => {
+    persistUsedShortcuts([]);
+    set({ usedShortcuts: [] });
+  },
 
   following: null,
   // following someone and presenting to them are mutually exclusive

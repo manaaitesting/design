@@ -9,6 +9,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { doc, makeNode, openEditor, removeNodes, select, selection } from './helpers';
+import { MODIFIER_GLYPHS, SHORTCUTS } from '../src/lib/shortcuts';
 
 test.beforeEach(async ({ page }) => {
   await openEditor(page);
@@ -150,4 +151,113 @@ test('⌘B / ⌘I / ⌘U / ⇧⌘X mark a text layer that is only selected', asy
   expect((await doc(page))[box].runs).toBeUndefined();
 
   await removeNodes(page, [id, box]);
+});
+
+/**
+ * The shortcuts panel.
+ *
+ * Its risk is not that it fails to open — it is that it prints a chord the
+ * editor does not answer, which is worse than printing nothing. So the panel
+ * gets one test about being a panel, and one about telling the truth.
+ */
+test('⌃⇧? opens the shortcuts panel, and Escape closes it', async ({ page }) => {
+  const panel = page.locator('[role="dialog"][aria-label="Keyboard shortcuts"]');
+  await expect(panel).toBeHidden();
+
+  await page.keyboard.press('Control+Shift+Slash');
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('[data-shortcut-tab="Tools"]')).toBeVisible();
+
+  // the categories are Figma's, and switching one shows that category's rows
+  await panel.locator('[data-shortcut-tab="Zoom"]').click();
+  await expect(panel.locator('[data-shortcut="shift+Digit1"]')).toBeVisible();
+  await expect(panel.locator('[data-shortcut="KeyV"]')).toBeHidden();
+
+  // it does not take the keyboard: the point is to press the keys while reading
+  await page.keyboard.press('r');
+  expect(await tool(page)).toBe('rect');
+  await page.keyboard.press('v');
+
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+});
+
+test('a chord you press is ticked in the panel afterwards', async ({ page }) => {
+  await page.evaluate(() => {
+    try {
+      localStorage.removeItem('paperlike:shortcuts');
+    } catch {
+      /* private windows have no storage, and the test does not need one */
+    }
+    window.paperlike!.ui.getState().resetUsedShortcuts();
+  });
+
+  await page.keyboard.press('Control+Shift+Slash');
+  const panel = page.locator('[role="dialog"][aria-label="Keyboard shortcuts"]');
+  await panel.locator('[data-shortcut-tab="View"]').click();
+  const row = panel.locator('[data-shortcut="shift+KeyG"]');
+  await expect(row).not.toHaveAttribute('data-used', 'true');
+
+  await page.keyboard.press('Shift+g');
+  await expect(row).toHaveAttribute('data-used', 'true');
+  // and it survives a reload, which is what makes it a record rather than a hint
+  await page.reload();
+  await page.waitForFunction(() => !!window.paperlike);
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().usedShortcuts)).toContain('shift+KeyG');
+
+  await page.keyboard.press('Shift+g');
+  await page.keyboard.press('Escape');
+});
+
+test('every chord the panel prints is the chord it is written as', () => {
+  const rows = SHORTCUTS.flatMap((group) =>
+    group.rows
+      .filter((row) => !!row.code)
+      .map((row) => {
+        // a row may print two chords for one command ("F  A", "⌥A  ⌥D"); the id
+        // belongs to the first of them
+        const printed = row.keys.split('  ')[0];
+        const wanted = MODIFIER_GLYPHS.filter(([name]) => row.code!.split('+').includes(name))
+          .map(([, glyph]) => glyph)
+          .join('');
+        return { keys: row.keys, code: row.code!, wanted, got: printed.replace(/[^⌘⌃⌥⇧]/gu, '') };
+      }),
+  );
+
+  expect(rows.length).toBeGreaterThan(80);
+  expect(rows.filter((row) => row.wanted !== row.got)).toEqual([]);
+
+  // and no chord is printed twice under two different names
+  const seen = new Set<string>();
+  expect(rows.filter((row) => !seen.add(row.code))).toEqual([]);
+});
+
+test('⇧1 and ⇧2 zoom, which only ⌘1 and ⌘2 used to do', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'KB Zoom', x: 700, y: 500, w: 80, h: 80, fill: '#4CC3F0' });
+  await select(page, [id]);
+
+  const zoom = () => page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom);
+  const park = () => page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 0.4 }));
+
+  // ⇧1 is Figma's Zoom to fit. It arrives as "!", which is why matching the
+  // character left the key doing nothing.
+  await park();
+  await page.keyboard.press('Shift+Digit1');
+  expect(await zoom()).not.toBe(0.4);
+
+  // ⇧2 is Zoom to selection, which is a different view from fitting the page
+  const view = () => page.evaluate(() => window.paperlike!.ui.getState().viewport);
+  await park();
+  await page.keyboard.press('Shift+Digit2');
+  const toSelection = await view();
+  await park();
+  await page.keyboard.press('Shift+Digit1');
+  expect(toSelection).not.toEqual(await view());
+
+  // ⇧0 is 100%
+  await park();
+  await page.keyboard.press('Shift+Digit0');
+  expect(await zoom()).toBe(1);
+
+  await removeNodes(page, [id]);
 });

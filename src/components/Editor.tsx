@@ -15,6 +15,7 @@ import { Present } from './Present';
 import { PromptBar } from './PromptBar';
 import { Resizer } from './Resizer';
 import { ShadersModal } from './ShadersModal';
+import { Shortcuts } from './Shortcuts';
 import { Timeline } from './Timeline';
 import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
@@ -39,6 +40,7 @@ import {
   toggleMark,
 } from '../lib/actions';
 import { measureChildren } from '../lib/measure';
+import { chordOf } from '../lib/shortcuts';
 import { download, safeFilename } from '../export/raster';
 import { toTailwind } from '../export/tailwind';
 
@@ -313,9 +315,18 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         ui.setPaletteOpen(!ui.paletteOpen);
         return;
       }
+      // ⌃⇧? — the shortcuts panel, on Figma's chord. `?` is ⇧/, so the key
+      // underneath is the slash and matching the character would need the shift
+      // taken back off it.
+      if (event.ctrlKey && event.shiftKey && !event.metaKey && event.code === 'Slash') {
+        event.preventDefault();
+        ui.setShortcutsOpen(!ui.shortcutsOpen);
+        return;
+      }
 
       if (event.key === 'Escape') {
         if (ui.paletteOpen) ui.setPaletteOpen(false);
+        else if (ui.shortcutsOpen) ui.setShortcutsOpen(false);
         else if (ui.linkEditor) ui.setLinkEditor(null);
         else if (ui.renameOpen) ui.setRenameOpen(false);
         else if (ui.vectorEdit) ui.setVectorEdit(null);
@@ -710,12 +721,14 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
 
       // ── Tools ──────────────────────────────────────────────────────────
       if (!mod && !event.altKey && event.shiftKey && SHIFT_TOOL_KEYS[event.key.toLowerCase()]) {
+        event.preventDefault();
         ui.setTool(SHIFT_TOOL_KEYS[event.key.toLowerCase()]);
         return;
       }
       // ⌥ is never a tool key in Figma, and A is now one: without the guard
       // ⌥A over an empty selection fell past the align branch and armed Frame
       if (!mod && !event.altKey && !event.shiftKey && TOOL_KEYS[event.key.toLowerCase()]) {
+        event.preventDefault();
         ui.setTool(TOOL_KEYS[event.key.toLowerCase()]);
         return;
       }
@@ -939,19 +952,21 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         ui.zoomBy(1 / ZOOM.step);
         return;
       }
-      // the bare digits are Figma's opacity shortcuts, so these want a modifier
-      if (event.key === '0' && (mod || event.shiftKey)) {
+      // The bare digits are Figma's opacity shortcuts, so these want a modifier —
+      // and they match the physical key, because ⇧1 arrives as "!" and matching
+      // the character meant Figma's own ⇧1 / ⇧2 / ⇧0 did nothing at all here.
+      if (event.code === 'Digit0' && (mod || event.shiftKey)) {
         event.preventDefault();
         ui.zoomTo(1);
         return;
       }
-      if (event.key === '1' && (mod || event.shiftKey)) {
+      if (event.code === 'Digit1' && (mod || event.shiftKey)) {
         event.preventDefault();
         const fitted = fitView(doc, leftPanel, ui.leftWidth, ui.rightWidth);
         if (fitted) ui.setViewport(fitted);
         return;
       }
-      if (event.key === '2' && (mod || event.shiftKey)) {
+      if (event.code === 'Digit2' && (mod || event.shiftKey)) {
         event.preventDefault();
         const bounds = selectionBounds(ui.selection, doc);
         const fitted = bounds && fitBounds(bounds, leftPanel, ui.leftWidth, ui.rightWidth);
@@ -960,8 +975,24 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
     };
 
+    /**
+     * What the shortcuts panel ticks.
+     *
+     * Registered after the handler above, so by the time it runs the handler has
+     * either claimed the key or not — and "claimed" is exactly the condition
+     * worth recording. Reading it here rather than in forty branches is what
+     * keeps the panel from having to be told about every one of them.
+     */
+    const learn = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) useUI.getState().markShortcut(chordOf(event));
+    };
+
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', learn);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', learn);
+    };
   }, [store, doc, leftPanel, tokenVars, tokens, collections, fonts]);
 
   return (
@@ -1013,6 +1044,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       <RenameDialog />
       <History />
       <Palette />
+      <Shortcuts />
       <Present />
     </div>
   );

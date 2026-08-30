@@ -227,15 +227,10 @@ const DEFAULT_STROKE = { width: 1, color: '#000000', style: 'solid', position: '
  *
  * ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J set the alignment and ⇧⌘< / ⇧⌘> step the size, and both
  * are reached from two places — the canvas with a text layer selected, and the
- * text editor with the caret inside one. They live here so there is one mapping
- * rather than two that can drift apart.
+ * text editor with the caret inside one. The mapping itself lives beside the
+ * rest of the key table, so the shortcuts panel and this cannot disagree.
  */
-export const TEXT_ALIGN_KEYS: Record<string, FontSpec['align']> = {
-  KeyL: 'left',
-  KeyT: 'center',
-  KeyR: 'right',
-  KeyJ: 'justify',
-};
+export { TEXT_ALIGN_KEYS } from './shortcuts';
 
 /** The text layers in a selection — the rest of it has no type to set. */
 function textNodes(store: DocStore, ids: string[]): string[] {
