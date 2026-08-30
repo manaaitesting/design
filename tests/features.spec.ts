@@ -2484,3 +2484,20 @@ test('a document that never arrives says so instead of offering an empty canvas'
   await expect(page.getByText('Cannot reach the sync server')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[data-canvas-root]')).toHaveCount(0);
 });
+
+test('an image the browser cannot decode is refused rather than placed', async ({ page }) => {
+  // A .heic dragged out of Photos is the common one: it carries an image mime,
+  // so the type and size guards both wave it through and only the decode is
+  // left to say no.
+  const chooser = page.waitForEvent('filechooser');
+  await page.keyboard.press('Shift+Meta+k');
+  await (await chooser).setFiles({
+    name: 'Undecodable.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('this is not a png'),
+  });
+
+  await expect(page.getByText(/Undecodable\.png could not be decoded/)).toBeVisible();
+  await expect(page.locator('[data-canvas-root]')).not.toHaveAttribute('data-placing', 'true');
+  expect(await nodeNamed(page, 'Undecodable')).toBeUndefined();
+});
