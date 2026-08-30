@@ -19,6 +19,7 @@ import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
 import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
+import { boardsOf } from '../document/layers';
 import { isInFlow, ROOT_ID, pageOf, topLevelOf, type BooleanOp, type Doc } from '../document/types';
 import { firstChild, inverseOf, parentOf, siblingOf } from '../document/selection';
 import { openingFrame } from '../document/prototype';
@@ -807,9 +808,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       // the order Figma reads a page in rather than the stacking order.
       if (!mod && !event.altKey && event.code === 'KeyN') {
         event.preventDefault();
-        const boards = (doc[ui.page]?.children ?? [])
-          .filter((id) => doc[id]?.type === 'frame' || doc[id]?.type === 'section')
-          .sort((a, b) => doc[a].x - doc[b].x || doc[a].y - doc[b].y);
+        const boards = boardsOf(doc, ui.page);
         if (!boards.length) return;
 
         const here = selection.length ? boards.indexOf(topLevelOf(selection[0], doc)) : -1;

@@ -4345,13 +4345,67 @@ test.describe('pages', () => {
     }, [ids.source, ids.copy] as const);
   });
 
-  test('right-clicking a page offers Figma’s four commands', async ({ page }) => {
+  /**
+   * Figma's File ▸ Export frames to PDF: every board on the page, one per page,
+   * in one document — the format a deck is handed over in.
+   *
+   * The boards are different sizes on purpose. A PDF that squared them onto one
+   * sheet would be the wrong answer, and the MediaBox of each page is what says
+   * it did not.
+   */
+  test('a page exports every board as one PDF, a page each, in canvas order', async ({ page }) => {
+    const boards = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      // out of order on purpose: the PDF walks the canvas, not the stack
+      const right = store.create('frame', 'root', { name: 'Right', x: 900, y: 40, w: 300, h: 200, fill: '#FFFFFF' });
+      const left = store.create('frame', 'root', { name: 'Left', x: 700, y: 40, w: 400, h: 300, fill: '#FFFFFF' });
+      store.commit();
+      return { left, right };
+    });
+    // both boards have to be on screen: the renderer reads the canvas's own DOM
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 60, y: 80, zoom: 0.35 }));
+
+    await page.locator('.fig-layer[data-page-id]').first().click({ button: 'right' });
+    const wait = page.waitForEvent('download');
+    await row(page, 'Export frames to PDF').click();
+    const saved = await wait;
+    expect(saved.suggestedFilename()).toBe('Page-1.pdf');
+
+    const text = readFileSync((await saved.path())!).toString('latin1');
+    expect(text.startsWith('%PDF-1.4')).toBe(true);
+    // the fixture board is on this page too, so three boards, three pages
+    expect(text).toContain('/Count 3');
+    expect(text).toContain('/Type /Pages /Kids [3 0 R 7 0 R 11 0 R]');
+    // each page keeps its own board's size, in points
+    expect(text).toContain('/MediaBox [0 0 600 400]');
+    expect(text).toContain('/MediaBox [0 0 400 300]');
+    expect(text).toContain('/MediaBox [0 0 300 200]');
+    expect(text.trimEnd().endsWith('%%EOF')).toBe(true);
+
+    // and every offset in the table was counted by hand as the file was built
+    const marker = text.lastIndexOf('startxref');
+    const startxref = Number(text.slice(marker + 'startxref'.length).trim().split('\n')[0]);
+    expect(text.slice(startxref, startxref + 4)).toBe('xref');
+    const rows = text.slice(startxref).split('\n').slice(2, 16);
+    expect(rows).toHaveLength(14);
+    rows.forEach((entry, index) => {
+      if (index === 0) return; // the free entry
+      const offset = Number(entry.slice(0, 10));
+      expect(text.slice(offset, offset + String(index).length + 6)).toBe(`${index} 0 obj`);
+    });
+
+    await removeNodes(page, [boards.left, boards.right]);
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 120, y: 100, zoom: 1 }));
+  });
+
+  test('right-clicking a page offers Figma’s page commands', async ({ page }) => {
     const extra = await page.evaluate(() => window.paperlike!.store.addPage('Scratch'));
     await page.locator(`.fig-layer[data-page-id="${extra}"]`).click({ button: 'right' });
 
     const menu = page.locator('.ctx').first();
     await expect(menu.locator('.ctx-row')).toHaveText([
       'Copy link to page',
+      'Export frames to PDF',
       'Rename page',
       'Duplicate page',
       'Delete page',

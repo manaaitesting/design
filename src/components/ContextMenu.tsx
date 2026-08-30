@@ -24,7 +24,7 @@ import {
   pointerWorld,
   writeText,
 } from '../lib/actions';
-import { download, nodeToPng, safeFilename } from '../export/raster';
+import { download, framesToPdf, nodeToPng, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
@@ -32,6 +32,7 @@ import { pageActions, useUI } from '../state/ui';
 import { revealNode } from '../lib/view';
 import { canEditPoints } from '../document/geometry';
 import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
+import { boardsOf } from '../document/layers';
 
 interface Item {
   label: string;
@@ -205,6 +206,7 @@ function PageMenu({
   const store = useStore();
   const doc = useDoc();
   const pages = usePages();
+  const tokenVars = useTokenVars();
   const only = pages.length <= 1;
 
   const items: Item[] = [
@@ -213,6 +215,33 @@ function PageMenu({
       // the page is a query on the file's own URL, which is what the editor
       // reads back on load — see `Editor`
       run: () => writeText(`${location.origin}${location.pathname}?page=${id}`),
+    },
+    {
+      label: 'Export frames to PDF',
+      divider: true,
+      // a page with no boards on it has nothing to make pages out of
+      disabled: !boardsOf(doc, id).length,
+      run: async () => {
+        const boards = boardsOf(doc, id);
+        const name = safeFilename(doc[id]?.name ?? 'page');
+        try {
+          const { blob, missed } = await framesToPdf(
+            boards,
+            useUI.getState().viewport.zoom,
+            2,
+            tokenVars,
+          );
+          download(blob, `${name}.pdf`);
+          if (missed) {
+            window.alert(
+              `${missed} board${missed === 1 ? ' was' : 's were'} not on screen and could not be drawn. ` +
+                'Zoom out to fit the page and export again to include them.',
+            );
+          }
+        } catch (error) {
+          window.alert(error instanceof Error ? error.message : 'The export failed.');
+        }
+      },
     },
     {
       label: 'Rename page',
