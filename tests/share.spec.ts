@@ -100,6 +100,33 @@ test('the same link is a sign-in wall when link sharing is off', async ({ page, 
   }
 });
 
+test('signing in at the wall opens the file that sent you there', async ({ page, browser }) => {
+  await setLink(page, '');
+
+  const stranger = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  try {
+    const visit = await stranger.newPage();
+    await visit.goto(`/f/${SCRATCH}`);
+    await expect(visit).toHaveURL(new RegExp(`/signin\\?next=%2Ff%2F${SCRATCH}$`));
+    // the page says why it appeared, rather than the generic welcome
+    await expect(visit.getByText('Sign in to open this file.')).toBeVisible();
+    // and the commonest case — a link sent to someone with no account yet —
+    // keeps the file across the hop to sign-up
+    await expect(visit.getByRole('link', { name: 'Create an account' })).toHaveAttribute(
+      'href',
+      `/signup?next=%2Ff%2F${SCRATCH}`,
+    );
+
+    await visit.getByLabel('Email').fill('ada@example.com');
+    await visit.getByLabel('Password').fill('paperlike-demo');
+    await visit.getByRole('button', { name: 'Sign in' }).click();
+
+    await expect(visit).toHaveURL(new RegExp(`/f/${SCRATCH}$`));
+  } finally {
+    await stranger.close();
+  }
+});
+
 test('an edit link gives a stranger the tools, a view link does not', async ({ page, browser }) => {
   await setLink(page, 'editor');
 

@@ -35,6 +35,7 @@ import {
   unpublishComponent,
 } from './db';
 import { newId } from '../lib/id';
+import { safeNext } from '../lib/next';
 import {
   compareVersion,
   listVersions,
@@ -68,7 +69,8 @@ export async function signUp(_prev: FormState, form: FormData): Promise<FormStat
   const id = newId();
   createUser({ id, email, name, color: pick(COLORS), passwordHash: hashPassword(password) });
   await startSession(id);
-  redirect('/files');
+  // the file link that sent them here, if there was one — see `safeNext`
+  redirect(safeNext(form.get('next')) ?? '/files');
 }
 
 export async function signIn(_prev: FormState, form: FormData): Promise<FormState> {
@@ -81,7 +83,7 @@ export async function signIn(_prev: FormState, form: FormData): Promise<FormStat
     return { error: 'Email or password is incorrect.' };
   }
   await startSession(user.id);
-  redirect('/files');
+  redirect(safeNext(form.get('next')) ?? '/files');
 }
 
 export async function signOut(): Promise<void> {
