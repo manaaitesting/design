@@ -56,9 +56,12 @@ export function History() {
     setNotice(null);
     const result = await restoreVersionAction(room, version.stamp);
     setBusy(null);
+    if (result.error || !result.restored) return setNotice(result.error ?? 'Nothing came back.');
+    const { layers, pages } = result.restored;
     setNotice(
-      result.error ??
-        `Restored ${result.restored} layer${result.restored === 1 ? '' : 's'} into this page.`,
+      `Restored ${layers} layer${layers === 1 ? '' : 's'} into ` +
+        (pages.length === 1 ? pages[0] : `${pages.length} pages`) +
+        '.',
     );
   };
 

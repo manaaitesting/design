@@ -36,6 +36,7 @@ import {
   compareVersion,
   listVersions,
   restoreVersion,
+  type Restored,
   type Version,
   type VersionDiff,
 } from './history';
@@ -225,7 +226,7 @@ export async function compareVersionAction(
 export async function restoreVersionAction(
   fileId: string,
   stamp: string,
-): Promise<{ restored?: number; error?: string }> {
+): Promise<{ restored?: Restored; error?: string }> {
   const user = await currentUser();
   if (!user) return { error: 'Sign in first.' };
   const file = getFileFor(fileId, user.id);

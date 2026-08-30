@@ -160,21 +160,37 @@ function syncToken(fileId: string): string {
   return `${payload}.${createHmac('sha256', secret).update(payload).digest('base64url')}`;
 }
 
+export interface Restored {
+  layers: number;
+  /** the pages they went into, named — so the panel can say where they landed */
+  pages: string[];
+}
+
 /**
- * Re-inserts a version's layers into the live document.
+ * Re-inserts a version's layers into the live document, page by page.
  *
- * Returns how many top-level layers came back, so the caller can say something
- * true rather than "done".
+ * Restoring a version means the file looks like that version, and a file is its
+ * pages: reading only the root page's children threw away every page but the
+ * first and piled it onto whichever page happened to be indexed first. So each
+ * of the snapshot's pages goes back into the live page of the same id, and a
+ * page that has since been deleted comes back rather than emptying into a
+ * neighbour.
+ *
+ * Returns what actually happened, so the caller can say something true rather
+ * than "done".
  */
-export async function restoreVersion(fileId: string, stamp: string): Promise<number> {
+export async function restoreVersion(fileId: string, stamp: string): Promise<Restored> {
   const match = filesFor(fileId).find((entry) => entry.stamp === stamp);
   if (!match) throw new Error('That version is no longer on disk.');
 
   const from = readDoc(match.file);
   const snapshot = from.getSnapshot();
-  const top = snapshot[ROOT_ID]?.children ?? [];
-  if (!top.length) throw new Error('That version has nothing on its first page.');
-  const payload = from.serialize([...top]);
+  // documents written before pages were indexed still have their root page
+  const indexed = from.listPages();
+  const pages = (indexed.length ? indexed : [ROOT_ID]).filter(
+    (id) => (snapshot[id]?.children ?? []).length > 0,
+  );
+  if (!pages.length) throw new Error('That version has nothing on it.');
 
   const ydoc = new Y.Doc();
   const store = new DocStore(ydoc);
@@ -198,10 +214,29 @@ export async function restoreVersion(fileId: string, stamp: string): Promise<num
     });
 
     store.ensureRoot();
-    const restored = store.paste(payload, ROOT_ID);
+    // a page the live document holds but has not indexed is a page nobody can
+    // reach, so it counts as gone
+    const live = new Set(store.listPages());
+    const restored: Restored = { layers: 0, pages: [] };
+
+    for (const id of pages) {
+      const target = live.has(id) ? id : store.addPage(snapshot[id]?.name);
+      const children = snapshot[id].children.map((child) => snapshot[child]).filter(Boolean);
+      // `serialize` moves what it packs to the origin so a paste lands under the
+      // pointer; a restore is not a paste, and the layout has to come back where
+      // it was, so the offset puts it straight back.
+      const offset = {
+        x: Math.min(...children.map((node) => node.x)),
+        y: Math.min(...children.map((node) => node.y)),
+      };
+      const layers = store.paste(from.serialize([...snapshot[id].children]), target, offset);
+      restored.layers += layers.length;
+      restored.pages.push(store.getSnapshot()[target]?.name ?? 'a page');
+    }
+
     // the provider batches; give it a moment to flush before disconnecting
     await new Promise((resolve) => setTimeout(resolve, 750));
-    return restored.length;
+    return restored;
   } finally {
     provider.destroy();
     ydoc.destroy();
