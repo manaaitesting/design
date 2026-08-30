@@ -64,8 +64,14 @@ export function SessionProvider({
   }, [session, room]);
 
   const expired = useExpired(session);
+  const ready = useReady(session);
+  const stalled = useStalled(ready);
 
-  if (!session) return <Booting />;
+  // The only page in a fresh document is created on the first sync, so until
+  // that lands there is nothing to draw on — and the store swallows a write
+  // whose parent is missing, which is how a normal-looking canvas came to
+  // refuse every gesture in silence.
+  if (!session || !ready) return <Booting stalled={stalled} />;
   return (
     <SessionContext.Provider value={session}>
       {children}
@@ -117,7 +123,10 @@ function Expired() {
   );
 }
 
-function Booting() {
+/** How long the document may take to arrive before it is worth saying so. */
+const SYNC_GRACE_MS = 6000;
+
+function Booting({ stalled }: { stalled: boolean }) {
   return (
     <div
       style={{
@@ -128,9 +137,41 @@ function Booting() {
         color: 'var(--color-ink-dim)',
       }}
     >
-      Connecting…
+      {stalled ? (
+        <div style={{ maxWidth: 320, textAlign: 'center' }}>
+          <p style={{ margin: '0 0 6px', fontWeight: 600, color: 'var(--color-ink)' }}>
+            Cannot reach the sync server
+          </p>
+          <p style={{ margin: 0, lineHeight: 1.45 }}>
+            This file lives on the server, so there is nothing here to draw on until it answers.
+            Still trying…
+          </p>
+        </div>
+      ) : (
+        'Connecting…'
+      )}
     </div>
   );
+}
+
+/** Whether the document has arrived at least once — see `watchReady`. */
+function useReady(session: Session | null): boolean {
+  const subscribe = useCallback(
+    (fn: () => void) => session?.watchReady(fn) ?? (() => {}),
+    [session],
+  );
+  return useSyncExternalStore(subscribe, () => session?.ready() ?? false, () => false);
+}
+
+/** Whether the wait has gone on long enough to stop calling it "connecting". */
+function useStalled(ready: boolean): boolean {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (ready) return;
+    const timer = window.setTimeout(() => setStalled(true), SYNC_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [ready]);
+  return stalled;
 }
 
 /** Whether this session has been refused for good — see `watchExpiry`. */

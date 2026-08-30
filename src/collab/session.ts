@@ -35,10 +35,33 @@ export interface Session {
   identity: Identity;
   /** this member may look but not touch */
   readOnly: boolean;
+  /** the document has arrived at least once, so there is something to draw on */
+  ready(): boolean;
+  watchReady(fn: () => void): () => void;
   /** the sync server has refused this session for good and no fresh token can be had */
   expired(): boolean;
   watchExpiry(fn: () => void): () => void;
   destroy(): void;
+}
+
+/** A one-way switch with listeners: it is thrown once, and everyone hears. */
+function latch() {
+  const watchers = new Set<() => void>();
+  let thrown = false;
+  return {
+    get: () => thrown,
+    watch(fn: () => void): () => void {
+      watchers.add(fn);
+      return () => {
+        watchers.delete(fn);
+      };
+    },
+    throw() {
+      if (thrown) return;
+      thrown = true;
+      for (const fn of watchers) fn();
+    },
+  };
 }
 
 function syncUrl(): string {
@@ -94,8 +117,7 @@ export function getSession(
     seedDocument(store);
   });
 
-  let expired = false;
-  const expiryWatchers = new Set<() => void>();
+  const expired = latch();
 
   /**
    * The token was minted when the page was rendered and lives an hour, so a tab
@@ -106,7 +128,7 @@ export function getSession(
    * more, stop and let the UI say so instead of retrying against a shut door.
    */
   provider.on('closed', ({ code }: { code: number }) => {
-    if (code !== 4401 || expired) return;
+    if (code !== 4401 || expired.get()) return;
     void (async () => {
       const fresh = await refreshSyncTokenAction(room).catch(() => null);
       if (fresh) {
@@ -114,9 +136,19 @@ export function getSession(
         provider.connect();
         return;
       }
-      expired = true;
-      for (const watcher of expiryWatchers) watcher();
+      expired.throw();
     })();
+  });
+
+  /**
+   * Latched rather than tracked, because the provider's own `synced` goes back
+   * to false on every drop and blanking a canvas somebody is drawing on would
+   * be a worse answer to a blip than the blip. What this marks is the one
+   * moment that matters: the document has been here.
+   */
+  const ready = latch();
+  provider.on('sync', (isSynced: boolean) => {
+    if (isSynced) ready.throw();
   });
 
   const session: Session = {
@@ -125,11 +157,10 @@ export function getSession(
     provider,
     identity,
     readOnly,
-    expired: () => expired,
-    watchExpiry(fn) {
-      expiryWatchers.add(fn);
-      return () => expiryWatchers.delete(fn);
-    },
+    ready: ready.get,
+    watchReady: ready.watch,
+    expired: expired.get,
+    watchExpiry: expired.watch,
     destroy() {
       provider.destroy();
       ydoc.destroy();

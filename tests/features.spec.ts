@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
+import { doc, dragBy, FILE, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
 
 /**
  * The Figma-parity work: shapes, booleans, masks, point editing, the scale
@@ -2461,4 +2461,26 @@ test.describe('flex handles', () => {
     await expect(page.locator('.fig-flex-pad')).toHaveCount(0);
     await removeNodes(page, [plain]);
   });
+});
+
+/**
+ * The file that never arrives.
+ *
+ * The editor's own openEditor helper waits for the document, so nothing in the
+ * suite had ever looked at what the canvas does before it lands — which is
+ * where the whole page used to render over an empty document and refuse every
+ * gesture without saying a word.
+ */
+test('a document that never arrives says so instead of offering an empty canvas', async ({
+  page,
+}) => {
+  // The socket opens and then says nothing: a sync server that is up but
+  // wedged, and a first load on a connection that has stalled, look the same
+  // from here. Only the file's own socket — intercepting every ws: takes the
+  // dev server's hot-reload channel with it, and the page never hydrates.
+  await page.routeWebSocket(new RegExp(`/${FILE.split('/').pop()}\\?`), () => {});
+  await page.goto(FILE);
+
+  await expect(page.getByText('Cannot reach the sync server')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('[data-canvas-root]')).toHaveCount(0);
 });
