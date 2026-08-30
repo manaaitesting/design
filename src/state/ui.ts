@@ -336,6 +336,10 @@ export interface UIState {
   guides: SnapGuide[];
   setGuides: (guides: SnapGuide[]) => void;
 
+  /** the frame a drag in progress would drop into, outlined on the canvas */
+  dropTarget: string | null;
+  setDropTarget: (id: string | null) => void;
+
   /** `page` is set when the menu was opened on a row in the Pages list */
   contextMenu: { x: number; y: number; stack: string[]; page?: string } | null;
   setContextMenu: (menu: { x: number; y: number; stack: string[]; page?: string } | null) => void;
@@ -757,6 +761,7 @@ export const useUI = create<UIState>((set) => ({
       cropping: null,
       expanded: {},
       guides: [],
+      dropTarget: null,
       lockedHint: null,
       contextMenu: null,
       presenting: null,
@@ -777,6 +782,9 @@ export const useUI = create<UIState>((set) => ({
 
   guides: [],
   setGuides: (guides) => set({ guides }),
+
+  dropTarget: null,
+  setDropTarget: (dropTarget) => set({ dropTarget }),
 
   contextMenu: null,
   setContextMenu: (contextMenu) => set({ contextMenu }),

@@ -128,6 +128,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const entered = useUI((s) => s.entered);
   const lockedHint = useUI((s) => s.lockedHint);
   const guides = useUI((s) => s.guides);
+  const dropTarget = useUI((s) => s.dropTarget);
   // point editing replaces the selection chrome with the anchors themselves,
   // exactly as Figma's does — two sets of handles would fight for the pointer
   const vectorEdit = useUI((s) => s.vectorEdit);
@@ -157,6 +158,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
     ...(hover ? [hover] : []),
     ...(entered ? [entered] : []),
     ...(lockedHint ? [lockedHint] : []),
+    ...(dropTarget ? [dropTarget] : []),
     ...remoteIds,
     ...boards,
     ...slices,
@@ -641,6 +643,22 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
             {doc[lockedHint]?.name} is locked — unlock it in the layers panel
           </span>
         </div>
+      )}
+
+      {/* the frame a release would drop into: heavier than the hover hint,
+          because it says the tree is about to change */}
+      {dropTarget && rects[dropTarget] && (
+        <div
+          style={{
+            position: 'absolute',
+            left: rects[dropTarget].x,
+            top: rects[dropTarget].y,
+            width: rects[dropTarget].w,
+            height: rects[dropTarget].h,
+            outline: '2px solid var(--color-select-line)',
+            outlineOffset: -1,
+          }}
+        />
       )}
 
       {/* the container you are inside */}

@@ -91,6 +91,46 @@ test('a \u21e7 press that never moves still takes the layer out of the selection
  * back to the page — in both directions without the layer appearing to move,
  * which is the whole point: the drop changes the tree, not the picture.
  */
+test('dragging a layer over a frame outlines the frame that will adopt it', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'Highlighter', x: 700, y: 0, w: 300, h: 300, fill: '#FFFFFF', flex: null,
+  });
+  const id = await makeNode(page, 'rect', {
+    name: 'Passenger', x: 700, y: 400, w: 100, h: 60, fill: '#F2637F',
+  });
+  await select(page, [id]);
+
+  const before = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+  const from = { x: before!.x + before!.width / 2, y: before!.y + before!.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // several moves, because one is under the threshold that starts a drag
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await page.mouse.move(from.x + 80 * step, from.y - 270 * step);
+  }
+
+  // still holding it: the frame says it is about to take the layer
+  const target = await page.evaluate(() => window.paperlike!.ui.getState().dropTarget);
+  expect(target).toBe(frame);
+  // and the chrome draws it, over the frame's own box
+  const box = (await page.locator(`[data-node-id="${frame}"]`).boundingBox())!;
+  const outlined = await page.evaluate((want) =>
+    [...document.querySelectorAll('div')].some((el) => {
+      if (getComputedStyle(el).outlineWidth !== '2px') return false;
+      const r = el.getBoundingClientRect();
+      return Math.abs(r.x - want.x) < 2 && Math.abs(r.width - want.width) < 2;
+    }),
+  { x: box.x, width: box.width });
+  expect(outlined).toBe(true);
+
+  await page.mouse.up();
+  // and the outline goes away with the gesture that raised it
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().dropTarget)).toBeNull();
+  expect((await doc(page))[id].parent).toBe(frame);
+
+  await removeNodes(page, [frame, id]);
+});
+
 test('dropping a layer on a frame makes it a child of that frame', async ({ page }) => {
   // a frame away from the origin, so a parent-local coordinate is not the same
   // number as the world one and a wrong conversion cannot pass by accident
