@@ -3,7 +3,6 @@ import { redirect } from 'next/navigation';
 import { currentUser } from '../../src/server/auth';
 import { filesPage } from '../../src/server/queries';
 import {
-  deleteFileAction,
   deleteFolderAction,
   duplicateFileAction,
   newFile,
@@ -11,6 +10,7 @@ import {
   renameFileAction,
   signOut,
 } from '../../src/server/actions';
+import { DeleteFile } from '../../src/components/DeleteFile';
 import { FolderPicker } from '../../src/components/FolderPicker';
 import { Icon } from '../../src/components/ui/Icons';
 import { ShareControl } from '../../src/components/ShareControl';
@@ -356,12 +356,7 @@ export default async function FilesPage({
                         <input type="hidden" name="id" value={file.id} />
                         <SubmitButton title="Make a copy you own">Duplicate</SubmitButton>
                       </form>
-                      {owned && (
-                        <form action={deleteFileAction}>
-                          <input type="hidden" name="id" value={file.id} />
-                          <SubmitButton title="Delete file">Delete</SubmitButton>
-                        </form>
-                      )}
+                      {owned && <DeleteFile fileId={file.id} fileName={file.name} />}
                     </div>
                   </div>
                 </div>
