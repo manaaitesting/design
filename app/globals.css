@@ -1297,6 +1297,65 @@ select {
     flex: none;
     border-radius: 999px;
   }
+  /* reactions on one message in a thread */
+  .fig-react {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-top: 4px;
+  }
+  .fig-react-chip {
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--fig-hover);
+    color: inherit;
+    font: inherit;
+    font-size: 10px;
+    line-height: 1;
+    cursor: default;
+  }
+  .fig-react-chip[data-mine] {
+    box-shadow: inset 0 0 0 1px var(--fig-blue);
+  }
+  /* the + is quiet until the message is hovered, so a thread stays readable */
+  .fig-react-chip:last-child:not([data-mine]) {
+    opacity: 0.45;
+  }
+  .fig-react:hover .fig-react-chip:last-child {
+    opacity: 1;
+  }
+  .fig-react-pick {
+    position: absolute;
+    left: 0;
+    top: 100%;
+    margin-top: 3px;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-pop);
+    z-index: 1;
+  }
+  .fig-react-pick > button {
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    font: inherit;
+    cursor: default;
+  }
+  .fig-react-pick > button:hover {
+    background: var(--fig-hover);
+  }
+
   .fig-pin[data-mine] {
     box-shadow:
       0 1px 4px rgba(0, 0, 0, 0.25),

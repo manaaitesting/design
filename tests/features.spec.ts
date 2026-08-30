@@ -2517,6 +2517,28 @@ test.describe('comments', () => {
     await clearComments(page);
   });
 
+  test('an agreement is a reaction on the message, not another reply', async ({ page }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'shall we ship this crop?');
+
+    await page.locator('.fig-pin').click();
+    await page.getByTitle('React').click();
+    await page.locator('.fig-react-pick > button', { hasText: '👍' }).click();
+    await expect(page.locator('.fig-react-chip[data-mine]')).toHaveText('👍 1');
+
+    // it cost the thread nothing: still one message
+    const stored = await page.evaluate(() => window.paperlike!.store.listComments()[0]);
+    expect(stored.replies).toHaveLength(0);
+    expect(Object.keys(stored.reactions ?? {})).toEqual(['👍']);
+
+    // and clicking it again takes it back
+    await page.locator('.fig-react-chip[data-mine]').click();
+    await expect(page.locator('.fig-react-chip[data-mine]')).toHaveCount(0);
+
+    await clearComments(page);
+  });
+
   test('a mention is a person the picker resolved, not a prefix of a name', async ({ page }) => {
     // typed but never resolved: the prefix match used to light this pin up for
     // everyone whose name begins with an a

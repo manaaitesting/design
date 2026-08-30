@@ -317,12 +317,15 @@ export interface Comment {
    * file and a colleague whose name was mistyped is simply not in the list.
    */
   mentions?: string[];
+  /** emoji → the account ids that reacted with it */
+  reactions?: Record<string, string[]>;
   replies: {
     authorName: string;
     authorColor: string;
     body: string;
     createdAt: number;
     mentions?: string[];
+    reactions?: Record<string, string[]>;
   }[];
 }
 
@@ -1017,6 +1020,41 @@ export class DocStore {
     this.ydoc.transact(() => {
       const comment = this.comments.get(id);
       if (comment) this.comments.set(id, { ...comment, ...patch, id });
+    });
+  }
+
+  /**
+   * Adds or takes back one person's reaction to one message in a thread.
+   *
+   * `message` is -1 for the comment itself and the reply's index otherwise: a
+   * reply has no id of its own, and giving it one would change what every
+   * existing thread on disk looks like for the sake of a thumbs-up.
+   */
+  toggleReaction(id: string, message: number, emoji: string, authorId: string): void {
+    this.ydoc.transact(() => {
+      const comment = this.comments.get(id);
+      const target = message < 0 ? comment : comment?.replies[message];
+      if (!comment || !target) return;
+
+      const who = target.reactions?.[emoji] ?? [];
+      const next = who.includes(authorId)
+        ? who.filter((author) => author !== authorId)
+        : [...who, authorId];
+      const reactions = { ...target.reactions, [emoji]: next };
+      // an emoji nobody is holding any more is not a reaction
+      if (!next.length) delete reactions[emoji];
+
+      this.comments.set(
+        id,
+        message < 0
+          ? { ...comment, reactions }
+          : {
+              ...comment,
+              replies: comment.replies.map((reply, index) =>
+                index === message ? { ...reply, reactions } : reply,
+              ),
+            },
+      );
     });
   }
 

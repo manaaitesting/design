@@ -105,6 +105,8 @@ declare global {
           body: string;
           resolved: boolean;
           anchor?: { node: string; u: number; v: number };
+          mentions?: string[];
+          reactions?: Record<string, string[]>;
           replies: { body: string }[];
         }[];
         addComment(comment: Record<string, unknown>): string;

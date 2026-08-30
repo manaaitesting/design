@@ -299,6 +299,9 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
                   color={comment.authorColor}
                   body={comment.body}
                   at={comment.createdAt}
+                  reactions={comment.reactions}
+                  me={identity.id}
+                  onReact={(emoji) => store.toggleReaction(comment.id, -1, emoji, identity.id)}
                 />
                 {comment.replies.map((reply, index) => (
                   <Entry
@@ -307,6 +310,9 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
                     color={reply.authorColor}
                     body={reply.body}
                     at={reply.createdAt}
+                    reactions={reply.reactions}
+                    me={identity.id}
+                    onReact={(emoji) => store.toggleReaction(comment.id, index, emoji, identity.id)}
                   />
                 ))}
 
@@ -438,7 +444,88 @@ function Body({ text }: { text: string }) {
   );
 }
 
-function Entry({ name, color, body, at }: { name: string; color: string; body: string; at: number }) {
+/** Figma's six, which is all a reaction row ever needs to be. */
+const REACTIONS = ['👍', '❤️', '🎉', '😄', '😮', '👀'];
+
+/**
+ * The reactions on one message.
+ *
+ * Every acknowledgement used to cost a whole reply, so a thread that should
+ * have been one line and a thumbs-up became four messages that then had to be
+ * resolved. Reactions sit outside the undo scope for free, since the comments
+ * map already is.
+ */
+function Reactions({
+  reactions,
+  me,
+  onReact,
+}: {
+  reactions: Record<string, string[]> | undefined;
+  me: string;
+  onReact: (emoji: string) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const held = Object.entries(reactions ?? {}).filter(([, who]) => who.length);
+
+  return (
+    <div className="fig-react">
+      {held.map(([emoji, who]) => (
+        <button
+          key={emoji}
+          type="button"
+          className="fig-react-chip"
+          data-mine={who.includes(me) || undefined}
+          title={`${who.length} ${who.length === 1 ? 'person' : 'people'}`}
+          onClick={() => onReact(emoji)}
+        >
+          {emoji} {who.length}
+        </button>
+      ))}
+      <button
+        type="button"
+        className="fig-react-chip"
+        title="React"
+        onClick={() => setPicking(!picking)}
+      >
+        ＋
+      </button>
+      {picking && (
+        <div className="fig-react-pick">
+          {REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              onClick={() => {
+                onReact(emoji);
+                setPicking(false);
+              }}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Entry({
+  name,
+  color,
+  body,
+  at,
+  reactions,
+  me,
+  onReact,
+}: {
+  name: string;
+  color: string;
+  body: string;
+  at: number;
+  reactions?: Record<string, string[]>;
+  me: string;
+  onReact: (emoji: string) => void;
+}) {
   return (
     <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
       <span
@@ -457,7 +544,7 @@ function Entry({ name, color, body, at }: { name: string; color: string; body: s
       >
         {name.charAt(0).toUpperCase()}
       </span>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
           <span style={{ fontWeight: 500 }}>{name}</span>
           <span style={{ color: 'var(--color-ink-dim)' }}>{when(at)}</span>
@@ -465,6 +552,7 @@ function Entry({ name, color, body, at }: { name: string; color: string; body: s
         <div style={{ lineHeight: 1.45, wordBreak: 'break-word' }}>
           <Body text={body} />
         </div>
+        <Reactions reactions={reactions} me={me} onReact={onReact} />
       </div>
     </div>
   );
