@@ -217,17 +217,6 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
   const filter = useThreads((s) => s.filter);
   const setFilter = useThreads((s) => s.setFilter);
   const setInspectorTab = useUI((s) => s.setInspectorTab);
-  const [draft, setDraft] = useState('');
-  const people = usePeople();
-  /** the people this reply has actually picked, so a mention resolves to an id */
-  const [named, setNamed] = useState<Person[]>([]);
-  const replyRef = useRef<HTMLInputElement>(null);
-  const replyOptions = offer(people, typing(draft));
-  const pickInReply = (person: Person) => {
-    setDraft(withMention(draft, person));
-    setNamed((list) => [...list, person]);
-    replyRef.current?.focus();
-  };
 
   // Reaching for the comment tool is asking to work on comments, and the list
   // is where the threads you cannot see from here are.
@@ -316,43 +305,7 @@ export function Comments({ containerRef }: { containerRef: RefObject<HTMLDivElem
                   />
                 ))}
 
-                <div style={{ position: 'relative' }}>
-                  <Mentions options={replyOptions} onPick={pickInReply} />
-                  <input
-                    ref={replyRef}
-                    value={draft}
-                    placeholder="Reply…"
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      e.stopPropagation();
-                      if (e.key !== 'Enter') return;
-                      if (replyOptions.length) return pickInReply(replyOptions[0]);
-                      if (!draft.trim()) return;
-                      store.replyToComment(comment.id, {
-                        authorName: identity.name,
-                        authorColor: identity.color,
-                        body: draft.trim(),
-                        createdAt: Date.now(),
-                        ...(mentionedIds(draft, named).length && {
-                          mentions: mentionedIds(draft, named),
-                        }),
-                      });
-                      setDraft('');
-                      setNamed([]);
-                    }}
-                    style={{
-                      width: '100%',
-                      height: 24,
-                      marginTop: 8,
-                      border: 0,
-                      borderRadius: 5,
-                      padding: '0 8px',
-                      background: 'var(--color-control)',
-                      boxShadow: 'var(--shadow-control)',
-                      outline: 'none',
-                    }}
-                  />
-                </div>
+                <ReplyBox id={comment.id} />
 
                 <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
                   <button
@@ -441,6 +394,74 @@ function Body({ text }: { text: string }) {
         ),
       )}
     </>
+  );
+}
+
+/**
+ * The reply line at the foot of an open thread.
+ *
+ * Its own component because it is the only thing here that needs the file's
+ * members: `usePeople` watches presence and asks the server who has access, and
+ * the pin layer — which is mounted for the whole life of the canvas — has no
+ * business re-rendering every time somebody moves their pointer.
+ */
+function ReplyBox({ id }: { id: string }) {
+  const store = useStore();
+  const { identity } = useSession();
+  const people = usePeople();
+  const [draft, setDraft] = useState('');
+  /** the people this reply picked, so a mention resolves to an account */
+  const [named, setNamed] = useState<Person[]>([]);
+  const ref = useRef<HTMLInputElement>(null);
+
+  const options = offer(people, typing(draft));
+  const pick = (person: Person) => {
+    setDraft(withMention(draft, person));
+    setNamed((list) => [...list, person]);
+    ref.current?.focus();
+  };
+
+  const send = () => {
+    const mentions = mentionedIds(draft, named);
+    store.replyToComment(id, {
+      authorName: identity.name,
+      authorColor: identity.color,
+      body: draft.trim(),
+      createdAt: Date.now(),
+      ...(mentions.length && { mentions }),
+    });
+    setDraft('');
+    setNamed([]);
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <Mentions options={options} onPick={pick} />
+      <input
+        ref={ref}
+        value={draft}
+        placeholder="Reply…"
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key !== 'Enter') return;
+          // while the picker is up, ⏎ takes the person rather than posting
+          if (options.length) pick(options[0]);
+          else if (draft.trim()) send();
+        }}
+        style={{
+          width: '100%',
+          height: 24,
+          marginTop: 8,
+          border: 0,
+          borderRadius: 5,
+          padding: '0 8px',
+          background: 'var(--color-control)',
+          boxShadow: 'var(--shadow-control)',
+          outline: 'none',
+        }}
+      />
+    </div>
   );
 }
 
