@@ -268,6 +268,12 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       // Present runs its own keys; the editor's would fire underneath it
       if (ui.presenting) return;
 
+      // An open context menu owns the keyboard, the way Figma's does. Without
+      // this, R arms a tool and ⌫ deletes the selection sitting under the
+      // panel, out of sight. Escape still reaches the chain below, which eats
+      // the menu before anything else.
+      if (ui.contextMenu && event.key !== 'Escape') return;
+
       // ⇧⌘⏎ — play the prototype, as in Figma
       if (mod && event.shiftKey && event.key === 'Enter') {
         event.preventDefault();
@@ -298,13 +304,15 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
 
       if (event.key === 'Escape') {
-        if (ui.paletteOpen) ui.setPaletteOpen(false);
+        // the menu is on top of everything, so it is what Escape takes first —
+        // checked below vector editing, one press used to close both
+        if (ui.contextMenu) ui.setContextMenu(null);
+        else if (ui.paletteOpen) ui.setPaletteOpen(false);
         else if (ui.vectorEdit) ui.setVectorEdit(null);
         else if (ui.historyOpen) ui.setHistoryOpen(false);
         else if (ui.exportOpen) ui.setExportOpen(false);
         else if (ui.shadersOpen) ui.setShadersOpen(false);
         else if (ui.editing) ui.setEditing(null);
-        else if (ui.contextMenu) ui.setContextMenu(null);
         else if (ui.motion.frame) ui.openMotion(null);
         else if (ui.prompt) {
           ui.setPrompt(null);

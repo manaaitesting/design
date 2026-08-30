@@ -1649,8 +1649,12 @@ select {
     white-space: nowrap;
   }
   .ctx-row:hover:not(:disabled),
-  .ctx-row[data-open='true'] {
+  .ctx-row[data-active]:not(:disabled),
+  .ctx-row[aria-expanded='true'] {
     background: var(--fig-blue, #0d99ff);
+  }
+  .ctx:focus-visible {
+    outline: none;
   }
   .ctx-row:disabled {
     color: rgba(255, 255, 255, 0.32);
@@ -1664,7 +1668,8 @@ select {
     flex: none;
   }
   .ctx-row:hover:not(:disabled) .ctx-shortcut,
-  .ctx-row[data-open='true'] .ctx-shortcut {
+  .ctx-row[data-active]:not(:disabled) .ctx-shortcut,
+  .ctx-row[aria-expanded='true'] .ctx-shortcut {
     color: rgba(255, 255, 255, 0.85);
   }
   .ctx-row:disabled .ctx-shortcut {
@@ -1677,7 +1682,8 @@ select {
     flex: none;
   }
   .ctx-row:hover:not(:disabled) .ctx-arrow,
-  .ctx-row[data-open='true'] .ctx-arrow {
+  .ctx-row[data-active]:not(:disabled) .ctx-arrow,
+  .ctx-row[aria-expanded='true'] .ctx-arrow {
     color: #fff;
   }
   .ctx-sep {

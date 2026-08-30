@@ -1,6 +1,13 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   useCollections,
   useCustomFonts,
@@ -87,17 +94,25 @@ function Panel({
   y,
   width,
   onClose,
+  onBack,
+  takeFocus = true,
 }: {
   items: Item[];
   x: number;
   y: number;
   width: number;
   onClose: () => void;
+  /** ← in a submenu hands the keyboard back to the row that opened it */
+  onBack?: () => void;
+  takeFocus?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  /** which row's submenu is showing, and where that submenu should sit */
-  const [open, setOpen] = useState<{ index: number; left: number; top: number } | null>(null);
+  /** which row's submenu is showing, where it should sit, and how it was asked for */
+  const [open, setOpen] = useState<{ index: number; left: number; top: number; byKey: boolean } | null>(null);
   const [at, setAt] = useState({ left: x, top: y, ready: false });
+  /** the row the keyboard is on, which is not the row the pointer is over */
+  const [active, setActive] = useState(-1);
+  const rows = useId();
 
   // Measure once mounted, then keep the panel fully on screen. Flipping to the
   // left of the anchor beats letting a submenu run off the window.
@@ -111,11 +126,89 @@ function Panel({
     });
   }, [x, y, items]);
 
+  // An open menu owns the keyboard, which it cannot do without holding focus.
+  // Not before it has been measured: the panel is `visibility: hidden` until
+  // then, and a hidden element cannot take focus. A submenu takes it only when
+  // the keyboard opened it — taking it on hover would leave the keyboard
+  // nowhere the moment the pointer moved off again.
+  useEffect(() => {
+    if (takeFocus && at.ready) ref.current?.focus();
+  }, [takeFocus, at.ready]);
+
   // A panel with more rows than the window is tall cannot be clamped onto the
   // screen — the arithmetic above pins it to the top and the rest hangs off the
   // bottom, unreachable. Scrolling is what Figma does with a long menu, and it
   // is the only answer that does not hide a command.
   const fit = { maxHeight: 'calc(100vh - 16px)', overflowY: 'auto' as const };
+
+  /** the rows the keyboard can land on — a greyed row is not one of them */
+  const live = items.map((item, index) => (item.disabled ? -1 : index)).filter((index) => index >= 0);
+
+  const reveal = (index: number) => {
+    setActive(index);
+    setOpen(null);
+    ref.current?.children[index]?.scrollIntoView({ block: 'nearest' });
+  };
+
+  const step = (delta: number) => {
+    if (!live.length) return;
+    const here = live.indexOf(active);
+    reveal(
+      here < 0
+        ? delta > 0
+          ? live[0]
+          : live[live.length - 1]
+        : live[(here + delta + live.length) % live.length],
+    );
+  };
+
+  const openSub = (index: number, byKey: boolean) => {
+    const box = ref.current?.children[index]?.getBoundingClientRect();
+    if (!box) return;
+    setOpen({ index, left: box.right - 4, top: box.top - 6, byKey });
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent) => {
+    const item = items[active];
+    const keys: Record<string, () => void> = {
+      ArrowDown: () => step(1),
+      ArrowUp: () => step(-1),
+      Home: () => void (live.length && reveal(live[0])),
+      End: () => void (live.length && reveal(live[live.length - 1])),
+      ArrowRight: () => void (item?.items && openSub(active, true)),
+      ArrowLeft: () => {
+        if (open) {
+          setOpen(null);
+          ref.current?.focus();
+        } else onBack?.();
+      },
+      Enter: () => {
+        if (!item) return;
+        if (item.items) return openSub(active, true);
+        void item.run?.();
+        onClose();
+      },
+    };
+    const handler = keys[event.key];
+    if (handler) {
+      event.preventDefault();
+      event.stopPropagation();
+      handler();
+      return;
+    }
+
+    // Figma's typeahead: a letter jumps to the next row that starts with it,
+    // wrapping, so pressing the same letter again walks the rows that share it.
+    if (event.key.length !== 1 || event.metaKey || event.ctrlKey || event.altKey) return;
+    const from = live.indexOf(active) + 1;
+    const hit = [...live.slice(from), ...live.slice(0, from)].find((index) =>
+      items[index].label.toLowerCase().startsWith(event.key.toLowerCase()),
+    );
+    if (hit === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    reveal(hit);
+  };
 
   return (
     <div
@@ -130,7 +223,10 @@ function Panel({
         event.preventDefault();
       }}
       onContextMenu={(event) => event.preventDefault()}
+      onKeyDown={onKeyDown}
       role="menu"
+      tabIndex={-1}
+      aria-activedescendant={active >= 0 ? `${rows}-${active}` : undefined}
     >
       {items.map((item, index) => (
         <div
@@ -138,18 +234,22 @@ function Panel({
           style={{ position: 'relative' }}
           onPointerEnter={(event) => {
             item.onHover?.(null);
+            setActive(-1);
             if (item.disabled || !item.items) return setOpen(null);
             const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
-            setOpen({ index, left: box.right - 4, top: box.top - 6 });
+            setOpen({ index, left: box.right - 4, top: box.top - 6, byKey: false });
           }}
         >
           {item.divider && <div className="ctx-sep" />}
           <button
             type="button"
+            id={`${rows}-${index}`}
             className="ctx-row"
             role="menuitem"
             disabled={item.disabled}
-            data-open={open?.index === index}
+            data-active={active === index || undefined}
+            aria-haspopup={item.items ? 'menu' : undefined}
+            aria-expanded={item.items ? open?.index === index : undefined}
             onPointerEnter={() => item.onHover?.(null)}
             onClick={() => {
               if (item.items) return;
@@ -171,6 +271,11 @@ function Panel({
               y={open.top}
               width={item.items.some((i) => (i.shortcut ?? '').length > 2) ? 232 : 200}
               onClose={onClose}
+              onBack={() => {
+                setOpen(null);
+                ref.current?.focus();
+              }}
+              takeFocus={open.byKey}
             />
           )}
         </div>
@@ -333,7 +438,10 @@ function TextMenu({
     },
   ];
 
-  return <Panel items={items} x={x} y={y} width={200} onClose={onClose} />;
+  // Alone among the menus this one does not take the keyboard: the caret it
+  // acts on lives in the focus, and a panel that took it would collapse the
+  // range and end the edit before a row could run.
+  return <Panel items={items} x={x} y={y} width={200} onClose={onClose} takeFocus={false} />;
 }
 
 function Menu({ menu }: { menu: OpenMenu }) {

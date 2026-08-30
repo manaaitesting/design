@@ -2872,6 +2872,63 @@ test('the instance commands are absent on a layer that follows no main', async (
   await removeNodes(page, [id]);
 });
 
+/**
+ * An open menu owns the keyboard. Both halves matter: the rows have to answer
+ * the arrows, and the canvas shortcuts underneath have to stop answering — a
+ * stray ⌫ used to delete the selection sitting out of sight behind the panel.
+ */
+test('the open menu takes the keyboard, and the canvas shortcuts wait for it', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxKeys', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await openMenu(page, id);
+
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('r');
+  expect((await doc(page))[id]).toBeTruthy();
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+  // ⇱ and ↓ move the highlight, and a letter jumps to the next row starting
+  // with it — which is where the R above went instead of arming the tool
+  await page.keyboard.press('Home');
+  await expect(page.locator('.ctx-row[data-active]')).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('c');
+  await page.keyboard.press('c');
+  await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Copy/Paste as');
+
+  // → opens the submenu that row owns, ← closes it again
+  await page.keyboard.press('ArrowRight');
+  await expect(row(page, 'Copy as SVG')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(row(page, 'Copy as SVG')).toHaveCount(0);
+
+  await page.keyboard.press('f');
+  await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Frame selection');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ctx')).toHaveCount(0);
+
+  const framed = (await selection(page))[0];
+  expect((await doc(page))[framed].children).toEqual([id]);
+  await removeNodes(page, [framed]);
+});
+
+test('escape over an open menu closes the menu and nothing else', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxEsc', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await select(page, [id]);
+  await page.evaluate((target) => window.paperlike!.ui.getState().setVectorEdit(target), id);
+
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await expect(page.locator('.ctx')).toHaveCount(0);
+  // one press, one mode: point editing used to go with it
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().vectorEdit)).toBe(id);
+
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().vectorEdit)).toBeNull();
+  await removeNodes(page, [id]);
+});
+
 test('the menu shortcuts run the same commands from the keyboard', async ({ page }) => {
   const { a, b } = await twoRects(page);
 
@@ -4874,3 +4931,5 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 });
+
+

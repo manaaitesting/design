@@ -148,6 +148,8 @@ export function VectorEdit({ containerRef }: { containerRef: RefObject<HTMLDivEl
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+      // an open menu is on top and takes the keys, Escape included
+      if (useUI.getState().contextMenu) return;
 
       const live = store.getSnapshot()[id];
       if (!live) return;
