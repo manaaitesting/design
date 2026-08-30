@@ -104,6 +104,15 @@ export interface MotionUI {
    * resolution the keyframes need rather than the one the window has.
    */
   zoom: number;
+  /**
+   * The layers whose tracks are folded away.
+   *
+   * A timeline of eight layers at three tracks each is thirty-two rows in a
+   * panel that stops growing at thirteen, so the layers you are not working on
+   * have to be foldable — and a folded layer still shows where its keys are,
+   * on its own summary row.
+   */
+  collapsed: string[];
 }
 
 export interface UIState {
@@ -304,6 +313,7 @@ export interface UIState {
   setMotionZoom: (zoom: number) => void;
   /** what the panel has selected, for the easing menu, ⌫ and ⌘C */
   selectKeyframes: (selected: SelectedKey[]) => void;
+  toggleMotionLayer: (id: string) => void;
   /** the keyframes ⌘C put down, kept per session rather than in the document */
   motionClipboard: CopiedKey[];
   copyKeyframes: (keys: CopiedKey[]) => void;
@@ -773,7 +783,7 @@ export const useUI = create<UIState>((set) => ({
   presenting: null,
   present: (presenting) => set({ presenting, editing: null }),
 
-  motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
+  motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1, collapsed: [] },
   openMotion: (frame) =>
     set((state) => ({
       // opening it on another frame starts that timeline from the top rather
@@ -784,12 +794,21 @@ export const useUI = create<UIState>((set) => ({
       motion:
         frame === state.motion.frame
           ? { ...state.motion, frame }
-          : { frame, at: 0, playing: false, recording: !!frame, selected: [], zoom: 1 },
+          : { frame, at: 0, playing: false, recording: !!frame, selected: [], zoom: 1, collapsed: [] },
     })),
   setMotionAt: (at) => set((state) => ({ motion: { ...state.motion, at: Math.max(0, at) } })),
   setMotionPlaying: (playing) => set((state) => ({ motion: { ...state.motion, playing } })),
   setMotionRecording: (recording) => set((state) => ({ motion: { ...state.motion, recording } })),
   selectKeyframes: (selected) => set((state) => ({ motion: { ...state.motion, selected } })),
+  toggleMotionLayer: (id) =>
+    set((state) => ({
+      motion: {
+        ...state.motion,
+        collapsed: state.motion.collapsed.includes(id)
+          ? state.motion.collapsed.filter((entry) => entry !== id)
+          : [...state.motion.collapsed, id],
+      },
+    })),
   motionClipboard: [],
   copyKeyframes: (motionClipboard) => set({ motionClipboard }),
   setMotionZoom: (zoom) =>
@@ -819,7 +838,7 @@ export const useUI = create<UIState>((set) => ({
       lockedHint: null,
       contextMenu: null,
       presenting: null,
-      motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
+      motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1, collapsed: [] },
       paletteOpen: false,
       historyOpen: false,
       exportOpen: false,

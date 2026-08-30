@@ -3665,6 +3665,38 @@ select {
   background: rgb(255 255 255 / 0.03);
 }
 
+/* The disclosure on a timeline layer, pointing down until it is folded. */
+.mo-fold {
+  display: inline-block;
+  width: 12px;
+  margin-right: 2px;
+  opacity: 0.55;
+  transform: rotate(90deg);
+  transition: transform 90ms ease;
+}
+
+.mo-fold[data-on='true'] {
+  transform: rotate(0deg);
+}
+
+.mo-fold:hover {
+  opacity: 1;
+}
+
+/* What a layer row says about itself: one mark per moment something happens on
+   it, drawn through so the marquee underneath still gets the pointer. */
+.mo-summary-key {
+  position: absolute;
+  top: 10px;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* A keyframe is a diamond, as every timeline has drawn one since After
    Effects: it reads as a point in time rather than a block of it. */
 .mo-key {

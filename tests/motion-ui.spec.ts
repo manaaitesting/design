@@ -1113,8 +1113,12 @@ test.describe('the keyboard', () => {
   test('the arrows walk the playhead, and ⌥ jumps to the next key', async ({ page }) => {
     const { board } = await animate(page);
     await openTimeline(page, board);
+    await select(page, []);
     await setAt(page, 0);
 
+    // with nothing on the canvas to nudge, a plain arrow is the playhead's. A
+    // layer selected and no keys selected still nudges the layer, because with
+    // Record armed that is how a keyframe gets written.
     const now = async () => (await motionUI(page)).at;
     await page.keyboard.press('ArrowRight');
     const oneStep = await now();
@@ -1155,5 +1159,89 @@ test.describe('the keyboard', () => {
     // the layer itself has not moved: nudging it is what used to happen, and
     // with Record armed it wrote a keyframe nobody asked for
     expect((await doc(page))[cover].x).toBe(before);
+  });
+});
+
+/**
+ * A timeline of eight layers at three tracks each is thirty-two rows in a panel
+ * that stops growing at thirteen, so the layers you are not working on have to
+ * fold — and a folded layer still has to say where its keys are.
+ */
+test.describe('layer rows', () => {
+  test('a layer row summarises its keys, and folds its tracks away', async ({ page }) => {
+    const { board, cover } = await animate(page);
+    await openTimeline(page, board);
+
+    // one mark per moment something happens on the layer, however many tracks
+    // those moments are spread across
+    const summary = page.locator(`[data-summary="${cover}"]`);
+    await expect(summary).toHaveCount(2);
+    await page.evaluate(
+      ([frame, node]) => {
+        const store = window.paperlike!.store;
+        store.setKeyframe(frame, node, 'opacity', 0, 1, { easing: 'linear' });
+        store.setKeyframe(frame, node, 'opacity', 250, 0.2, { easing: 'linear' });
+        store.commit();
+      },
+      [board, cover] as const,
+    );
+    // x has keys at 0 and 1000, opacity at 0 and 250 — three distinct moments
+    await expect(summary).toHaveCount(3);
+
+    const lanes = page.locator('.mo-lane[data-track]');
+    await expect(lanes).toHaveCount(2);
+    const tall = (await page.locator('.mo-panel').boundingBox())!.height;
+
+    await page.locator(`[data-fold="${cover}"]`).click();
+    await expect(lanes).toHaveCount(0);
+    // the summary is what is left, which is the point of folding it
+    await expect(summary).toHaveCount(3);
+    expect((await page.locator('.mo-panel').boundingBox())!.height).toBeLessThan(tall);
+
+    await page.locator(`[data-fold="${cover}"]`).click();
+    await expect(lanes).toHaveCount(2);
+  });
+});
+
+/**
+ * Right-clicking the timeline.
+ *
+ * Figma's keyframe menu is how most people ever find keyframe easing. Here a
+ * right press had no menu at all — and worse, the lane handlers never checked
+ * which button it was, so it moved the playhead and threw away the keyframe
+ * selection on its way to the browser's own menu.
+ */
+test.describe('the right-click menu', () => {
+  test('a keyframe offers its own commands, and the easings behind them', async ({ page }) => {
+    const { board } = await animate(page);
+    await openTimeline(page, board);
+    await setAt(page, 400);
+
+    await page.locator('.mo-key').last().click({ button: 'right' });
+    const menu = page.locator('.ctx');
+    await expect(menu).toBeVisible();
+    // right-clicking a key selects it, the way every list here behaves
+    expect((await motionUI(page)).selected).toHaveLength(1);
+    // and the playhead has not moved, which a right press used to do
+    expect((await motionUI(page)).at).toBe(400);
+
+    await menu.getByText('Easing', { exact: true }).hover();
+    await page.getByRole('menuitem', { name: 'Ease in out', exact: true }).click();
+    const spec = await timelineOf(page, board);
+    expect(spec!.tracks[0].keys.some((k: { easing: string }) => k.easing === 'ease-in-out')).toBe(true);
+
+    // and Delete takes the key it was opened on
+    await page.locator('.mo-key').last().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Delete keyframe' }).click();
+    expect((await timelineOf(page, board))!.tracks[0].keys).toHaveLength(1);
+  });
+
+  test('a right press on empty lane space keeps the playhead where it was', async ({ page }) => {
+    const { board } = await animate(page);
+    await openTimeline(page, board);
+    await setAt(page, 700);
+
+    await page.locator('.mo-lane[data-track]').first().click({ button: 'right', position: { x: 20, y: 12 } });
+    expect((await motionUI(page)).at).toBe(700);
   });
 });

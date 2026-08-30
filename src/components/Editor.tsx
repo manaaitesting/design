@@ -874,12 +874,14 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
 
       // ── Nudge ──────────────────────────────────────────────────────────
-      // The timeline takes the arrows while it is open: left and right are how
-      // the playhead moves and how a selected keyframe moves, and nudging the
-      // layer instead wrote a stray keyframe every time Record was armed. The
-      // same stand-down ⌫ and the clipboard already make.
-      const timelineHasTheArrows =
-        ui.motion.frame && (ui.motion.selected.length > 0 || event.key === 'ArrowLeft' || event.key === 'ArrowRight');
+      // The timeline takes the arrows out of the canvas's hands in two cases,
+      // the same stand-down ⌫ and the clipboard already make: when keyframes
+      // are selected, because then the arrows move the keys — nudging the layer
+      // instead wrote a stray keyframe every time Record was armed — and when ⌥
+      // is held, which walks the playhead from key to key. A plain arrow with
+      // only layers selected still nudges the layer, and recording still
+      // records it, because that is what the panel is for.
+      const timelineHasTheArrows = !!ui.motion.frame && (ui.motion.selected.length > 0 || event.altKey);
       if (event.key.startsWith('Arrow') && selection.length && !timelineHasTheArrows) {
         event.preventDefault();
 

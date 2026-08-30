@@ -5,9 +5,11 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
+import { Panel, type Item } from './ContextMenu';
 import { useDoc, useStore } from './Session';
 import { MOTION_ZOOM, useUI, type SelectedKey } from '../state/ui';
 import { Icon } from './ui/Icons';
@@ -280,9 +282,11 @@ function TimelinePanel({ frame }: { frame: string }) {
   const recording = useUI((s) => s.motion.recording);
   const selected = useUI((s) => s.motion.selected);
   const zoom = useUI((s) => s.motion.zoom);
+  const collapsed = useUI((s) => s.motion.collapsed);
   const clipboard = useUI((s) => s.motionClipboard);
   /** the rubber band, while one is being drawn over the lanes */
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: Item[] } | null>(null);
   /** whether the numbers behind a custom easing are showing */
   const [curveOpen, setCurveOpen] = useState(false);
   const selection = useUI((s) => s.selection);
@@ -329,6 +333,15 @@ function TimelinePanel({ frame }: { frame: string }) {
    * showing five seconds or half of one.
    */
   const nudge = Math.max(1, Math.round(tickStep(duration, zoom) / 10));
+
+  /** The tracks a layer is showing: none, while it is folded. */
+  const shownTracks = (id: string) => (collapsed.includes(id) ? [] : tracksOf(spec, id));
+
+  /** Every moment something happens on one layer, for its summary row. */
+  const summaryTimes = (id: string): number[] =>
+    [...new Set(tracksOf(spec, id).flatMap((track) => track.keys.map((key) => key.at)))].sort(
+      (a, b) => a - b,
+    );
 
   /** Every moment something happens on this timeline, in order. */
   const keyTimes = (): number[] =>
@@ -505,7 +518,12 @@ function TimelinePanel({ frame }: { frame: string }) {
       // canvas's own nudge means and why it stands down for us.
       const ends = event.key === 'Home' || event.key === 'End';
       const arrow = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
-      if (!mod && (arrow || ends)) {
+      // A plain arrow with a layer selected is still the canvas's nudge — and
+      // with Record armed, nudging is how a keyframe gets written, which is the
+      // panel's whole point. The timeline takes the arrows when they cannot
+      // mean that: keys selected, ⌥ held, or nothing on the canvas to nudge.
+      const mine = selected.length > 0 || event.altKey || useUI.getState().selection.length === 0;
+      if (!mod && ((arrow && mine) || ends)) {
         const ui = useUI.getState();
         if (arrow && selected.length) {
           event.preventDefault();
@@ -555,6 +573,9 @@ function TimelinePanel({ frame }: { frame: string }) {
   };
 
   const scrub = (event: ReactPointerEvent): void => {
+    // a right press belongs to the menu below; it used to move the playhead
+    // and clear the keyframe selection on its way to the browser's own menu
+    if (event.button !== 0) return;
     event.preventDefault();
     const ui = useUI.getState();
     ui.setMotionPlaying(false);
@@ -623,6 +644,12 @@ function TimelinePanel({ frame }: { frame: string }) {
   };
 
   const dragKey = (track: MotionTrack, key: Keyframe) => (event: ReactPointerEvent) => {
+    // a right press on a key opens the menu instead of arming a drag, but it
+    // still stops the lane underneath from clearing the selection
+    if (event.button !== 0) {
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const ui = useUI.getState();
@@ -682,6 +709,9 @@ function TimelinePanel({ frame }: { frame: string }) {
    * is already there to be asked. ⇧ keeps what was selected before.
    */
   const marquee = (event: ReactPointerEvent): void => {
+    // a right press belongs to the menu below; it used to move the playhead
+    // and clear the keyframe selection on its way to the browser's own menu
+    if (event.button !== 0) return;
     event.preventDefault();
     const span = spanRef.current;
     if (!span) return;
@@ -718,6 +748,79 @@ function TimelinePanel({ frame }: { frame: string }) {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+  };
+
+  /**
+   * The timeline's right-click menu.
+   *
+   * It is `Panel` rather than a menu of its own — the clamping, the scrolling
+   * and the keyboard are already written once — but it is not the editor's
+   * `ContextMenu`, whose items are all about layers. A keyframe's commands are
+   * about keyframes.
+   */
+  const keyMenu = (track: MotionTrack, key: Keyframe) => (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const ui = useUI.getState();
+    // right-clicking outside the selection makes the key you clicked the
+    // selection, as every list in this app does
+    const inSelection = ui.motion.selected.some((entry) => entry.key === key.id);
+    const on = inSelection ? ui.motion.selected : [{ track: track.id, key: key.id }];
+    if (!inSelection) ui.selectKeyframes(on);
+
+    setMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        { label: on.length > 1 ? `Copy ${on.length} keyframes` : 'Copy keyframe', shortcut: '⌘C', run: copySelection },
+        { label: 'Paste at the playhead', shortcut: '⌘V', disabled: !clipboard.length, run: pasteClipboard },
+        {
+          label: 'Easing',
+          items: KEY_EASINGS.map((easing) => ({
+            label: easingLabel(easing),
+            run: () => {
+              store.updateKeyframes(frame, on, { easing });
+              store.commit();
+            },
+          })),
+        },
+        {
+          label: on.length > 1 ? `Delete ${on.length} keyframes` : 'Delete keyframe',
+          shortcut: '⌫',
+          divider: true,
+          run: () => {
+            store.removeKeyframes(frame, on);
+            store.commit();
+            useUI.getState().selectKeyframes([]);
+          },
+        },
+      ],
+    });
+  };
+
+  const trackMenu = (track: MotionTrack) => (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        {
+          label: 'Select every keyframe on this track',
+          disabled: !track.keys.length,
+          run: () =>
+            useUI.getState().selectKeyframes(track.keys.map((key) => ({ track: track.id, key: key.id }))),
+        },
+        {
+          label: 'Remove this track',
+          divider: true,
+          run: () => {
+            store.removeTrack(frame, track.id);
+            store.commit();
+          },
+        },
+      ],
+    });
   };
 
   /** ⌘C: the selection, as times relative to the earliest of them. */
@@ -786,7 +889,7 @@ function TimelinePanel({ frame }: { frame: string }) {
    * the screen — so it grows with its rows and stops, after which the lanes
    * scroll inside it.
    */
-  const laneRows = rows.reduce((total, id) => total + 1 + tracksOf(spec, id).length, 0);
+  const laneRows = rows.reduce((total, id) => total + 1 + shownTracks(id).length, 0);
   const height = Math.min(
     460,
     // the scrollbar under the lanes is 6px, and it would otherwise eat the
@@ -806,7 +909,23 @@ function TimelinePanel({ frame }: { frame: string }) {
     ?.keys.find((key) => key.id === first?.key);
 
   return (
-    <div className="mo-panel" data-frame={frame} style={{ height }}>
+    <div
+      className="mo-panel"
+      data-frame={frame}
+      style={{ height }}
+      // no part of the timeline should ever hand out the browser's own menu:
+      // every one of its rows means something here
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {menu && (
+        <Panel
+          items={menu.items}
+          x={menu.x}
+          y={menu.y}
+          width={210}
+          onClose={() => setMenu(null)}
+        />
+      )}
       <div className="mo-head">
         <span className="mo-title" title="The frame this timeline belongs to">
           {node.name}
@@ -1014,7 +1133,8 @@ function TimelinePanel({ frame }: { frame: string }) {
         <div className="mo-names">
           <div className="mo-ruler-gutter" />
           {rows.map((id) => {
-            const tracks = tracksOf(spec, id);
+            const tracks = shownTracks(id);
+            const folded = collapsed.includes(id);
             return (
               <div key={id} className="mo-name-group">
                 <button
@@ -1024,10 +1144,33 @@ function TimelinePanel({ frame }: { frame: string }) {
                   onClick={() => useUI.getState().select([id])}
                   data-on={current === id ? 'true' : undefined}
                 >
+                  {/* the disclosure is inside the name button rather than beside
+                      it, so a narrow names column does not have to find room for
+                      a second control — the click target is the caret itself */}
+                  <span
+                    className="mo-fold"
+                    role="button"
+                    tabIndex={0}
+                    data-fold={id}
+                    data-on={folded ? 'true' : undefined}
+                    title={folded ? 'Show this layer’s tracks' : 'Fold this layer’s tracks away'}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      useUI.getState().toggleMotionLayer(id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      useUI.getState().toggleMotionLayer(id);
+                    }}
+                  >
+                    ▸
+                  </span>
                   {doc[id]?.name}
                 </button>
                 {tracks.map((track) => (
-                  <div key={track.id} className="mo-track-name">
+                  <div key={track.id} className="mo-track-name" onContextMenu={trackMenu(track)}>
                     <span>{PROPERTIES[track.property].label}</span>
                     {/* what the track reads *here*, which is the number the
                         canvas is currently showing rather than the layer's own */}
@@ -1076,8 +1219,22 @@ function TimelinePanel({ frame }: { frame: string }) {
 
           {rows.map((id) => (
             <div key={id} className="mo-lane-group">
-              <div className="mo-lane mo-lane-layer" onPointerDown={marquee} />
-              {tracksOf(spec, id).map((track) => (
+              {/* Figma's layer row summarises what is on the layer, so a folded
+                  layer still says where things happen. The ticks are drawn
+                  through — the marquee under them has to keep the pointer. */}
+              <div className="mo-lane mo-lane-layer" onPointerDown={marquee}>
+                <div className="mo-field">
+                  {summaryTimes(id).map((when) => (
+                    <span
+                      key={when}
+                      className="mo-summary-key"
+                      data-summary={id}
+                      style={{ left: `${Math.min(100, (when / duration) * 100)}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+              {shownTracks(id).map((track) => (
                 <div
                   key={track.id}
                   className="mo-lane"
@@ -1107,6 +1264,7 @@ function TimelinePanel({ frame }: { frame: string }) {
                         style={{ left: `${Math.min(100, (key.at / duration) * 100)}%` }}
                         title={`${PROPERTIES[track.property].label} ${key.value} at ${formatTime(key.at)}`}
                         onPointerDown={dragKey(track, key)}
+                        onContextMenu={keyMenu(track, key)}
                       />
                     ))}
                   </div>
