@@ -199,6 +199,33 @@ export function VectorEdit({ containerRef }: { containerRef: RefObject<HTMLDivEl
         return;
       }
 
+      /**
+       * ⌫ and ⌘⌫, both of which belong to the points.
+       *
+       * Figma's ⌘⌫ is "delete and heal": the point goes and the gap closes. It
+       * is checked before the modifier gate below, and — with or without a
+       * modifier — the event is swallowed even when nothing is selected,
+       * because the editor's own ⌫ is behind this one and deletes the whole
+       * layer you are editing. Nothing in point editing may destroy the layer
+       * except taking the last point out of it.
+       */
+      if (event.key === 'Backspace' || event.key === 'Delete') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!current.length) return;
+        const kept = removeAnchors(livePaths, current);
+        if (!kept.length) {
+          store.remove([id]);
+          store.commit();
+          setVectorEdit(null);
+          useUI.getState().select([]);
+          return;
+        }
+        write(kept);
+        setSelected([]);
+        return;
+      }
+
       if (mod) return;
 
       // the two sub-tools Figma gives keys of their own
@@ -212,23 +239,6 @@ export function VectorEdit({ containerRef }: { containerRef: RefObject<HTMLDivEl
         event.preventDefault();
         event.stopPropagation();
         useUI.getState().setVectorTool('width');
-        return;
-      }
-
-      if (event.key === 'Backspace' || event.key === 'Delete') {
-        if (!current.length) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const kept = removeAnchors(livePaths, current);
-        if (!kept.length) {
-          store.remove([id]);
-          store.commit();
-          setVectorEdit(null);
-          useUI.getState().select([]);
-          return;
-        }
-        write(kept);
-        setSelected([]);
         return;
       }
 

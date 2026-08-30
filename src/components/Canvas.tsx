@@ -426,12 +426,29 @@ export function Canvas() {
     [store, page, select, setTool],
   );
 
-  // Reset on tool change only — folding this into the key-handler effect below
-  // would re-run it on every point and loop, since [] is a new array each time.
+  /**
+   * Leaving the pen finishes the path rather than throwing it away.
+   *
+   * Figma's pen has the layer on the document from the first segment, so
+   * picking up another tool leaves what you drew standing. Here the anchors
+   * live in React state until they are committed, and a tool change used to
+   * drop them on the floor with no undo to reach them — the same for Escape
+   * below. Both finish now. Anything shorter than two points is not a path and
+   * is dropped, which is what `commitPen` already decides.
+   */
+  const penRef = useRef<Anchor[]>([]);
+  penRef.current = pen;
   useEffect(() => {
     if (tool === 'pen') return;
-    setPen((points) => (points.length ? [] : points));
-    setPenCursor((cursor) => (cursor ? null : cursor));
+    const drawn = penRef.current;
+    if (drawn.length >= 2) commitPen(drawn, false);
+    else {
+      setPen((points) => (points.length ? [] : points));
+      setPenCursor((cursor) => (cursor ? null : cursor));
+    }
+    // `commitPen` sets the tool, which would re-enter this effect; the ref is
+    // how the finish reads the path without making the effect chase it
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool]);
 
   useEffect(() => {
@@ -442,9 +459,14 @@ export function Canvas() {
         commitPen(pen, false);
       } else if (event.key === 'Escape') {
         event.preventDefault();
-        setPen([]);
-        setPenCursor(null);
-        setTool('move');
+        // Escape ends the path, as ⏎ does — in Figma it stops drawing, it does
+        // not undraw. Only an empty one goes away with nothing left behind.
+        if (pen.length >= 2) commitPen(pen, false);
+        else {
+          setPen([]);
+          setPenCursor(null);
+          setTool('move');
+        }
       } else if (event.key === 'Backspace' && pen.length) {
         event.preventDefault();
         setPen((points) => points.slice(0, -1));
@@ -543,7 +565,12 @@ export function Canvas() {
     }
 
     if (tool === 'pen') {
-      const point = { x: Math.round(start.x), y: Math.round(start.y) };
+      // ⇧ holds the next point to 45° from the last one, which is how every
+      // straight and diagonal run gets drawn. `constrain45` is the same one the
+      // line and arrow tools use, twenty lines below.
+      const held =
+        event.shiftKey && pen.length ? constrain45(pen[pen.length - 1], start) : start;
+      const point = { x: Math.round(held.x), y: Math.round(held.y) };
       // clicking back on the first point closes the shape
       if (pen.length > 2) {
         const first = pen[0];
@@ -558,12 +585,18 @@ export function Canvas() {
       // way every pen tool works: release without moving and it stays a corner.
       drag(store, event, (e) => {
         const world = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
-        const dx = world.x - point.x;
-        const dy = world.y - point.y;
+        const pulled = e.shiftKey ? constrain45(point, world) : world;
+        const dx = pulled.x - point.x;
+        const dy = pulled.y - point.y;
         if (Math.hypot(dx, dy) * vp.zoom < 3) return;
         setPen((anchors) =>
           anchors.map((anchor, i) =>
-            i === index ? { ...anchor, out: [dx, dy], in: [-dx, -dy] } : anchor,
+            i === index
+              ? // ⌥ breaks the mirror, so the segment leaving the point can head
+                // somewhere else than the one arriving at it — the same trade
+                // `moveHandle` makes in point editing
+                { ...anchor, out: [dx, dy], in: e.altKey ? anchor.in : [-dx, -dy] }
+              : anchor,
           ),
         );
       });
@@ -1144,7 +1177,10 @@ export function Canvas() {
         if (tool === 'pen' && pen.length) {
           const rect = rootRef.current!.getBoundingClientRect();
           const world = toWorld(useUI.getState().viewport, e.clientX - rect.left, e.clientY - rect.top);
-          setPenCursor([world.x, world.y]);
+          // the ghost segment is held to 45° too, or ⇧ would only take effect
+          // at the moment of the press and the preview would have been lying
+          const held = e.shiftKey ? constrain45(pen[pen.length - 1], world) : world;
+          setPenCursor([held.x, held.y]);
         }
         const stack = hitStack(e.clientX, e.clientY, doc);
         const preview = resolveClick(stack, doc, entered, e.metaKey || e.ctrlKey ? 'deep' : 'normal', useUI.getState().selection);

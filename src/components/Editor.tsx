@@ -813,10 +813,13 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
 
       // ⌫ belongs to the timeline while keyframes are selected there — the
       // panel removes them, and the layers they belong to stay where they are.
+      // It belongs to point editing for the whole time that is open: nothing in
+      // there may destroy the layer being edited.
       if (
         (event.key === 'Delete' || event.key === 'Backspace') &&
         selection.length &&
-        !ui.motion.selected.length
+        !ui.motion.selected.length &&
+        !ui.vectorEdit
       ) {
         event.preventDefault();
         store.remove(selection);
