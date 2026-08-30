@@ -784,13 +784,21 @@ export function Canvas() {
     const targetId = resolved.id;
     if (resolved.entered !== entered) setEntered(resolved.entered);
 
-    if (event.shiftKey) {
-      toggle(targetId);
-      return;
-    }
+    // ⇧ on a layer means two things at once in Figma — add it to the selection,
+    // and constrain the drag that follows to one axis — and the two are settled
+    // by waiting, the same way a press inside a multi-selection is. A press that
+    // never moves is a click and toggles; a press that becomes a drag moves what
+    // is selected, held to the axis you pulled hardest along.
+    const alreadyIn = selection.includes(targetId);
+    /** a ⇧-click takes a selected layer back out, but only if it stayed a click */
+    const untoggle = event.shiftKey && alreadyIn;
 
-    let nextSelection = selection.includes(targetId) ? selection : [targetId];
-    if (!selection.includes(targetId)) select([targetId]);
+    let nextSelection = alreadyIn
+      ? selection
+      : event.shiftKey
+        ? [...selection, targetId]
+        : [targetId];
+    if (!alreadyIn) select(nextSelection);
 
     // ⌥-drag leaves a copy behind and moves the duplicate, as in Figma
     if (event.altKey) {
@@ -841,7 +849,10 @@ export function Canvas() {
           store.moveMany(kids, parentId, slot.index);
         },
         (e) => {
-          if (!shifted) return;
+          if (!shifted) {
+            if (untoggle) toggle(targetId);
+            return;
+          }
           const now = store.getSnapshot();
           const skip = new Set(kids.flatMap((id) => [id, ...descendants(id, now)]));
           const target = containerAt(e.clientX, e.clientY, now, skip) ?? page.id;
@@ -892,6 +903,15 @@ export function Canvas() {
         if (!moved && Math.hypot(dx, dy) * vp.zoom < 3) return;
         moved = true;
 
+        // ⇧ holds the drag to one axis — whichever you have pulled furthest
+        // along, re-decided every move so a gesture that turns a corner follows.
+        // Read live rather than off the press, because holding ⇧ part-way
+        // through is how most people reach for it.
+        if (e.shiftKey) {
+          if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
+          else dx = 0;
+        }
+
         // ⌥ already means "duplicate on drag", so ⌘ is the ignore-snapping
         // modifier — same split as Figma
         if (lead && candidates.length && !e.metaKey && !e.ctrlKey) {
@@ -917,7 +937,10 @@ export function Canvas() {
       (e) => {
         setGuides([]);
         // a click that never moved is a selection, not a drop
-        if (!moved) return;
+        if (!moved) {
+          if (untoggle) toggle(targetId);
+          return;
+        }
         const now = store.getSnapshot();
         // the dragged layers are under the pointer for the whole gesture, so
         // they and everything inside them are invisible to the drop test

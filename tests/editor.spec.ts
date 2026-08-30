@@ -46,6 +46,46 @@ test('dragging moves a layer', async ({ page }) => {
 });
 
 /**
+ * ⇧ during a move is Figma's axis lock, and it is the same ⇧ that adds a layer
+ * to the selection. Figma settles the collision by waiting: a press that becomes
+ * a drag moves what is selected, held to one axis; a press that never moves is a
+ * click, and toggles.
+ */
+test('\u21e7 holds a drag to the axis you pulled furthest along', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Axis', x: 40, y: 500, w: 120, h: 80, fill: '#F2637F' });
+  await select(page, [id]);
+
+  const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+  await dragBy(
+    page,
+    { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 },
+    { x: 80, y: 30 },
+    ['Shift'],
+  );
+
+  const after = (await doc(page))[id];
+  // the pull was mostly across, so the cross axis is held where it started
+  expect([after.x, after.y]).toEqual([120, 500]);
+  await removeNodes(page, [id]);
+});
+
+test('a \u21e7 press that never moves still takes the layer out of the selection', async ({ page }) => {
+  const a = await makeNode(page, 'rect', { name: 'KeepA', x: 40, y: 500, w: 100, h: 80, fill: '#F2637F' });
+  const b = await makeNode(page, 'rect', { name: 'KeepB', x: 200, y: 500, w: 100, h: 80, fill: '#7B61FF' });
+  await select(page, [a, b]);
+
+  const box = await page.locator(`[data-node-id="${b}"]`).boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.keyboard.down('Shift');
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+
+  expect(await selection(page)).toEqual([a]);
+  await removeNodes(page, [a, b]);
+});
+
+/**
  * Figma decides a layer's parent by where you drop it. Moving a layer onto a
  * frame makes it a child of that frame, and moving it off every frame gives it
  * back to the page — in both directions without the layer appearing to move,
