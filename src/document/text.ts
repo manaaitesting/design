@@ -278,10 +278,13 @@ export function runStyle(run: TextRun, font?: FontSpec): CSSProperties {
       run.case === 'upper' ? 'uppercase' : run.case === 'lower' ? 'lowercase' : 'capitalize';
   }
 
-  const lines = [run.underline && 'underline', run.strike && 'line-through'].filter(Boolean);
+  // a link that says nothing about its colour takes the document's blue and
+  // wears the underline with it, which is what a reader expects one to look like
+  const lines = [
+    (run.underline || run.link) && 'underline',
+    run.strike && 'line-through',
+  ].filter(Boolean);
   if (lines.length) style.textDecorationLine = lines.join(' ');
-  // a link that says nothing about its colour takes the document's blue, which
-  // is what a reader expects a link to look like
   if (run.link && !run.color) style.color = font?.color === '#0D99FF' ? font.color : '#0D99FF';
   return style;
 }

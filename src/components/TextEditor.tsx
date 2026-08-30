@@ -42,12 +42,15 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
   const store = useStore();
   const setEditing = useUI((s) => s.setEditing);
   const setEditingRange = useUI((s) => s.setEditingRange);
+  const setLinkEditor = useUI((s) => s.setLinkEditor);
   const editorRef = useRef<HTMLDivElement>(null);
   /** the runs as they stand — the DOM is a view of this, not the other way round */
   const runs = useRef<TextRun[]>(runsOf(node));
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
   /** bumping this re-seeds the DOM from the model, after a styling change */
   const [generation, setGeneration] = useState(0);
+  /** whether the range bar is asking for a link's address */
+  const [linking, setLinking] = useState(false);
 
   /**
    * The spans are built by hand rather than rendered.
@@ -370,6 +373,17 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
             return;
           }
 
+          // ⌘K links the characters, which is what it does in Figma. The
+          // window-level handler that links the whole layer never sees this key
+          // — everything typed into the editable stops here — so with no range
+          // to link it is called directly rather than left to fail silently.
+          if (!event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
+            event.preventDefault();
+            if (selection.end > selection.start) setLinking(true);
+            else setLinkEditor(node.id);
+            return;
+          }
+
           // ⌘B / ⌘I / ⌘U / ⇧⌘X, as Figma binds them.
           //
           // These have to be claimed rather than left to the browser: a
@@ -439,8 +453,10 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           node={node}
           current={current}
           list={list}
+          linking={linking}
           onApply={applyStyle}
           onList={(kind) => applyToLines(() => ({ list: kind }))}
+          onLinking={setLinking}
         />
       )}
     </>
@@ -458,15 +474,20 @@ function RangeBar({
   node,
   current,
   list,
+  linking,
   onApply,
   onList,
+  onLinking,
 }: {
   node: SceneNode;
   current: RunPatch;
   /** the list style of the paragraph the selection starts in */
   list: NonNullable<RunPatch['list']>;
+  /** the address field is open, because ⌘K or the link button asked for it */
+  linking: boolean;
   onApply: (patch: RunPatch) => void;
   onList: (kind: NonNullable<RunPatch['list']>) => void;
+  onLinking: (open: boolean) => void;
 }) {
   const rect = document.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)?.getBoundingClientRect();
   if (!rect) return null;
@@ -549,6 +570,31 @@ function RangeBar({
           onApply({ size: event.target.value ? Number(event.target.value) : undefined })
         }
       />
+      <button
+        type="button"
+        data-on={current.link ? 'true' : undefined}
+        title="Link  ⌘K"
+        onClick={() => onLinking(!linking)}
+      >
+        ⧉
+      </button>
+      {linking && (
+        <input
+          type="url"
+          autoFocus
+          title="Address"
+          placeholder="https://"
+          defaultValue={current.link ?? ''}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+              const href = (event.currentTarget as HTMLInputElement).value.trim();
+              onApply({ link: href || undefined });
+              onLinking(false);
+            } else if (event.key === 'Escape') onLinking(false);
+          }}
+        />
+      )}
       <button
         type="button"
         title="Clear formatting"

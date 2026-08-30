@@ -152,8 +152,13 @@ function textMarkup(
               .map((run) => {
                 const style = runStyle(run, font) as Record<string, string | number>;
                 const inner = escape(run.text);
-                if (!Object.keys(style).length) return inner;
-                return `<span ${inlineStyle(style)}>${inner}</span>`;
+                const marked = Object.keys(style).length
+                  ? `<span ${inlineStyle(style)}>${inner}</span>`
+                  : inner;
+                // a run that carries a link is an anchor, not a blue span
+                if (!run.link) return marked;
+                const href = run.link.replace(/"/g, '&quot;');
+                return `<a href="${href}" target="_blank" rel="noreferrer noopener">${marked}</a>`;
               })
               .join(''),
       )

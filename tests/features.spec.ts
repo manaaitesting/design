@@ -523,6 +523,31 @@ test.describe('rich text', () => {
   });
 
   /**
+   * ⌘K did nothing at all with the caret in the text: the editable stops every
+   * key before the window handler sees it, so the only way to link was with the
+   * layer selected, which linked every character in it. A footer's consent line
+   * or a card's "Learn more" mid-sentence could not be expressed.
+   */
+  test('⌘K links the selected characters, and nothing either side of them', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Meta+k');
+
+    const address = page.locator('.fig-range-bar input[type="url"]');
+    await expect(address).toBeVisible();
+    await address.fill('https://example.com/brave');
+    await address.press('Enter');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.link ? '→' : ''}`))
+      .toEqual(['hello ', 'brave→', ' new world']);
+    // the layer itself is not a link, which is what ⌘K used to make it
+    expect((await doc(page))[id].link ?? null).toBe(null);
+    await removeNodes(page, [id]);
+  });
+
+  /**
    * A list style belongs to the paragraphs it is applied to, not to the layer.
    * It used to live on `FontSpec`, so turning bullets on wrapped every line of
    * the layer in an `<li>` — a heading with three bullets under it had to be
