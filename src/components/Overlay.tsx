@@ -125,6 +125,20 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   // preview: the handles would chase a layer they cannot keep up with, since
   // the animation runs on the compositor and the overlay measures on render.
   const previewing = useUI((s) => s.motion.playing);
+  /**
+   * An armed tool owns the pointer, selection chrome included (C-27).
+   *
+   * Figma draws the outline of whatever is still selected while a drawing tool
+   * is up, but nothing in that chrome takes a press: you draw wherever you
+   * press, and the corner of the rectangle you have just made is exactly where
+   * the next one usually starts. Holding Space is the hand tool for as long as
+   * it is held, so it counts as armed too.
+   */
+  const tool = useUI((s) => s.tool);
+  const spacePan = useUI((s) => s.spacePan);
+  const armed = spacePan || (tool !== 'move' && tool !== 'scale');
+  /** what a piece of chrome puts in `pointerEvents` while a tool may be armed */
+  const grab = armed ? ('none' as const) : ('auto' as const);
   const presence = usePresence();
 
   const remoteIds = presence.flatMap((p) => p.selection);
@@ -702,7 +716,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 border: '1px solid var(--color-select-line)',
                 borderRadius: 1,
                 cursor: handle.cursor,
-                pointerEvents: 'auto',
+                pointerEvents: grab,
               }}
             />
           ))}
@@ -733,7 +747,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                   background: 'var(--color-select-line)',
                   border: '1.5px solid #fff',
                   cursor: 'grab',
-                  pointerEvents: 'auto',
+                  pointerEvents: grab,
                 }}
               />
               {next && (
@@ -751,7 +765,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                     opacity: 0.55,
                     borderRadius: 2,
                     cursor: across ? 'ew-resize' : 'ns-resize',
-                    pointerEvents: 'auto',
+                    pointerEvents: grab,
                   }}
                 />
               )}
@@ -819,7 +833,11 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
             // is a board among boards, and Figma labels it more quietly
             data-kind={node.type}
             data-on={selection.includes(id) || undefined}
-            style={{ left: rect.x, top: rect.y - (node.type === 'section' ? 20 : 16) }}
+            style={{
+              left: rect.x,
+              top: rect.y - (node.type === 'section' ? 20 : 16),
+              pointerEvents: grab,
+            }}
             onPointerDown={(event) => {
               event.stopPropagation();
               select([id]);
@@ -953,7 +971,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                           width: 18,
                           height: 18,
                           cursor: 'crosshair',
-                          pointerEvents: 'auto',
+                          pointerEvents: grab,
                         }}
                       />
                     )}
@@ -972,7 +990,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                         border: '1px solid var(--color-select-line)',
                         borderRadius: 1,
                         cursor: handle.cursor,
-                        pointerEvents: 'auto',
+                        pointerEvents: grab,
                       }}
                     />
                   </div>

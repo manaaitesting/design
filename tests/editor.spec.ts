@@ -1021,6 +1021,43 @@ test('Space while drawing walks the box without resizing it', async ({ page }) =
 });
 
 /**
+ * An armed tool owns the pointer, selection chrome included (C-27).
+ *
+ * Found by a drawing test whose press happened to land on the corner of the
+ * layer the previous test had left selected: it resized that layer instead of
+ * starting a shape. Figma gives the canvas to the armed tool — the chrome stays
+ * drawn, but nothing in it takes a press.
+ */
+test('a press on a selected layer’s handle draws, once a shape tool is armed', async ({ page }) => {
+  const sitting = await makeNode(page, 'rect', {
+    name: 'C27 Sitting', x: 700, y: 500, w: 100, h: 100, fill: '#4CC3F0',
+  });
+  await select(page, [sitting]);
+
+  // the east handle, which is where the next press is about to land
+  const handle = await page.locator('[data-handle="e"]').boundingBox();
+  const from = { x: handle!.x + handle!.width / 2, y: handle!.y + handle!.height / 2 };
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+  await dragBy(page, from, { x: 80, y: 60 });
+
+  // the layer that was selected is untouched, and a new one has been drawn
+  const after = await doc(page);
+  expect([after[sitting].w, after[sitting].h]).toEqual([100, 100]);
+  const drawn = (await selection(page))[0];
+  expect(drawn).not.toBe(sitting);
+  expect([after[drawn].w, after[drawn].h]).toEqual([80, 60]);
+
+  // and with the move tool back, the same press resizes as it always did
+  await select(page, [sitting]);
+  const again = await page.locator('[data-handle="e"]').boundingBox();
+  await dragBy(page, { x: again!.x + again!.width / 2, y: again!.y + again!.height / 2 }, { x: 40, y: 0 });
+  expect((await doc(page))[sitting].w).toBe(140);
+
+  await removeNodes(page, [sitting, drawn]);
+});
+
+/**
  * Move to page.
  *
  * The layers land at canvas level on the destination — a layer three frames
