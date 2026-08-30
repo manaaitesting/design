@@ -6,6 +6,7 @@ import { FlexHandles } from './FlexHandles';
 import { toScreen, toWorld, useUI } from '../state/ui';
 import { nearestEdge, snapCandidates, type SnapGuide } from '../document/snapping';
 import { isInFlow, type Doc, type SceneNode } from '../document/types';
+import { gapsOf, smartRow } from '../document/arrange';
 
 export interface Rect {
   x: number;
@@ -151,6 +152,97 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
       h: Math.max(...boxes.map((b) => b.y + b.h)) - y,
     };
   })();
+
+  /**
+   * Figma's smart selection: three or more layers that read as a row.
+   *
+   * `smartRow` decides whether they do; what follows is the two things you can
+   * then do with them. Both write through `store.layRow`, which lays the row out
+   * from the first layer's start — so neither gesture moves the arrangement, it
+   * only changes the order inside it or the size of the spaces.
+   */
+  const row = smartRow(doc, selection);
+
+  /** Where a point on the screen falls along the row, in the parent's terms. */
+  const alongRow = (clientX: number, clientY: number, axis: 'x' | 'y'): number | null => {
+    const container = containerRef.current;
+    if (!container) return null;
+    const base = container.getBoundingClientRect();
+    const vp = useUI.getState().viewport;
+    const world = toWorld(vp, clientX - base.left, clientY - base.top);
+    const origin = parentOrigin(doc[selection[0]]?.parent, base, vp);
+    return world[axis] - origin[axis];
+  };
+
+  /**
+   * Dragging a layer's dot moves it along the row, and the rest close up.
+   *
+   * The row is re-laid on every move rather than previewed, for the same reason
+   * the auto-layout reorder is: the arrangement shuffling under the pointer *is*
+   * the insertion indicator, and drawing a second one over a row that had not
+   * moved would be the lie.
+   */
+  const startSmartMove = (event: React.PointerEvent, id: string) => {
+    if (!row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const axis = row.axis;
+    const size = axis === 'x' ? 'w' : 'h';
+    let order = [...row.ids];
+
+    const move = (e: PointerEvent) => {
+      const at = alongRow(e.clientX, e.clientY, axis);
+      if (at === null) return;
+      const snapshot = store.getSnapshot();
+      const from = order.indexOf(id);
+      if (from < 0) return;
+      // count the others the pointer has passed the middle of; that count is
+      // the slot it belongs in
+      const others = order.filter((entry) => entry !== id);
+      let to = 0;
+      for (const entry of others) {
+        const node = snapshot[entry];
+        if (!node || at <= node[axis] + node[size] / 2) break;
+        to += 1;
+      }
+      if (to === from) return;
+      order = [...others.slice(0, to), id, ...others.slice(to)];
+      store.layRow(order, axis);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      store.commit();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  /** Dragging a space handle sets every space in the row at once. */
+  const startSmartGap = (event: React.PointerEvent) => {
+    if (!row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const axis = row.axis;
+    const order = [...row.ids];
+    const gaps = gapsOf(doc, row);
+    // the row may not be evenly spaced yet, and dragging from its typical gap
+    // is less surprising than dragging from whichever one you happened to grab
+    const start = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+    const from = axis === 'x' ? event.clientX : event.clientY;
+
+    const move = (e: PointerEvent) => {
+      const delta = ((axis === 'x' ? e.clientX : e.clientY) - from) / viewport.zoom;
+      store.layRow(order, axis, Math.max(0, Math.round(start + delta)));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      store.commit();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
 
   /**
    * Dragging a handle on a multi-selection scales every node about the box's
@@ -594,6 +686,56 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           ))}
         </>
       )}
+
+      {/* Smart selection: a dot on each layer, a bar in each space. Drawn after
+          the group's own handles so a corner handle still wins where they meet. */}
+      {row &&
+        row.ids.map((id, index) => {
+          const rect = rects[id];
+          if (!rect) return null;
+          const next = index + 1 < row.ids.length ? rects[row.ids[index + 1]] : null;
+          const across = row.axis === 'x';
+          return (
+            <div key={`smart-${id}`}>
+              <div
+                data-smart-dot={id}
+                title="Drag to move it along the row"
+                onPointerDown={(e) => startSmartMove(e, id)}
+                style={{
+                  position: 'absolute',
+                  left: rect.x + rect.w / 2 - 4,
+                  top: rect.y + rect.h / 2 - 4,
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  background: 'var(--color-select-line)',
+                  border: '1.5px solid #fff',
+                  cursor: 'grab',
+                  pointerEvents: 'auto',
+                }}
+              />
+              {next && (
+                <div
+                  data-smart-gap={index}
+                  title="Drag to space the row"
+                  onPointerDown={startSmartGap}
+                  style={{
+                    position: 'absolute',
+                    left: across ? rect.x + rect.w : Math.min(rect.x, next.x) + 4,
+                    top: across ? Math.min(rect.y, next.y) + 4 : rect.y + rect.h,
+                    width: across ? Math.max(2, next.x - (rect.x + rect.w)) : 4,
+                    height: across ? 4 : Math.max(2, next.y - (rect.y + rect.h)),
+                    background: 'var(--color-select-line)',
+                    opacity: 0.55,
+                    borderRadius: 2,
+                    cursor: across ? 'ew-resize' : 'ns-resize',
+                    pointerEvents: 'auto',
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
 
       {/* Auto layout, edited where it is: the gutters between the children and
           the bands inside the edges. Drawn under the resize handles below, so a

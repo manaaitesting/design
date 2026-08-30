@@ -2792,6 +2792,72 @@ test.describe('text shortcuts', () => {
   });
 });
 
+/**
+ * Figma's smart selection. Three or more layers that read as a row get a dot
+ * each and a bar in every space: drag a dot to move a layer along the row, drag
+ * a bar to set every space at once. Neither moves the arrangement — the row is
+ * always laid out again from where its first layer starts.
+ */
+test.describe('smart selection', () => {
+  const inARow = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const made = [0, 1, 2].map((i) =>
+        store.create('rect', 'root', {
+          name: `Row ${i}`, x: 700 + i * 120, y: 500, w: 80, h: 60, fill: ['#F2637F', '#4CC3F0', '#14AE5C'][i],
+        }),
+      );
+      store.commit();
+      return made;
+    });
+
+  test('a row of three gets a dot each and a bar in every space', async ({ page }) => {
+    const ids = await inARow(page);
+    await select(page, ids);
+    await expect(page.locator('[data-smart-dot]')).toHaveCount(3);
+    await expect(page.locator('[data-smart-gap]')).toHaveCount(2);
+
+    // and a scatter does not: the middle one lifted clear breaks the band
+    await page.evaluate((id) => {
+      window.paperlike!.store.update(id, { y: 900 });
+      window.paperlike!.store.commit();
+    }, ids[1]);
+    await expect(page.locator('[data-smart-dot]')).toHaveCount(0);
+
+    await removeNodes(page, ids);
+  });
+
+  test('dragging a dot moves the layer along the row, and the rest close up', async ({ page }) => {
+    const ids = await inARow(page);
+    await select(page, ids);
+
+    const dot = await page.locator(`[data-smart-dot="${ids[0]}"]`).boundingBox();
+    // past the middle of both of the others
+    await dragBy(page, { x: dot!.x + 4, y: dot!.y + 4 }, { x: 260, y: 0 });
+
+    const nodes = await doc(page);
+    // the row still starts at 700 and still steps by 120: only the order moved
+    expect([nodes[ids[1]].x, nodes[ids[2]].x, nodes[ids[0]].x]).toEqual([700, 820, 940]);
+    expect(nodes[ids[0]].y).toBe(500);
+
+    await removeNodes(page, ids);
+  });
+
+  test('dragging a bar spaces the whole row at once', async ({ page }) => {
+    const ids = await inARow(page);
+    await select(page, ids);
+
+    const bar = await page.locator('[data-smart-gap="0"]').boundingBox();
+    await dragBy(page, { x: bar!.x + bar!.width / 2, y: bar!.y + 2 }, { x: 40, y: 0 });
+
+    const nodes = await doc(page);
+    // the gap was 40 and is now 80, in both spaces, from the same origin
+    expect(ids.map((id) => nodes[id].x)).toEqual([700, 860, 1020]);
+
+    await removeNodes(page, ids);
+  });
+});
+
 test.describe('alignment shortcuts', () => {
   const ragged = (page: import('@playwright/test').Page) =>
     page.evaluate(() => {

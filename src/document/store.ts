@@ -2109,6 +2109,39 @@ export class DocStore {
   }
 
   /**
+   * Lays a row out in a given order, and optionally at a given gap.
+   *
+   * This is the half of Figma's smart selection that writes: the detection is
+   * `smartRow` in `arrange.ts`. Everything is placed from the first layer's
+   * start, so the arrangement keeps its origin — reordering shuffles the layers
+   * through the positions they already occupy rather than moving the row.
+   *
+   * With no `gap` the gaps stay as they are, in place rather than following
+   * their layer: dragging the third layer to the front puts it where the first
+   * one was, which is what makes the gesture a swap. With a `gap` every space
+   * becomes that one, which is the spacing handle.
+   */
+  layRow(order: string[], axis: 'x' | 'y', gap?: number): void {
+    const items = order.map((id) => this.snap[id]).filter((node): node is SceneNode => !!node);
+    if (items.length < 2 || items.length !== order.length) return;
+    const size = axis === 'x' ? 'w' : 'h';
+
+    const placed = [...items].sort((a, b) => a[axis] - b[axis]);
+    const origin = placed[0][axis];
+    const gaps = placed
+      .slice(1)
+      .map((node, index) => node[axis] - (placed[index][axis] + placed[index][size]));
+
+    this.transact(() => {
+      let at = origin;
+      items.forEach((item, index) => {
+        this.nodes.get(item.id)?.set(axis, Math.round(at));
+        at += item[size] + (gap ?? gaps[index] ?? 0);
+      });
+    });
+  }
+
+  /**
    * Figma's alignment row.
    *
    * One object aligns inside its parent; several align to their shared bounding

@@ -32,8 +32,17 @@ export function applyPattern(pattern: string, name: string, index: number, total
   });
 }
 
+/**
+ * Mounted only while it is open, so the field's starting value is its initial
+ * state rather than something an effect writes a beat later. Seeding it from an
+ * effect is a race with the first keystroke, and the first keystroke can win.
+ */
 export function RenameDialog() {
   const open = useUI((s) => s.renameOpen);
+  return open ? <RenameSheet /> : null;
+}
+
+function RenameSheet() {
   const setOpen = useUI((s) => s.setRenameOpen);
   const selection = useUI((s) => s.selection);
   const pageId = useUI((s) => s.page);
@@ -47,23 +56,20 @@ export function RenameDialog() {
     return [...selection].filter((id) => doc[id]).sort((a, b) => order.indexOf(a) - order.indexOf(b));
   }, [selection, doc, pageId]);
 
-  const shared = targets.length && targets.every((id) => doc[id].name === doc[targets[0]].name)
-    ? doc[targets[0]].name
-    : '';
-  const [pattern, setPattern] = useState(shared);
+  // the name they already share, if they share one — selected on open so that
+  // typing replaces it, the same as a rename anywhere else
+  const [pattern, setPattern] = useState(() =>
+    selection.length && selection.every((id) => doc[id]?.name === doc[selection[0]]?.name)
+      ? (doc[selection[0]]?.name ?? '')
+      : '',
+  );
 
-  // the field starts on the name they already share, and is selected so typing
-  // replaces it — the same as opening a rename anywhere else
   useEffect(() => {
-    if (!open) return;
-    setPattern(shared);
     const frame = requestAnimationFrame(() => inputRef.current?.select());
     return () => cancelAnimationFrame(frame);
-    // `shared` is read once, when the dialog opens
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, []);
 
-  if (!open || !targets.length) return null;
+  if (!targets.length) return null;
 
   const preview = targets.map((id, index) => applyPattern(pattern, doc[id].name, index, targets.length));
 
