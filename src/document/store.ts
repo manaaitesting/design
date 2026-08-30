@@ -541,6 +541,27 @@ export class DocStore {
     return copyId;
   }
 
+  /**
+   * Moves a page to another place in the list.
+   *
+   * The page order is the file's table of contents — Cover, Explorations,
+   * Handoff — and until now a page was pinned wherever it was created. `to` is
+   * the index in the list as it reads *before* the move, which is what a drop
+   * indicator between two rows means; the removal is taken into account here so
+   * the caller does not have to.
+   */
+  movePage(id: string, to: number): void {
+    this.transact(() => {
+      const order = this.pages.toArray();
+      const from = order.indexOf(id);
+      if (from < 0) return;
+      const target = Math.max(0, Math.min(order.length, to));
+      if (target === from || target === from + 1) return;
+      this.pages.delete(from, 1);
+      this.pages.insert(target > from ? target - 1 : target, [id]);
+    });
+  }
+
   removePage(id: string): void {
     if (this.pages.length <= 1) return; // never leave the file page-less
     this.transact(() => {

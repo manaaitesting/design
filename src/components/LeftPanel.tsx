@@ -122,6 +122,42 @@ function useLayerDrag(rows: Row[], reorderable = true) {
       springId = null;
     };
 
+    /**
+     * The list scrolls itself while a layer is held near its edge.
+     *
+     * Without it a drop target that was off-screen when the press started is
+     * unreachable: you cannot scroll with the pointer down, so a layer at the
+     * bottom of a long file could never be dropped into a frame at the top.
+     * The speed ramps with how far into the edge you push, which is how Figma
+     * makes both a nudge and a long haul possible with one gesture. The target
+     * follows for free — it is recomputed from `elementFromPoint` every move,
+     * and scrolling fires more moves.
+     */
+    let edge = 0;
+    let scrolling: number | null = null;
+    const runScroll = () => {
+      scrolling = null;
+      if (!edge) return;
+      const list = document.querySelector<HTMLElement>('[data-layers-list]');
+      if (list) list.scrollTop += edge;
+      scrolling = requestAnimationFrame(runScroll);
+    };
+    const scrollNear = (y: number) => {
+      const list = document.querySelector<HTMLElement>('[data-layers-list]');
+      if (!list) return;
+      const box = list.getBoundingClientRect();
+      const zone = 28;
+      const over = y - (box.bottom - zone);
+      const under = box.top + zone - y;
+      edge = over > 0 ? Math.min(18, over) : under > 0 ? -Math.min(18, under) : 0;
+      if (edge && scrolling === null) scrolling = requestAnimationFrame(runScroll);
+    };
+    const stopScroll = () => {
+      edge = 0;
+      if (scrolling !== null) cancelAnimationFrame(scrolling);
+      scrolling = null;
+    };
+
     const move = (e: PointerEvent) => {
       if (!active) {
         // a few pixels of slop so a plain click still selects
@@ -130,6 +166,7 @@ function useLayerDrag(rows: Row[], reorderable = true) {
         setDragging(moving);
       }
 
+      scrollNear(e.clientY);
       const el = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>(
         '[data-layer-id]',
       );
@@ -167,6 +204,7 @@ function useLayerDrag(rows: Row[], reorderable = true) {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       cancelSpring();
+      stopScroll();
       setDragging([]);
       setTarget(null);
 
@@ -316,17 +354,75 @@ export function LeftPanel({ fileName }: { fileName: string }) {
 function PagesSection() {
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** the magnifier in this header, which used to be a picture of one */
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState('');
   const doc = useDoc();
   const store = useStore();
-  const pages = usePages();
+  const allPages = usePages();
   const active = useUI((s) => s.page);
   const setPage = useUI((s) => s.setPage);
   const height = useUI((s) => s.pagesHeight);
   const setHeight = useUI((s) => s.setPagesHeight);
   const setContextMenu = useUI((s) => s.setContextMenu);
 
+  /**
+   * Dragging a page to another place in the list.
+   *
+   * Simpler than the layer drag it is modelled on: pages do not nest, so there
+   * is only above and below, and the drop is one `movePage`. It stands down
+   * while the list is filtered, for the same reason the layer tree's does — a
+   * filtered list is not the order, so there is nowhere honest to land.
+   */
+  const [dragPage, setDragPage] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+
+  const pressPage = (id: string, event: React.PointerEvent) => {
+    setPage(id);
+    if (needle) return;
+    const startY = event.clientY;
+    let active = false;
+    let to: number | null = null;
+
+    const move = (e: PointerEvent) => {
+      if (!active) {
+        if (Math.abs(e.clientY - startY) < 4) return;
+        active = true;
+        setDragPage(id);
+      }
+      const row = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>(
+        '[data-page-id]',
+      );
+      const overId = row?.dataset.pageId;
+      if (!overId) return;
+      const box = row!.getBoundingClientRect();
+      const index = allPages.indexOf(overId);
+      to = e.clientY - box.top > box.height / 2 ? index + 1 : index;
+      setDropAt(to);
+    };
+
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setDragPage(null);
+      setDropAt(null);
+      if (active && to !== null) {
+        store.movePage(id, to);
+        store.commit();
+      }
+    };
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const needle = query.trim().toLowerCase();
+  const pages = needle
+    ? allPages.filter((id) => (doc[id]?.name ?? '').toLowerCase().includes(needle))
+    : allPages;
+
   const remove = (id: string) => {
-    const next = pages.find((other) => other !== id);
+    const next = allPages.find((other) => other !== id);
     store.removePage(id);
     if (id === active && next) setPage(next);
   };
@@ -344,11 +440,47 @@ function PagesSection() {
           <span className="fig-disclosure-caret" aria-hidden>
             <Icon.Chevron open={open} />
           </span>
-          <span>Pages</span>
+          {!searching && <span>Pages</span>}
         </button>
-        <button type="button" className="fig-btn" title="Search pages">
+        {searching && (
+          <input
+            autoFocus
+            value={query}
+            placeholder="Search pages"
+            aria-label="Search pages"
+            // the canvas owns most single keys, exactly as the layer search says
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Escape') {
+                setQuery('');
+                setSearching(false);
+              }
+            }}
+            onChange={(event) => setQuery(event.target.value)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: 22,
+              border: 0,
+              borderRadius: 5,
+              padding: '0 6px',
+              background: 'var(--color-control)',
+              color: 'inherit',
+              font: 'inherit',
+            }}
+          />
+        )}
+        <FigButton
+          title="Search pages"
+          on={searching}
+          onClick={() => {
+            setSearching((value) => !value);
+            setQuery('');
+            if (!open) setOpen(true);
+          }}
+        >
           <Icon.Search />
-        </button>
+        </FigButton>
         <button
           type="button"
           className="fig-btn"
@@ -378,9 +510,19 @@ function PagesSection() {
                     className="fig-layer"
                     data-page-id={id}
                     data-on={id === active}
+                    data-dragging={dragPage === id || undefined}
+                    data-drop={
+                      dropAt === null || dragPage === null
+                        ? undefined
+                        : dropAt === allPages.indexOf(id)
+                          ? 'above'
+                          : dropAt === allPages.indexOf(id) + 1
+                            ? 'below'
+                            : undefined
+                    }
                     aria-current={id === active ? 'page' : undefined}
                     style={{ paddingLeft: 10 }}
-                    onClick={() => setPage(id)}
+                    onPointerDown={(event) => pressPage(id, event)}
                     onDoubleClick={() => setRenaming(id)}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -663,7 +805,7 @@ function LayersTree({ query }: { query: string }) {
   }, [selection, rows]);
 
   return (
-    <div ref={listRef} className="scroll" style={{ flex: 1, paddingBottom: 12 }}>
+    <div ref={listRef} data-layers-list className="scroll" style={{ flex: 1, paddingBottom: 12 }}>
       {rows.map((row) => (
         <LayerRow key={row.id} row={row} drag={drag} />
       ))}

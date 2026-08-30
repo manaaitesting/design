@@ -1899,6 +1899,18 @@ select {
     box-shadow: inset 0 0 0 1.5px var(--fig-blue);
   }
 
+  /* A page cannot be dropped into anything, so its indicator is only ever the
+     line between two rows. */
+  .fig-layer[data-drop='above'] {
+    box-shadow: inset 0 2px 0 -0.5px var(--fig-blue);
+  }
+  .fig-layer[data-drop='below'] {
+    box-shadow: inset 0 -2px 0 -0.5px var(--fig-blue);
+  }
+  .fig-layer[data-dragging] {
+    opacity: 0.5;
+  }
+
   /* ── Prototype ───────────────────────────────────────────────────────
      The connection chrome on the canvas, and the panel rows that describe
      what it does. */
