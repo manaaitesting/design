@@ -1760,6 +1760,28 @@ test('the Measure tool latches the readout that ⌥ gives you', async ({ page })
   expect(await page.evaluate(() => window.paperlike!.ui.getState().measuring)).toBe(false);
 });
 
+test('⌥ measures from the whole selection, and marks the edge it read', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  const a = await makeNode(page, 'rect', { name: 'MeasA', x: 100, y: 100, w: 50, h: 50, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'MeasB', x: 300, y: 100, w: 50, h: 50, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'MeasC', x: 500, y: 400, w: 60, h: 60, fill: '#F2637F' });
+  await select(page, [a, b]);
+  await page.evaluate(() => window.paperlike!.ui.getState().setMeasuring(true));
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+  // the selection ends at 350, not at 150 where its first member ends
+  await expect(page.getByText('150', { exact: true })).toBeVisible();
+  await expect(page.getByText('350', { exact: true })).toHaveCount(0);
+  // and the hovered layer is nowhere near the line, so a dashed run says which
+  // of its edges the number was taken from
+  await expect(page.locator('[data-measure="extension"]').first()).toBeVisible();
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setMeasuring(false));
+  await removeNodes(page, [a, b, c]);
+});
+
 /**
  * The two prototype actions Figma has that map onto features this canvas
  * already carries: swapping an instance to a sibling variant, and putting a

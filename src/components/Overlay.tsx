@@ -15,6 +15,19 @@ export interface Rect {
   h: number;
 }
 
+/** The box around a set of measured boxes. */
+export function unionRect(boxes: Rect[]): Rect | null {
+  if (!boxes.length) return null;
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  return {
+    x,
+    y,
+    w: Math.max(...boxes.map((b) => b.x + b.w)) - x,
+    h: Math.max(...boxes.map((b) => b.y + b.h)) - y,
+  };
+}
+
 type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
 const HANDLES: { id: HandleId; cx: number; cy: number; cursor: string }[] = [
@@ -171,15 +184,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   /** Screen-space union of the selected nodes. */
   const bounds = (() => {
     const boxes = selection.map((id) => rects[id]).filter(Boolean) as Rect[];
-    if (boxes.length < 2) return null;
-    const x = Math.min(...boxes.map((b) => b.x));
-    const y = Math.min(...boxes.map((b) => b.y));
-    return {
-      x,
-      y,
-      w: Math.max(...boxes.map((b) => b.x + b.w)) - x,
-      h: Math.max(...boxes.map((b) => b.y + b.h)) - y,
-    };
+    return boxes.length < 2 ? null : unionRect(boxes);
   })();
 
   // a mixed selection has no one answer, so it falls back to the blue
