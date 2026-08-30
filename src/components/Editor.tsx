@@ -36,6 +36,7 @@ import {
   stepFontSize,
   swapFillAndStroke,
   TEXT_ALIGN_KEYS,
+  toggleMark,
 } from '../lib/actions';
 import { measureChildren } from '../lib/measure';
 import { download, safeFilename } from '../export/raster';
@@ -532,6 +533,27 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       // and so belongs on the selection rather than on a run
       if (mod && event.altKey && !event.shiftKey && TEXT_ALIGN_KEYS[event.code] && selection.length) {
         if (alignText(store, selection, TEXT_ALIGN_KEYS[event.code])) {
+          event.preventDefault();
+          return;
+        }
+      }
+      // ⌘B / ⌘I / ⌘U / ⇧⌘X — the text marks, from the canvas rather than from
+      // inside the layer, which is where Figma also puts them. They answer only
+      // on a text selection, so the keys stay free for everything else — and
+      // ⇧⌘X has to be caught here, because the ⌘X below never tested ⇧ and was
+      // cutting the layer to the clipboard instead of striking it through.
+      if (mod && !event.altKey && selection.length) {
+        const mark =
+          !event.shiftKey && event.code === 'KeyB'
+            ? 'bold'
+            : !event.shiftKey && event.code === 'KeyI'
+              ? 'italic'
+              : !event.shiftKey && event.code === 'KeyU'
+                ? 'underline'
+                : event.shiftKey && event.code === 'KeyX'
+                  ? 'strike'
+                  : null;
+        if (mark && toggleMark(store, selection, mark)) {
           event.preventDefault();
           return;
         }

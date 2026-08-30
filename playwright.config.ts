@@ -47,7 +47,10 @@ export default defineConfig({
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
     {
       name: 'editor',
-      testMatch: /(editor|features|motion-ui|tabs|share|dashboard|shaders|keyboard)\.spec\.ts/,
+      // everything that drives a browser — which is every spec except the six
+      // above, so the list to keep up to date is the short one
+      testMatch: /\.spec\.ts$/,
+      testIgnore: /(geometry|export|motion|library|snapshots|mcp)\.spec\.ts$/,
       dependencies: ['setup'],
       use: {
         ...devices['Desktop Chrome'],

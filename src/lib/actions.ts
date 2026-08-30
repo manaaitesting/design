@@ -1,6 +1,7 @@
 'use client';
 
 import { nodeStyle, styleToCss } from '../document/css';
+import { applyToRange, plainText, runsOf, styleOfRange } from '../document/text';
 import type { Doc, FontSpec, SceneNode } from '../document/types';
 import { DEFAULT_FONT } from '../document/defaults';
 import type { DocStore } from '../document/store';
@@ -246,6 +247,40 @@ export function alignText(store: DocStore, ids: string[], align: FontSpec['align
   const texts = textNodes(store, ids);
   if (!texts.length) return false;
   store.updateMany(texts, (n) => ({ font: { ...(n.font ?? DEFAULT_FONT), align } }));
+  store.commit();
+  return true;
+}
+
+/**
+ * Figma's ⌘B / ⌘I / ⌘U / ⇧⌘X, with the layer selected rather than opened.
+ *
+ * In Figma you do not have to enter a text layer to embolden it — the marks act
+ * on the whole layer from the canvas, and on the selected characters once you
+ * are inside. This is the outer half; `TextEditor` has the inner one, and both
+ * go through `applyToRange` so a mark set from the canvas is the same mark the
+ * editor would have set.
+ *
+ * The layer is on when *all* of it is on, which is what makes the key a toggle:
+ * a layer with one bold word goes fully bold before it goes back to plain.
+ */
+export function toggleMark(
+  store: DocStore,
+  ids: string[],
+  mark: 'bold' | 'italic' | 'underline' | 'strike',
+): boolean {
+  const texts = textNodes(store, ids);
+  if (!texts.length) return false;
+  const doc = store.getSnapshot();
+
+  const every = texts.every((id) => {
+    const runs = runsOf(doc[id]);
+    return !!styleOfRange(runs, 0, plainText(runs).length)[mark];
+  });
+
+  store.updateMany(texts, (n) => {
+    const runs = runsOf(n);
+    return { runs: applyToRange(runs, 0, plainText(runs).length, { [mark]: every ? undefined : true }) };
+  });
   store.commit();
   return true;
 }

@@ -121,3 +121,33 @@ test('a modal owns the keyboard, and Escape is the way out of it', async ({ page
   await page.keyboard.press('v');
   await removeNodes(page, [id]);
 });
+
+test('⌘B / ⌘I / ⌘U / ⇧⌘X mark a text layer that is only selected', async ({ page }) => {
+  const id = await makeNode(page, 'text', {
+    name: 'KB Marks', x: 700, y: 500, w: 200, h: 40, text: 'weight of it',
+  } as never);
+  await select(page, [id]);
+
+  await page.keyboard.press('Meta+b');
+  await page.keyboard.press('Meta+i');
+  const marked = (await doc(page))[id];
+  expect(marked.runs!.every((r: { bold?: boolean; italic?: boolean }) => r.bold && r.italic)).toBe(true);
+
+  // ⇧⌘X is Figma's strikethrough; it used to reach the cut branch below and
+  // take the layer to the clipboard instead
+  await page.keyboard.press('Shift+Meta+x');
+  expect((await doc(page))[id]).toBeTruthy();
+  expect((await doc(page))[id].runs!.every((r: { strike?: boolean }) => r.strike)).toBe(true);
+
+  // and the same key takes it off again, which is what makes it a toggle
+  await page.keyboard.press('Meta+b');
+  expect((await doc(page))[id].runs!.every((r: { bold?: boolean }) => !r.bold)).toBe(true);
+
+  // on anything that is not text the keys are left alone
+  const box = await makeNode(page, 'rect', { name: 'KB NotText', x: 900, y: 500, w: 40, h: 40, fill: '#4CC3F0' });
+  await select(page, [box]);
+  await page.keyboard.press('Meta+b');
+  expect((await doc(page))[box].runs).toBeUndefined();
+
+  await removeNodes(page, [id, box]);
+});
