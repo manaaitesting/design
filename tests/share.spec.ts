@@ -47,6 +47,11 @@ function card(page: Page, name: string) {
 async function setLink(page: Page, value: string): Promise<void> {
   await page.goto('/files');
   const open = async () => {
+    // The grid arrives after its skeleton now that /files has a loading.tsx,
+    // and `isVisible` below asks once and does not come back — so without this
+    // the Share button is missed and everything after it waits on a panel that
+    // was never opened.
+    await page.locator('input[value="Playwright Scratch"]').waitFor();
     const scope = card(page, 'Playwright Scratch');
     const share = scope.getByRole('button', { name: 'Share' });
     if (await share.isVisible()) await share.click();
@@ -125,6 +130,16 @@ test('signing in at the wall opens the file that sent you there', async ({ page,
   } finally {
     await stranger.close();
   }
+});
+
+test('a file that is not there is a Paperlike page with a way back', async ({ page }) => {
+  // A deleted file, a revoked share and a mistyped id all arrive here, because
+  // openRoom answers not-found rather than forbidden on purpose.
+  await page.goto('/f/no-such-file');
+
+  await expect(page.getByText('That file is not here')).toBeVisible();
+  await page.getByRole('link', { name: 'Back to your files' }).click();
+  await expect(page).toHaveURL(/\/files$/);
 });
 
 test('an edit link gives a stranger the tools, a view link does not', async ({ page, browser }) => {
