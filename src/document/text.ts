@@ -287,6 +287,26 @@ export function listBoxStyle(font?: FontSpec): CSSProperties {
     : { margin: 0, paddingLeft: 0, listStylePosition: 'inside' };
 }
 
+/**
+ * How a text layer's lines are laid out.
+ *
+ * `null` means the whole layer is one flowing block — no list, no paragraph
+ * spacing — where the newlines can be left to `pre-wrap` and there is nothing
+ * to build. Anything else has to become real elements, and the canvas and the
+ * in-place editor both build them from here: they used to decide separately,
+ * which is why the bullets and the paragraph gaps vanished the moment a caret
+ * appeared.
+ */
+export function textBlocks(
+  runs: TextRun[],
+  font?: FontSpec,
+): { list: 'ul' | 'ol' | null; spacing: number; lines: TextRun[][] } | null {
+  const spacing = font?.paragraphSpacing ?? 0;
+  const kind = font?.list && font.list !== 'none' ? font.list : null;
+  if (!kind && !spacing) return null;
+  return { list: kind ? (kind === 'number' ? 'ol' : 'ul') : null, spacing, lines: runLines(runs) };
+}
+
 /** Splits runs into one list per line, so paragraphs and lists still work. */
 export function runLines(runs: TextRun[]): TextRun[][] {
   const lines: TextRun[][] = [[]];

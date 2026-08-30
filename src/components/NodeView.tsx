@@ -23,7 +23,16 @@ import { pathTextSpec, type PathTextSpec } from '../document/textpath';
 import { maskStyles } from '../document/mask';
 import { modeVars } from '../document/variables';
 import { ensureFont } from '../lib/fonts';
-import { isPlain, listBoxStyle, plainText, runLines, runStyle, runsOf, type TextRun } from '../document/text';
+import {
+  isPlain,
+  listBoxStyle,
+  plainText,
+  runLines,
+  runStyle,
+  runsOf,
+  textBlocks,
+  type TextRun,
+} from '../document/text';
 import { TextEditor } from './TextEditor';
 import type { CSSProperties } from 'react';
 import type { SceneNode } from '../document/types';
@@ -99,14 +108,13 @@ function PathText({ id, node, spec }: { id: string; node: SceneNode; spec: PathT
 
 function TextBody({ node }: { node: SceneNode }) {
   const font = node.font;
-  const spacing = font?.paragraphSpacing ?? 0;
-  const list = font?.list && font.list !== 'none' ? font.list : null;
   const runs = runsOf(node);
   const plain = isPlain(runs);
+  const blocks = textBlocks(runs, font);
 
-  if (plain && !spacing && !list) return <>{plainText(runs)}</>;
+  if (plain && !blocks) return <>{plainText(runs)}</>;
 
-  const lines = runLines(runs);
+  const lines = blocks?.lines ?? runLines(runs);
   const body = (line: TextRun[]) =>
     plain ? (
       line.map((run) => run.text).join('')
@@ -120,7 +128,7 @@ function TextBody({ node }: { node: SceneNode }) {
       </>
     );
 
-  if (!list && !spacing) {
+  if (!blocks) {
     // styled, but a single flowing block: the spans carry the styling and the
     // newlines are still newlines, because the box is `pre-wrap`
     return (
@@ -135,11 +143,14 @@ function TextBody({ node }: { node: SceneNode }) {
     );
   }
 
-  if (!list) {
+  const gap = (index: number) =>
+    index && blocks.spacing ? { marginTop: blocks.spacing } : undefined;
+
+  if (!blocks.list) {
     return (
       <>
         {lines.map((line, index) => (
-          <div key={index} style={index ? { marginTop: spacing } : undefined}>
+          <div key={index} style={gap(index)}>
             {body(line)}
           </div>
         ))}
@@ -147,11 +158,11 @@ function TextBody({ node }: { node: SceneNode }) {
     );
   }
 
-  const Tag = list === 'number' ? 'ol' : 'ul';
+  const Tag = blocks.list;
   return (
     <Tag style={listBoxStyle(font)}>
       {lines.map((line, index) => (
-        <li key={index} style={index ? { marginTop: spacing } : undefined}>
+        <li key={index} style={gap(index)}>
           {body(line)}
         </li>
       ))}

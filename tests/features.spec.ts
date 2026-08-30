@@ -383,6 +383,95 @@ test.describe('rich text', () => {
       selection?.addRange(range);
     }, [from, to] as const);
 
+  /** A text layer with the given type spec, and the caret in it. */
+  const seedTyped = async (
+    page: import('@playwright/test').Page,
+    text: string,
+    font: Record<string, unknown>,
+  ) => {
+    const board = (await nodeNamed(page, 'Fixture Board'))!;
+    return page.evaluate(
+      ([parent, body, spec]) => {
+        const store = window.paperlike!.store;
+        const id = store.create('text', parent as string, {
+          name: 'Typed',
+          x: 20,
+          y: 120,
+          w: 300,
+          h: 120,
+          wMode: 'fixed',
+          hMode: 'fixed',
+          text: body as string,
+          font: {
+            family: 'Inter, system-ui, sans-serif',
+            size: 16,
+            weight: 400,
+            lineHeight: 1.4,
+            letterSpacing: 0,
+            align: 'left',
+            color: '#111111',
+            ...(spec as Record<string, unknown>),
+          },
+        });
+        store.commit();
+        return id;
+      },
+      [board.id, text, font] as const,
+    );
+  };
+
+  /**
+   * Editing is in place, so nothing about the block may move when the caret
+   * appears. It used to: the editor replaced the rendered list with one flat
+   * span per run, so the bullets and the paragraph gaps vanished on the first
+   * double-click — and because the model counts a line break the DOM does not,
+   * the offsets have to survive the real blocks too.
+   */
+  test('entering a bulleted layer keeps its bullets, its gaps and its offsets', async ({ page }) => {
+    const id = await seedTyped(page, 'One\nTwo\nThree', { list: 'bullet', paragraphSpacing: 12 });
+    await enter(page, id);
+
+    const editable = page.locator('[contenteditable]');
+    await expect(editable.locator('ul > li')).toHaveCount(3);
+    const gap = await editable
+      .locator('li')
+      .nth(1)
+      .evaluate((el) => getComputedStyle(el).marginTop);
+    expect(gap).toBe('12px');
+
+    // the second item, selected as the browser reports it — a block boundary is
+    // a character in the model and none in the DOM
+    await page.evaluate(() => {
+      const item = document.querySelectorAll('[contenteditable] li')[1];
+      const range = document.createRange();
+      range.selectNodeContents(item);
+      const live = window.getSelection();
+      live?.removeAllRanges();
+      live?.addRange(range);
+    });
+    await page.keyboard.press('Meta+b');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.bold ? '*' : ''}`))
+      .toEqual(['One\n', 'Two*', '\nThree']);
+    await removeNodes(page, [id]);
+  });
+
+  test('a truncated layer shows every line while you are editing it', async ({ page }) => {
+    const id = await seedTyped(page, 'One\nTwo\nThree', { maxLines: 1 });
+    const clamped = await page
+      .locator(`[data-node-id="${id}"]`)
+      .evaluate((el) => getComputedStyle(el).webkitLineClamp);
+    expect(clamped).toBe('1');
+
+    await enter(page, id);
+    const editing = await page
+      .locator('[contenteditable]')
+      .evaluate((el) => [getComputedStyle(el).webkitLineClamp, getComputedStyle(el).overflow]);
+    expect(editing).toEqual(['none', 'visible']);
+    await removeNodes(page, [id]);
+  });
+
   /**
    * Figma's Text panel belongs to the selected characters whenever there are
    * any — that is how a price gets a small currency symbol — so the size field

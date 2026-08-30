@@ -8,12 +8,14 @@ import {
   applyToRange,
   diffText,
   isPlain,
+  listBoxStyle,
   plainText,
   replaceRange,
   runStyle,
   styleAt,
   runsOf,
   styleOfRange,
+  textBlocks,
   type RunPatch,
   type TextRun,
 } from '../document/text';
@@ -57,15 +59,40 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
   useLayoutEffect(() => {
     const el = editorRef.current;
     if (!el) return;
-    el.replaceChildren(
-      ...runs.current.map((run, index) => {
-        const span = document.createElement('span');
-        span.dataset.run = String(index);
-        Object.assign(span.style, runStyle(run, node.font) as Record<string, string>);
-        span.textContent = run.text;
-        return span;
-      }),
-    );
+    let index = 0;
+    const paint = (run: TextRun) => {
+      const span = document.createElement('span');
+      span.dataset.run = String(index++);
+      Object.assign(span.style, runStyle(run, node.font) as Record<string, string>);
+      span.textContent = run.text;
+      return span;
+    };
+
+    // The same blocks the canvas draws: editing is in place, so a bulleted list
+    // has to stay bulleted and a paragraph gap has to stay open while the caret
+    // is in it, or the text jumps the moment you double-click it.
+    const blocks = textBlocks(runs.current, node.font);
+    if (!blocks) {
+      el.replaceChildren(...runs.current.map(paint));
+      return;
+    }
+
+    const lines = blocks.lines.map((line, at) => {
+      const box = document.createElement(blocks.list ? 'li' : 'div');
+      if (at && blocks.spacing) box.style.marginTop = `${blocks.spacing}px`;
+      // an empty paragraph has no text to give it a height, and a block with no
+      // height cannot be clicked into
+      box.replaceChildren(...(line.length ? line.map(paint) : [document.createElement('br')]));
+      return box;
+    });
+    if (!blocks.list) {
+      el.replaceChildren(...lines);
+      return;
+    }
+    const list = document.createElement(blocks.list);
+    Object.assign(list.style, listBoxStyle(node.font) as Record<string, string>);
+    list.replaceChildren(...lines);
+    el.replaceChildren(list);
   }, [generation, node.font]);
 
   /**
@@ -188,6 +215,12 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
 
   const current = styleOfRange(runs.current, selection.start, selection.end);
   const hasRange = selection.end > selection.start;
+  // Truncation is a view of the text rather than the text itself, and keeping
+  // the clamp on while you edit hides the very lines you are typing. `display`
+  // comes off with it because the clamp is what made the box a `-webkit-box`.
+  const clamp = node.font?.maxLines
+    ? { display: undefined, WebkitBoxOrient: undefined, WebkitLineClamp: undefined, overflow: undefined }
+    : null;
 
   return (
     <>
@@ -196,7 +229,7 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
         data-node-id={node.id}
         contentEditable
         suppressContentEditableWarning
-        style={{ ...style, outline: '1.5px solid var(--color-select)', cursor: 'text' }}
+        style={{ ...style, ...clamp, outline: '1.5px solid var(--color-select)', cursor: 'text' }}
         // the DOM inside is the browser's while it is being edited; see above
         onKeyDown={(event) => {
           event.stopPropagation();
@@ -408,46 +441,92 @@ function RangeBar({
   );
 }
 
+/** The elements that end a line: a paragraph, a list item, whatever the browser drops in. */
+const BLOCK = new Set(['DIV', 'P', 'LI']);
+
 /**
- * A DOM position as a character offset in the element's text.
+ * Walks the editable in document order, counting characters as the model does.
  *
  * The model speaks in offsets and the browser speaks in nodes; this is the only
- * place the two have to be introduced to each other.
+ * place the two have to be introduced to each other. A line break is one
+ * character in the model and none at all in the DOM — it is a `<div>`, an
+ * `<li>` or a `<br>` — so the walk pays for each boundary as it crosses it,
+ * which is what lets the editor draw real paragraphs and lists without the
+ * offsets sliding under it.
+ *
+ * `onText` is told where each text node starts and stops the walk by returning
+ * true; `onChild` is told where each position *between* children falls, which
+ * is how a selection anchored on an element rather than in its text is read.
  */
-function offsetOf(root: HTMLElement, container: Node, offset: number): number {
+function walkText(
+  root: HTMLElement,
+  onText: (node: Text, from: number) => boolean | void,
+  onChild?: (parent: Node, index: number, at: number) => void,
+): number {
   let total = 0;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let current = walker.nextNode();
-  while (current) {
-    if (current === container) return total + offset;
-    total += current.textContent?.length ?? 0;
-    current = walker.nextNode();
-  }
-  // a position on an element rather than in a text node: count what precedes it
-  if (container === root) {
-    let counted = 0;
-    for (let i = 0; i < offset && i < root.childNodes.length; i++) {
-      counted += root.childNodes[i].textContent?.length ?? 0;
+  // a block owes a newline only once something is already in front of it
+  let emitted = false;
+  let done = false;
+
+  const step = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node as Text;
+      if (onText(text, total)) done = true;
+      total += text.data.length;
+      if (text.data.length) emitted = true;
+      return;
     }
-    return counted;
-  }
+    if (node.nodeName === 'BR') {
+      total += 1;
+      emitted = true;
+      return;
+    }
+    const element = node as HTMLElement;
+    const block = BLOCK.has(element.nodeName);
+    if (block && emitted) total += 1;
+    for (let i = 0; i < element.childNodes.length; i++) {
+      onChild?.(element, i, total);
+      if (done) return;
+      step(element.childNodes[i]);
+    }
+    onChild?.(element, element.childNodes.length, total);
+    if (block) emitted = true;
+  };
+
+  step(root);
   return total;
+}
+
+/** A DOM position as a character offset in the element's text. */
+function offsetOf(root: HTMLElement, container: Node, offset: number): number {
+  let answer: number | null = null;
+  const total = walkText(
+    root,
+    (text, from) => {
+      if (text !== container) return false;
+      answer = from + offset;
+      return true;
+    },
+    (parent, index, at) => {
+      if (answer === null && parent === container && index === offset) answer = at;
+    },
+  );
+  return answer ?? total;
 }
 
 /** Puts a selection back after the spans have been rebuilt. */
 function restore(root: HTMLElement | null, start: number, end: number): void {
   if (!root) return;
   const at = (offset: number): { node: Node; offset: number } | null => {
-    let total = 0;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let current = walker.nextNode();
-    while (current) {
-      const length = current.textContent?.length ?? 0;
-      if (offset <= total + length) return { node: current, offset: offset - total };
-      total += length;
-      current = walker.nextNode();
-    }
-    return current ? { node: current, offset: 0 } : null;
+    let found: { node: Node; offset: number } | null = null;
+    let last: { node: Node; offset: number } | null = null;
+    walkText(root, (text, from) => {
+      last = { node: text, offset: text.data.length };
+      if (offset > from + text.data.length) return false;
+      found = { node: text, offset: offset - from };
+      return true;
+    });
+    return found ?? last;
   };
 
   const from = at(start);
