@@ -76,6 +76,19 @@ test('sorting by name actually reorders', async ({ page }) => {
   expect(listed).toEqual([...listed].sort((a, b) => a.localeCompare(b)));
 });
 
+test('the new-file button says it is working while the file is being made', async ({ page }) => {
+  // New file writes a row and then navigates into the editor, which is long
+  // enough to click through twice and get two files. Never answering the
+  // action is how the test gets to stand in the moment in between.
+  await page.route('**/files', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    await new Promise(() => {});
+  });
+
+  await page.getByRole('button', { name: 'New file' }).click();
+  await expect(page.getByRole('button', { name: 'Working…' })).toBeDisabled();
+});
+
 test('a file filed into a folder is found there and nowhere else', async ({ page }) => {
   const folder = `Test folder ${Date.now()}`;
   await page.getByLabel('New folder name').fill(folder);

@@ -14,6 +14,7 @@ import {
 import { FolderPicker } from '../../src/components/FolderPicker';
 import { Icon } from '../../src/components/ui/Icons';
 import { ShareControl } from '../../src/components/ShareControl';
+import { SubmitButton } from '../../src/components/SubmitButton';
 import { readableOn } from '../../src/lib/color';
 
 function ago(timestamp: number): string {
@@ -91,9 +92,7 @@ export default async function FilesPage({
         </span>
         <span style={{ color: 'var(--color-ink-muted)' }}>{user.name}</span>
         <form action={signOut}>
-          <button type="submit" className="btn">
-            Sign out
-          </button>
+          <SubmitButton>Sign out</SubmitButton>
         </form>
       </header>
 
@@ -154,10 +153,10 @@ export default async function FilesPage({
           </form>
 
           <form action={newFile}>
-            <button type="submit" className="btn btn-raised">
+            <SubmitButton className="btn btn-raised">
               <Icon.Plus />
               New file
-            </button>
+            </SubmitButton>
           </form>
         </div>
 
@@ -226,9 +225,9 @@ export default async function FilesPage({
               <div style={{ flex: 1 }} />
               <form action={deleteFolderAction}>
                 <input type="hidden" name="id" value={current.id} />
-                <button type="submit" className="btn" title="Delete this folder — the files in it stay">
+                <SubmitButton title="Delete this folder — the files in it stay">
                   Delete folder
-                </button>
+                </SubmitButton>
               </form>
             </>
           )}
@@ -355,16 +354,12 @@ export default async function FilesPage({
                       {owned && <ShareControl fileId={file.id} linkRole={file.link_role} />}
                       <form action={duplicateFileAction}>
                         <input type="hidden" name="id" value={file.id} />
-                        <button type="submit" className="btn" title="Make a copy you own">
-                          Duplicate
-                        </button>
+                        <SubmitButton title="Make a copy you own">Duplicate</SubmitButton>
                       </form>
                       {owned && (
                         <form action={deleteFileAction}>
                           <input type="hidden" name="id" value={file.id} />
-                          <button type="submit" className="btn" title="Delete file">
-                            Delete
-                          </button>
+                          <SubmitButton title="Delete file">Delete</SubmitButton>
                         </form>
                       )}
                     </div>
