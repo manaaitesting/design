@@ -5,6 +5,7 @@ import { WebsocketProvider } from 'y-websocket';
 import { DocStore } from '../document/store';
 import type { Identity } from './identity';
 import { seedDocument } from '../document/seed';
+import { refreshSyncTokenAction } from '../server/actions';
 
 export interface Presence {
   /** awareness connection id — unique per tab, unlike the account id */
@@ -34,7 +35,33 @@ export interface Session {
   identity: Identity;
   /** this member may look but not touch */
   readOnly: boolean;
+  /** the document has arrived at least once, so there is something to draw on */
+  ready(): boolean;
+  watchReady(fn: () => void): () => void;
+  /** the sync server has refused this session for good and no fresh token can be had */
+  expired(): boolean;
+  watchExpiry(fn: () => void): () => void;
   destroy(): void;
+}
+
+/** A one-way switch with listeners: it is thrown once, and everyone hears. */
+function latch() {
+  const watchers = new Set<() => void>();
+  let thrown = false;
+  return {
+    get: () => thrown,
+    watch(fn: () => void): () => void {
+      watchers.add(fn);
+      return () => {
+        watchers.delete(fn);
+      };
+    },
+    throw() {
+      if (thrown) return;
+      thrown = true;
+      for (const fn of watchers) fn();
+    },
+  };
 }
 
 function syncUrl(): string {
@@ -90,12 +117,50 @@ export function getSession(
     seedDocument(store);
   });
 
+  const expired = latch();
+
+  /**
+   * The token was minted when the page was rendered and lives an hour, so a tab
+   * open longer than that reconnects with a credential the sync server has
+   * already stopped accepting — and 4401 is a close y-websocket treats as
+   * final, so without this the first refusal past the hour would be the last.
+   * Mint another and carry on; if the answer is that there is no access any
+   * more, stop and let the UI say so instead of retrying against a shut door.
+   */
+  provider.on('closed', ({ code }: { code: number }) => {
+    if (code !== 4401 || expired.get()) return;
+    void (async () => {
+      const fresh = await refreshSyncTokenAction(room).catch(() => null);
+      if (fresh) {
+        provider.params.token = fresh;
+        provider.connect();
+        return;
+      }
+      expired.throw();
+    })();
+  });
+
+  /**
+   * Latched rather than tracked, because the provider's own `synced` goes back
+   * to false on every drop and blanking a canvas somebody is drawing on would
+   * be a worse answer to a blip than the blip. What this marks is the one
+   * moment that matters: the document has been here.
+   */
+  const ready = latch();
+  provider.on('sync', (isSynced: boolean) => {
+    if (isSynced) ready.throw();
+  });
+
   const session: Session = {
     ydoc,
     store,
     provider,
     identity,
     readOnly,
+    ready: ready.get,
+    watchReady: ready.watch,
+    expired: expired.get,
+    watchExpiry: expired.watch,
     destroy() {
       provider.destroy();
       ydoc.destroy();

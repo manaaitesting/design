@@ -12,6 +12,7 @@ export function AuthForm({
   submitLabel,
   footer,
   withName = false,
+  next = null,
 }: {
   action: (prev: FormState, form: FormData) => Promise<FormState>;
   title: string;
@@ -19,6 +20,8 @@ export function AuthForm({
   submitLabel: string;
   footer: ReactNode;
   withName?: boolean;
+  /** where to land afterwards — the file link that bounced them here */
+  next?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(action, undefined);
 
@@ -41,6 +44,8 @@ export function AuthForm({
 
         <h1 style={{ fontSize: 19, fontWeight: 600, margin: '0 0 4px' }}>{title}</h1>
         <p style={{ margin: '0 0 18px', color: 'var(--color-ink-muted)', lineHeight: 1.45 }}>{subtitle}</p>
+
+        {next && <input type="hidden" name="next" value={next} />}
 
         {withName && <Field label="Name" name="name" type="text" autoComplete="name" />}
         <Field label="Email" name="email" type="email" autoComplete="email" />

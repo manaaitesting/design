@@ -6,11 +6,14 @@ import {
   canEdit,
   currentUser,
   endSession,
+  guestIdentity,
   hashPassword,
+  issueSyncToken,
   roleOf,
   startSession,
   verifyPassword,
 } from './auth';
+import { openRoom } from './queries';
 import {
   createFile,
   createUser,
@@ -32,6 +35,7 @@ import {
   unpublishComponent,
 } from './db';
 import { newId } from '../lib/id';
+import { safeNext } from '../lib/next';
 import {
   compareVersion,
   listVersions,
@@ -65,7 +69,8 @@ export async function signUp(_prev: FormState, form: FormData): Promise<FormStat
   const id = newId();
   createUser({ id, email, name, color: pick(COLORS), passwordHash: hashPassword(password) });
   await startSession(id);
-  redirect('/files');
+  // the file link that sent them here, if there was one — see `safeNext`
+  redirect(safeNext(form.get('next')) ?? '/files');
 }
 
 export async function signIn(_prev: FormState, form: FormData): Promise<FormState> {
@@ -78,7 +83,7 @@ export async function signIn(_prev: FormState, form: FormData): Promise<FormStat
     return { error: 'Email or password is incorrect.' };
   }
   await startSession(user.id);
-  redirect('/files');
+  redirect(safeNext(form.get('next')) ?? '/files');
 }
 
 export async function signOut(): Promise<void> {
@@ -159,6 +164,23 @@ export async function setLinkRoleAction(fileId: string, role: '' | 'editor' | 'v
   if (!user) redirect('/signin');
   setLinkRole(fileId, user.id, role === '' ? null : role);
   revalidatePath('/files');
+}
+
+/**
+ * A fresh handshake token for a room you are still allowed into.
+ *
+ * The one baked into the page at render time lives an hour, which is shorter
+ * than a working afternoon, so the session asks for another when the sync
+ * server refuses the old one. `null` is the honest answer to "your access has
+ * gone" — the session stops there rather than retrying against a door that is
+ * now shut.
+ */
+export async function refreshSyncTokenAction(room: string): Promise<string | null> {
+  const user = await currentUser();
+  const access = openRoom(room, user?.id ?? null);
+  if (!access.ok) return null;
+  const identity = user ?? (await guestIdentity());
+  return issueSyncToken(identity.id, room, access.role);
 }
 
 // ── Folders ──────────────────────────────────────────────────────────────

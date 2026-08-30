@@ -76,6 +76,41 @@ test('sorting by name actually reorders', async ({ page }) => {
   expect(listed).toEqual([...listed].sort((a, b) => a.localeCompare(b)));
 });
 
+test('the new-file button says it is working while the file is being made', async ({ page }) => {
+  // New file writes a row and then navigates into the editor, which is long
+  // enough to click through twice and get two files. Never answering the
+  // action is how the test gets to stand in the moment in between.
+  await page.route('**/files', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    await new Promise(() => {});
+  });
+
+  await page.getByRole('button', { name: 'New file' }).click();
+  await expect(page.getByRole('button', { name: 'Working…' })).toBeDisabled();
+});
+
+test('deleting a file asks first, and it is the second press that destroys it', async ({ page }) => {
+  // A file of this test's own. The delete is a hard row delete plus an unlink
+  // of the document on disk, so the scratch file the rest of the suite lives
+  // on is not something to find that out with.
+  await page.getByRole('button', { name: 'New file' }).click();
+  await expect(page).toHaveURL(/\/f\/\w+$/);
+  const room = page.url().split('/').pop();
+
+  const made = () => page.locator('div', { has: page.locator(`a[href="/f/${room}"]`) }).last();
+  await page.goto('/files');
+  await made().getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(made().getByRole('button', { name: 'Cancel' })).toBeVisible();
+
+  // the first press asked a question, and nothing else
+  await page.reload();
+  await expect(page.locator(`a[href="/f/${room}"]`)).toHaveCount(1);
+
+  await made().getByRole('button', { name: 'Delete', exact: true }).click();
+  await made().getByRole('button', { name: 'Delete file' }).click();
+  await expect(page.locator(`a[href="/f/${room}"]`)).toHaveCount(0);
+});
+
 test('a file filed into a folder is found there and nowhere else', async ({ page }) => {
   const folder = `Test folder ${Date.now()}`;
   await page.getByLabel('New folder name').fill(folder);
