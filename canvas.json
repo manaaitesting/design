@@ -1,0 +1,23 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 900, "title": "Editor", "is_interactive": true },
+    { "file": "System.dc.html", "x": 1560, "y": 0, "w": 900, "h": 760, "title": "Design system" }
+  ],
+  "annotations": [
+    {
+      "id": "what-this-is",
+      "x": 0,
+      "y": -132,
+      "w": 520,
+      "text": "Paperlike's editor, drawn from app/globals.css rather than from memory.\nThe timeline is live: scrub the lanes, press play, click a keyframe, switch the inspector tabs."
+    },
+    {
+      "id": "system-note",
+      "x": 1560,
+      "y": -132,
+      "w": 420,
+      "text": "The vocabulary the editor is made of. New surfaces extend these — same tokens, same 24/28px control rhythm."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}
