@@ -18,7 +18,7 @@ import {
   MIN_DURATION,
   PROPERTIES,
   PROPERTY_ORDER,
-  animatable,
+  whyNot,
   animatedNodes,
   designValue,
   formatTime,
@@ -321,6 +321,21 @@ function TimelinePanel({ frame }: { frame: string }) {
   const duration = spec?.duration ?? DEFAULT_DURATION;
   const loop = spec?.loop ?? true;
 
+  /**
+   * How far one press of an arrow moves in time.
+   *
+   * A tenth of the ruler's own tick, so the step means the same thing at every
+   * zoom: ten presses cross one labelled division whether the timeline is
+   * showing five seconds or half of one.
+   */
+  const nudge = Math.max(1, Math.round(tickStep(duration, zoom) / 10));
+
+  /** Every moment something happens on this timeline, in order. */
+  const keyTimes = (): number[] =>
+    [...new Set((spec?.tracks ?? []).flatMap((track) => track.keys.map((key) => key.at)))].sort(
+      (a, b) => a - b,
+    );
+
   // ── The layer a new keyframe would land on ─────────────────────────────
   const inFrame = (id: string): boolean => {
     let current = doc[id];
@@ -479,13 +494,55 @@ function TimelinePanel({ frame }: { frame: string }) {
       if (mod && event.key.toLowerCase() === 'v' && clipboard.length) {
         event.preventDefault();
         pasteClipboard();
+        return;
+      }
+
+      // ── Time, from the keyboard ──────────────────────────────────────────
+      // Getting the playhead exactly onto a keyframe was a drag on a 24px
+      // strip; in Figma it is a keystroke. ←/→ step, ⇧ jumps ten steps, ⌥ goes
+      // to the next key there is, and Home/End are the two ends. With keys
+      // selected the same arrows move the keys instead, which is what the
+      // canvas's own nudge means and why it stands down for us.
+      const ends = event.key === 'Home' || event.key === 'End';
+      const arrow = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
+      if (!mod && (arrow || ends)) {
+        const ui = useUI.getState();
+        if (arrow && selected.length) {
+          event.preventDefault();
+          const by = (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? nudge * 10 : nudge);
+          store.updateKeyframes(
+            frame,
+            selected,
+            (key) => ({ at: Math.max(0, Math.min(duration, Math.round(key.at + by))) }),
+          );
+          store.commit();
+          return;
+        }
+        event.preventDefault();
+        ui.setMotionPlaying(false);
+        if (ends) {
+          ui.setMotionAt(event.key === 'Home' ? 0 : duration);
+          return;
+        }
+        const back = event.key === 'ArrowLeft';
+        if (event.altKey) {
+          const times = keyTimes();
+          const next = back
+            ? [...times].reverse().find((t) => t < at)
+            : times.find((t) => t > at);
+          ui.setMotionAt(next ?? (back ? 0 : duration));
+          return;
+        }
+        const by = (back ? -1 : 1) * (event.shiftKey ? nudge * 10 : nudge);
+        ui.setMotionAt(Math.max(0, Math.min(duration, at + by)));
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // the copy and paste closures read the current selection, spec and playhead
+    // the copy and paste closures read the current selection, spec and playhead,
+    // and the time keys read the duration and the step the zoom implies
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, clipboard, frame, store, spec, at]);
+  }, [selected, clipboard, frame, store, spec, at, duration, nudge]);
 
   if (!node) return null;
 
@@ -932,19 +989,18 @@ function TimelinePanel({ frame }: { frame: string }) {
         <div className="mo-props">
           <span className="mo-props-label">{doc[current]?.name}</span>
           {PROPERTY_ORDER.map((property) => {
-            const can = animatable(doc[current], property);
+            // a greyed chip says why it is greyed, and there are five different
+            // whys — a chip for a stroke the layer does not have used to blame
+            // the fill for being a gradient
+            const why = whyNot(doc[current], property);
             return (
               <button
                 type="button"
                 key={property}
                 className="mo-chip"
                 data-on={trackFor(spec, current, property) ? 'true' : undefined}
-                disabled={!can}
-                title={
-                  can
-                    ? `Keyframe ${PROPERTIES[property].label.toLowerCase()} at the playhead`
-                    : `This layer's fill is painted in a way CSS cannot tween — a gradient, an image, or a stack of paints`
-                }
+                disabled={!!why}
+                title={why ?? `Keyframe ${PROPERTIES[property].label.toLowerCase()} at the playhead`}
                 onClick={() => keyHere(current, property)}
               >
                 {PROPERTIES[property].label}

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import {
   DEFAULT_DURATION,
   animatable,
+  whyNot,
   asPatch,
   targetOf,
   valueIn,
@@ -271,6 +272,30 @@ test.describe('compiled to CSS', () => {
     ).toBe(false);
     // a boolean group paints through nested clips, with no one element to name
     expect(animatable({ ...box, type: 'boolean' }, 'fill')).toBe(false);
+  });
+
+  test('a property that cannot be animated says why, and not why some other one cannot', () => {
+    const { box } = scene();
+    // the reason a chip is grey is one of five, and they used to share one
+    // sentence — the fill's — however the chip came to be grey
+    expect(whyNot(box, 'x')).toBeNull();
+    expect(whyNot(box, 'strokeWidth')).toMatch(/no stroke/);
+    const stroked = { ...box, border: { width: 2, color: '#f00', style: 'solid', position: 'inside' } } as const;
+    expect(whyNot({ ...stroked, type: 'boolean' }, 'strokeColor')).toMatch(/SVG/);
+    expect(
+      whyNot(
+        {
+          ...box,
+          border: { width: 2, color: '#f00', style: 'solid', position: 'inside', sides: [1, 1, 1, 1] },
+        },
+        'strokeWidth',
+      ),
+    ).toMatch(/individual stroke sides/);
+    expect(whyNot({ ...box, effects: [{ id: 'e', type: 'drop-shadow' }] as never }, 'blur')).toMatch(
+      /layer blur in Effects/,
+    );
+    expect(whyNot({ ...box, fill: 'linear-gradient(#fff, #000)' }, 'fill')).toMatch(/gradients/);
+    expect(whyNot({ ...box, type: 'boolean' }, 'fill')).toMatch(/nested clips/);
   });
 
   test('a stroke animates as whatever CSS the layer draws it with', () => {

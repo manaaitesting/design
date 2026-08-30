@@ -151,25 +151,52 @@ export function designValue(node: SceneNode, property: MotionProperty): number |
  * would change, which is worse than the panel saying so.
  */
 export function animatable(node: SceneNode, property: MotionProperty): boolean {
+  return whyNot(node, property) === null;
+}
+
+/**
+ * Why a property cannot be animated on this layer, in words, or null if it can.
+ *
+ * The panel greys a chip for five different reasons and used to give one
+ * explanation for all of them, so a layer with no stroke at all was told its
+ * fill was an untweenable gradient. The reasons live here rather than in the
+ * panel because this is where they are decided.
+ */
+export function whyNot(node: SceneNode, property: MotionProperty): string | null {
   if (property === 'strokeWidth' || property === 'strokeColor') {
     // a shape's stroke is an SVG element with its own attributes rather than
     // CSS on the box, and a layer with no stroke has nothing to animate
-    if (!node.border || paintsWithPath(node) || node.type === 'boolean') return false;
+    if (!node.border) return 'This layer has no stroke to animate — give it one first.';
+    if (paintsWithPath(node) || node.type === 'boolean') {
+      return "A shape's stroke is drawn as SVG, which CSS cannot animate.";
+    }
     // individual strokes replace the one weight with four, in the panel and in
     // the CSS alike — so the one weight is no longer what is being drawn
-    return property === 'strokeColor' || !node.border.sides;
+    if (property === 'strokeWidth' && node.border.sides) {
+      return 'Four individual stroke sides have replaced the one weight.';
+    }
+    return null;
   }
   if (property === 'blur') {
     // a layer described by an effects list is described by it alone, so a blur
     // track needs an entry there to write into
-    return !node.effects?.length || node.effects.some((effect) => effect.type === 'layer-blur');
+    if (node.effects?.length && !node.effects.some((effect) => effect.type === 'layer-blur')) {
+      return 'Add a layer blur in Effects before a track can drive it.';
+    }
+    return null;
   }
-  if (property !== 'fill') return true;
-  if (node.type === 'boolean' || needsPaintLayers(node)) return false;
+  if (property !== 'fill') return null;
+  if (node.type === 'boolean') return 'A boolean group paints through nested clips, which has no one colour.';
+  if (needsPaintLayers(node)) {
+    return "This layer's fill is painted in a way CSS cannot tween — a gradient, an image, or a stack of paints.";
+  }
   const stack = (node.fills ?? []).filter((paint) => paint.visible !== false && paint.value);
-  if (stack.length > 1) return false;
+  if (stack.length > 1) return 'A stack of paints has no one colour to tween between.';
   const value = stack[0]?.value ?? node.fill ?? '';
-  return !/gradient\(|^url\(/.test(value);
+  if (/gradient\(|^url\(/.test(value)) {
+    return 'CSS cannot interpolate between two gradients, so this would animate nothing.';
+  }
+  return null;
 }
 
 /**

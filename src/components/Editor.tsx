@@ -874,7 +874,13 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
 
       // ── Nudge ──────────────────────────────────────────────────────────
-      if (event.key.startsWith('Arrow') && selection.length) {
+      // The timeline takes the arrows while it is open: left and right are how
+      // the playhead moves and how a selected keyframe moves, and nudging the
+      // layer instead wrote a stray keyframe every time Record was armed. The
+      // same stand-down ⌫ and the clipboard already make.
+      const timelineHasTheArrows =
+        ui.motion.frame && (ui.motion.selected.length > 0 || event.key === 'ArrowLeft' || event.key === 'ArrowRight');
+      if (event.key.startsWith('Arrow') && selection.length && !timelineHasTheArrows) {
         event.preventDefault();
 
         // A flowed child has no x/y to nudge, so the arrows move it along the

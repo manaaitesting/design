@@ -1100,3 +1100,60 @@ test.describe('the document', () => {
     expect((await timelineOf(page, board))!.tracks).toHaveLength(1);
   });
 });
+
+/**
+ * The timeline's keyboard.
+ *
+ * Time was reachable only by dragging a 24px strip, and the canvas's own arrow
+ * nudge never learnt that the panel was open — so an arrow press with a
+ * keyframe selected moved the layer instead, writing a stray key whenever
+ * Record was armed.
+ */
+test.describe('the keyboard', () => {
+  test('the arrows walk the playhead, and ⌥ jumps to the next key', async ({ page }) => {
+    const { board } = await animate(page);
+    await openTimeline(page, board);
+    await setAt(page, 0);
+
+    const now = async () => (await motionUI(page)).at;
+    await page.keyboard.press('ArrowRight');
+    const oneStep = await now();
+    expect(oneStep).toBeGreaterThan(0);
+
+    // ⇧ is ten of the same step rather than a different unit
+    await setAt(page, 0);
+    await page.keyboard.press('Shift+ArrowRight');
+    expect(await now()).toBe(oneStep * 10);
+
+    // Home and End are the two ends of the timeline
+    await page.keyboard.press('End');
+    expect(await now()).toBe(1000);
+    await page.keyboard.press('Home');
+    expect(await now()).toBe(0);
+
+    // ⌥ lands exactly on a keyframe, which a drag on a 24px strip could only
+    // ever approach
+    await setAt(page, 400);
+    await page.keyboard.press('Alt+ArrowRight');
+    expect(await now()).toBe(1000);
+    await page.keyboard.press('Alt+ArrowLeft');
+    expect(await now()).toBe(0);
+  });
+
+  test('with a keyframe selected the arrows move the key, not the layer', async ({ page }) => {
+    const { board, cover } = await animate(page);
+    await openTimeline(page, board);
+    await setAt(page, 0);
+    const before = (await doc(page))[cover].x;
+
+    await page.locator('.mo-key').last().click();
+    await page.keyboard.press('ArrowLeft');
+
+    const spec = await timelineOf(page, board);
+    const times = spec!.tracks[0].keys.map((k: { at: number }) => k.at).sort((a: number, b: number) => a - b);
+    expect(times[1]).toBeLessThan(1000);
+    // the layer itself has not moved: nudging it is what used to happen, and
+    // with Record armed it wrote a keyframe nobody asked for
+    expect((await doc(page))[cover].x).toBe(before);
+  });
+});
