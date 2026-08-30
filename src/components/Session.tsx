@@ -208,6 +208,7 @@ export function usePresence(): Presence[] {
       out.push({
         clientId,
         identity: presence.identity,
+        page: presence.page ?? '',
         cursor: presence.cursor ?? null,
         selection: presence.selection ?? [],
         view: presence.view ?? null,

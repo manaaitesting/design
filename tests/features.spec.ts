@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-import { doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { FILE, doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
 
 /**
  * The Figma-parity work: shapes, booleans, masks, point editing, the scale
@@ -2460,5 +2460,72 @@ test.describe('flex handles', () => {
     await expect(page.locator('.fig-flex-gap')).toHaveCount(0);
     await expect(page.locator('.fig-flex-pad')).toHaveCount(0);
     await removeNodes(page, [plain]);
+  });
+});
+
+/**
+ * Presence is scoped to a page.
+ *
+ * Every page in a file draws into the same world space, so until awareness
+ * carried a page id a peer two pages away left a named pointer wandering over
+ * artwork they were not even looking at, and Follow — which exists for exactly
+ * the review where someone walks between pages — copied their viewport and left
+ * you staring at empty canvas.
+ */
+test.describe('presence across pages', () => {
+  /** A second tab in the same file: a real peer, with its own awareness state. */
+  async function peer(context: BrowserContext): Promise<Page> {
+    const other = await context.newPage();
+    await other.goto(FILE);
+    await other.waitForFunction(() => !!window.paperlike, null, { timeout: 20_000 });
+    await other.waitForFunction(() => !!window.paperlike!.doc().root);
+    return other;
+  }
+
+  const leave = (other: Page) =>
+    other.evaluate(() => {
+      const id = window.paperlike!.store.addPage('Elsewhere');
+      window.paperlike!.ui.getState().setPage(id);
+      return id;
+    });
+
+  test('a cursor on another page does not draw on yours', async ({ page, context }) => {
+    const other = await peer(context);
+    try {
+      // beside you, on the page you are both on
+      await other.mouse.move(700, 500);
+      await expect(page.getByText('Ada', { exact: true })).toBeVisible();
+
+      const away = await leave(other);
+      await other.mouse.move(720, 520);
+      await expect(page.getByText('Ada', { exact: true })).toHaveCount(0);
+
+      await other.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    } finally {
+      await other.close();
+    }
+  });
+
+  test('following someone who walks to another page takes you with them', async ({
+    page,
+    context,
+  }) => {
+    const other = await peer(context);
+    try {
+      await other.mouse.move(700, 500);
+      await page.getByTitle('Follow Ada').click();
+      await expect(page.getByText('Following Ada')).toBeVisible();
+
+      const away = await leave(other);
+      await expect.poll(() => page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(away);
+
+      await page.evaluate(() => {
+        window.paperlike!.ui.getState().setFollowing(null);
+        window.paperlike!.ui.getState().setPage('root');
+      });
+      await other.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    } finally {
+      await other.close();
+    }
   });
 });

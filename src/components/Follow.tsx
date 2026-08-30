@@ -16,7 +16,8 @@ import { readableOn } from '../lib/color';
  *
  * The viewport is published on a throttle. A pan changes it on every frame, and
  * sixty awareness messages a second would drown the room for a number that only
- * has to be roughly current.
+ * has to be roughly current. The page is published separately and immediately:
+ * it changes rarely, and everything that reads presence is wrong until it lands.
  */
 
 const PUBLISH_MS = 90;
@@ -27,6 +28,7 @@ export function FollowLayer({ containerRef }: { containerRef: RefObject<HTMLDivE
   const following = useUI((s) => s.following);
   const setFollowing = useUI((s) => s.setFollowing);
   const spotlight = useUI((s) => s.spotlight);
+  const page = useUI((s) => s.page);
   const last = useRef(0);
 
   // ── Publish where we are looking ───────────────────────────────────────
@@ -50,6 +52,10 @@ export function FollowLayer({ containerRef }: { containerRef: RefObject<HTMLDivE
   }, [provider, containerRef]);
 
   useEffect(() => {
+    provider.awareness.setLocalStateField('page', page);
+  }, [provider, page]);
+
+  useEffect(() => {
     provider.awareness.setLocalStateField('spotlight', spotlight);
   }, [provider, spotlight]);
 
@@ -69,6 +75,11 @@ export function FollowLayer({ containerRef }: { containerRef: RefObject<HTMLDivE
     const width = box?.width ?? window.innerWidth;
     const height = box?.height ?? window.innerHeight;
     const view = leader.view;
+
+    // Walking between pages is half of a design review, and a viewport alone
+    // cannot express it: matching their coordinates on the page you happen to
+    // be on parks you in front of nothing.
+    if (leader.page && leader.page !== useUI.getState().page) useUI.getState().setPage(leader.page);
 
     // Their window is not ours. Matching the *centre* at a zoom that fits what
     // they can see is what keeps both people looking at the same thing rather
