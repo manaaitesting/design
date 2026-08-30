@@ -6,11 +6,14 @@ import {
   canEdit,
   currentUser,
   endSession,
+  guestIdentity,
   hashPassword,
+  issueSyncToken,
   roleOf,
   startSession,
   verifyPassword,
 } from './auth';
+import { openRoom } from './queries';
 import {
   createFile,
   createUser,
@@ -159,6 +162,23 @@ export async function setLinkRoleAction(fileId: string, role: '' | 'editor' | 'v
   if (!user) redirect('/signin');
   setLinkRole(fileId, user.id, role === '' ? null : role);
   revalidatePath('/files');
+}
+
+/**
+ * A fresh handshake token for a room you are still allowed into.
+ *
+ * The one baked into the page at render time lives an hour, which is shorter
+ * than a working afternoon, so the session asks for another when the sync
+ * server refuses the old one. `null` is the honest answer to "your access has
+ * gone" — the session stops there rather than retrying against a door that is
+ * now shut.
+ */
+export async function refreshSyncTokenAction(room: string): Promise<string | null> {
+  const user = await currentUser();
+  const access = openRoom(room, user?.id ?? null);
+  if (!access.ok) return null;
+  const identity = user ?? (await guestIdentity());
+  return issueSyncToken(identity.id, room, access.role);
 }
 
 // ── Folders ──────────────────────────────────────────────────────────────

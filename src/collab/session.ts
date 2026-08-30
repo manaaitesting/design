@@ -5,6 +5,7 @@ import { WebsocketProvider } from 'y-websocket';
 import { DocStore } from '../document/store';
 import type { Identity } from './identity';
 import { seedDocument } from '../document/seed';
+import { refreshSyncTokenAction } from '../server/actions';
 
 export interface Presence {
   /** awareness connection id — unique per tab, unlike the account id */
@@ -34,6 +35,9 @@ export interface Session {
   identity: Identity;
   /** this member may look but not touch */
   readOnly: boolean;
+  /** the sync server has refused this session for good and no fresh token can be had */
+  expired(): boolean;
+  watchExpiry(fn: () => void): () => void;
   destroy(): void;
 }
 
@@ -90,12 +94,42 @@ export function getSession(
     seedDocument(store);
   });
 
+  let expired = false;
+  const expiryWatchers = new Set<() => void>();
+
+  /**
+   * The token was minted when the page was rendered and lives an hour, so a tab
+   * open longer than that reconnects with a credential the sync server has
+   * already stopped accepting — and 4401 is a close y-websocket treats as
+   * final, so without this the first refusal past the hour would be the last.
+   * Mint another and carry on; if the answer is that there is no access any
+   * more, stop and let the UI say so instead of retrying against a shut door.
+   */
+  provider.on('closed', ({ code }: { code: number }) => {
+    if (code !== 4401 || expired) return;
+    void (async () => {
+      const fresh = await refreshSyncTokenAction(room).catch(() => null);
+      if (fresh) {
+        provider.params.token = fresh;
+        provider.connect();
+        return;
+      }
+      expired = true;
+      for (const watcher of expiryWatchers) watcher();
+    })();
+  });
+
   const session: Session = {
     ydoc,
     store,
     provider,
     identity,
     readOnly,
+    expired: () => expired,
+    watchExpiry(fn) {
+      expiryWatchers.add(fn);
+      return () => expiryWatchers.delete(fn);
+    },
     destroy() {
       provider.destroy();
       ydoc.destroy();

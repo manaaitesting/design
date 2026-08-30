@@ -12,6 +12,33 @@ import { expect, test, type Page } from '@playwright/test';
 
 const SCRATCH = 'testfile00';
 
+/**
+ * The socket behind the session, reached through the development handle.
+ *
+ * Driving it directly is the only way to stand at the hour boundary without
+ * waiting an hour for it: a token the sync server refuses is a token the sync
+ * server refuses, whether it went stale or was never valid.
+ */
+type Sync = { params: { token: string }; wsconnected: boolean; connect(): void; disconnect(): void };
+
+const DEAD_TOKEN = `nobody.${SCRATCH}.editor.1.notasignature`;
+
+const socket = (page: Page) =>
+  page.evaluate(() => {
+    const sync = (window.paperlike as unknown as { provider: Sync }).provider;
+    return { connected: sync.wsconnected, token: sync.params.token };
+  });
+
+/** Reconnects carrying a credential the sync server will close 4401 on. */
+async function reconnectWithADeadToken(page: Page): Promise<void> {
+  await page.evaluate((dead) => {
+    const sync = (window.paperlike as unknown as { provider: Sync }).provider;
+    sync.disconnect();
+    sync.params.token = dead;
+    sync.connect();
+  }, DEAD_TOKEN);
+}
+
 /** The card for one file on the dashboard. */
 function card(page: Page, name: string) {
   return page.locator('div', { has: page.locator(`input[value="${name}"]`) }).last();
@@ -113,4 +140,46 @@ test('a membership outranks a stingier link', async ({ page }) => {
     timeout: 20_000,
   });
   await expect(page.getByText('View only')).toHaveCount(0);
+});
+
+test('a session the sync server refuses mints a fresh token instead of retrying the dead one', async ({
+  page,
+}) => {
+  await page.goto(`/f/${SCRATCH}`);
+  await page.waitForFunction((room) => window.paperlike?.room === room, SCRATCH, {
+    timeout: 20_000,
+  });
+
+  await reconnectWithADeadToken(page);
+
+  // 4401 is terminal to y-websocket, so without a renewal this tab is offline
+  // for good — and says nothing about it
+  await expect.poll(async () => (await socket(page)).connected, { timeout: 20_000 }).toBe(true);
+  expect((await socket(page)).token).not.toBe(DEAD_TOKEN);
+  await expect(page.getByText('Your session has expired')).toHaveCount(0);
+});
+
+test('a session whose access has gone says so rather than reconnecting into a file it cannot have', async ({
+  page,
+  browser,
+}) => {
+  await setLink(page, 'editor');
+
+  const stranger = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  try {
+    const visit = await stranger.newPage();
+    await visit.goto(`/f/${SCRATCH}`);
+    await visit.waitForFunction((room) => window.paperlike?.room === room, SCRATCH, {
+      timeout: 20_000,
+    });
+
+    // the owner takes the link back while the tab is still open
+    await setLink(page, '');
+    await reconnectWithADeadToken(visit);
+
+    await expect(visit.getByText('Your session has expired')).toBeVisible();
+    expect((await socket(visit)).connected).toBe(false);
+  } finally {
+    await stranger.close();
+  }
 });

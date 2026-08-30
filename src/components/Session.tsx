@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -52,6 +53,7 @@ export function SessionProvider({
         // mounted" from "the old one is still here"
         room,
         store: session.store,
+        provider: session.provider,
         doc: () => session.store.getSnapshot(),
         ui: useUIStore,
         easingCss,
@@ -61,8 +63,58 @@ export function SessionProvider({
     }
   }, [session, room]);
 
+  const expired = useExpired(session);
+
   if (!session) return <Booting />;
-  return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={session}>
+      {children}
+      {expired && <Expired />}
+    </SessionContext.Provider>
+  );
+}
+
+/**
+ * The session has been refused for good — the token could not be renewed
+ * because the file, or this person's access to it, is gone.
+ *
+ * It blocks, because the alternative is a canvas that accepts edits nothing
+ * will ever save. A reload is the only move that helps, so it is the only one
+ * offered.
+ */
+function Expired() {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'grid',
+        placeItems: 'center',
+        background: 'rgba(0,0,0,0.45)',
+        zIndex: 200,
+      }}
+    >
+      <div
+        style={{
+          width: 320,
+          padding: 24,
+          borderRadius: 12,
+          background: 'var(--color-panel)',
+          boxShadow: 'var(--shadow-pop)',
+          textAlign: 'center',
+        }}
+      >
+        <p style={{ margin: '0 0 6px', fontWeight: 600 }}>Your session has expired</p>
+        <p style={{ margin: '0 0 16px', color: 'var(--color-ink-muted)', lineHeight: 1.45 }}>
+          The sync server is no longer accepting this connection, so nothing changed since it
+          dropped has been saved. Reload to carry on.
+        </p>
+        <button type="button" className="btn btn-raised" onClick={() => window.location.reload()}>
+          Reload
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Booting() {
@@ -78,6 +130,19 @@ function Booting() {
     >
       Connecting…
     </div>
+  );
+}
+
+/** Whether this session has been refused for good — see `watchExpiry`. */
+function useExpired(session: Session | null): boolean {
+  const subscribe = useCallback(
+    (fn: () => void) => session?.watchExpiry(fn) ?? (() => {}),
+    [session],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () => session?.expired() ?? false,
+    () => false,
   );
 }
 
