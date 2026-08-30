@@ -88,8 +88,10 @@ const PER_TYPE: Partial<Record<NodeType, Partial<SceneNode>>> = {
   page: { fill: '#EEEEEE', clip: false, w: 0, h: 0 },
   // Figma's section: a tinted board you drop artboards onto. It never clips —
   // a frame dragged half out of one has to stay visible, not disappear.
-  section: { fill: '#E9E9E9', clip: false, w: 800, h: 600, radius: 8 },
-  frame: { fill: '#FFFFFF' },
+  section: { fill: '#E9E9E9', clip: false, w: 800, h: 600, radius: 8, blend: 'pass-through' },
+  // Figma's groups and frames start pass-through, so a Multiply child goes on
+  // blending against the page behind them until you say otherwise
+  frame: { fill: '#FFFFFF', blend: 'pass-through' },
   rect: { fill: '#DDDDDD', clip: false },
   ellipse: { fill: '#DDDDDD', radius: 9999, clip: false },
   text: {

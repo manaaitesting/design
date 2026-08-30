@@ -3330,7 +3330,11 @@ function AppearanceSection({
             <Icon.Lock open={!node.locked} />
           </FigButton>
           {node.type !== 'text' && <CornerSettings node={node} set={set} />}
-          <FigBlendMenu value={node.blend} onChange={(blend) => set({ blend })} />
+          <FigBlendMenu
+            value={node.blend}
+            container={node.type === 'frame' || node.type === 'section'}
+            onChange={(blend) => set({ blend })}
+          />
         </>
       }
     >

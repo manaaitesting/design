@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import { effectStyle, effectsOf } from './effects';
+import { isContainer } from './layers';
 import { pathOfRegions, seededRegions, vectorRegions } from './regions';
 import {
   fillRuleOf,
@@ -276,7 +277,14 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
   const opacityName = opacityToken ? varNames[opacityToken] : undefined;
   if (opacityName) style.opacity = `calc(var(--${opacityName}) / 100)`;
   else if (node.opacity !== 1) style.opacity = node.opacity;
-  if (node.blend !== 'normal') style.mixBlendMode = node.blend as CSSProperties['mixBlendMode'];
+  // Figma's "Normal" on a group is CSS's isolation — a Multiply child blends
+  // against its siblings and stops at the group's edge — and "Pass through" is
+  // the absence of it, which is what a plain element does anyway.
+  if (node.blend === 'normal') {
+    if (isContainer(node)) style.isolation = 'isolate';
+  } else if (node.blend !== 'pass-through') {
+    style.mixBlendMode = node.blend as CSSProperties['mixBlendMode'];
+  }
 
   // Border, inner shadow and drop shadow all share `box-shadow`; the order here
   // is what stacks them correctly — insets first, drop last.

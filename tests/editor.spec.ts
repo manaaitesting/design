@@ -1943,6 +1943,31 @@ test.describe('paint picker', () => {
     expect((await doc(page))[cover!.id].blend).toBe('plus-lighter');
   });
 
+  test('a frame passes blending through until you set it to Normal', async ({ page }) => {
+    const frame = await makeNode(page, 'frame', { name: 'Isolator', x: 700, y: 40, w: 200, h: 200, fill: '#FFFFFF' });
+    await page.evaluate((id) => {
+      const store = window.paperlike!.store;
+      store.create('rect', id, { name: 'Darkener', x: 20, y: 20, w: 80, h: 80, blend: 'multiply' });
+      store.commit();
+    }, frame);
+    await select(page, [frame]);
+
+    // a frame starts pass-through, so the Multiply child reaches the page behind it
+    expect((await doc(page))[frame].blend).toBe('pass-through');
+    await expect(page.locator(`[data-node-id="${frame}"]`)).toHaveCSS('isolation', 'auto');
+
+    await page.getByRole('button', { name: /Apply blend mode/ }).click();
+    const list = page.getByRole('listbox', { name: 'Blend mode' });
+    await expect(list.getByRole('option')).toHaveCount(19);
+    await expect(list.getByRole('option').first()).toHaveText('Pass through');
+
+    await list.getByRole('option', { name: 'Normal', exact: true }).click();
+    expect((await doc(page))[frame].blend).toBe('normal');
+    await expect(page.locator(`[data-node-id="${frame}"]`)).toHaveCSS('isolation', 'isolate');
+
+    await removeNodes(page, [frame]);
+  });
+
   test('the format dropdown round-trips a typed value', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'PickMe', x: 40, y: 500, w: 200, h: 120, fill: '#D9D9D9' });
     await select(page, [id]);
