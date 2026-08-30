@@ -2637,6 +2637,61 @@ test.describe('effects', () => {
   });
 });
 
+/**
+ * Figma binds all six alignments to ⌥ and a letter, beside ⌃⌥T for tidy up.
+ * They are matched on the physical key because ⌥ rewrites the character on
+ * macOS — ⌥A arrives as "å".
+ */
+test.describe('alignment shortcuts', () => {
+  const ragged = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const boxes = [
+        { x: 40, y: 500, w: 100, h: 40 },
+        { x: 220, y: 560, w: 60, h: 80 },
+        { x: 300, y: 620, w: 80, h: 20 },
+      ];
+      const made = boxes.map((b, i) =>
+        store.create('rect', 'root', { name: `Align ${i}`, ...b, fill: '#4CC3F0' }),
+      );
+      store.commit();
+      return made;
+    });
+
+  test('\u2325A and \u2325S align the selection to its shared box', async ({ page }) => {
+    const ids = await ragged(page);
+    await select(page, ids);
+
+    await page.keyboard.press('Alt+a');
+    let nodes = await doc(page);
+    expect(ids.map((id) => nodes[id].x)).toEqual([40, 40, 40]);
+
+    await page.keyboard.press('Alt+s');
+    nodes = await doc(page);
+    // the shared box runs 500 to 640, so every bottom edge lands on 640
+    expect(ids.map((id) => nodes[id].y + nodes[id].h)).toEqual([640, 640, 640]);
+
+    await removeNodes(page, ids);
+  });
+
+  test('\u2325H centres them across, \u2325V down', async ({ page }) => {
+    const ids = await ragged(page);
+    await select(page, ids);
+
+    await page.keyboard.press('Alt+h');
+    let nodes = await doc(page);
+    // one box spans 40..380, so every centre lands on 210
+    expect(ids.map((id) => nodes[id].x + nodes[id].w / 2)).toEqual([210, 210, 210]);
+
+    await page.keyboard.press('Alt+v');
+    nodes = await doc(page);
+    // and 500..640 puts every middle on 570
+    expect(ids.map((id) => nodes[id].y + nodes[id].h / 2)).toEqual([570, 570, 570]);
+
+    await removeNodes(page, ids);
+  });
+});
+
 test.describe('position more-actions', () => {
   test('tidy up regularises a ragged grid without resizing it', async ({ page }) => {
     const ids = await page.evaluate(() => {

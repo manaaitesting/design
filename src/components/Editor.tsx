@@ -45,6 +45,21 @@ const TOOL_KEYS: Record<string, Tool> = {
 const SHIFT_TOOL_KEYS: Record<string, Tool> = {
   l: 'arrow',
 };
+/**
+ * Figma's alignment shortcuts, by physical key.
+ *
+ * Keyed on `event.code` for the same reason the boolean ops below are: ⌥ rewrites
+ * the character on macOS, so ⌥A arrives as "å" and `event.key` cannot match it.
+ */
+const ALIGN_KEYS: Record<string, 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom'> = {
+  KeyA: 'left',
+  KeyH: 'hcenter',
+  KeyD: 'right',
+  KeyW: 'top',
+  KeyV: 'vcenter',
+  KeyS: 'bottom',
+};
+
 
 /** Figma's boolean shortcuts, by the key each one is bound to. */
 const BOOLEAN_KEYS: Record<string, BooleanOp> = {
@@ -404,6 +419,17 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         event.preventDefault();
         ui.collapseLayers();
         return;
+      }
+      // ⌥A / ⌥D / ⌥W / ⌥S / ⌥H / ⌥V — Figma's six alignment shortcuts, next to
+      // the tidy and distribute ones below. `store.align` already knows the
+      // rule: one layer aligns inside its parent, several to the box they share.
+      if (event.altKey && !mod && !event.ctrlKey && !event.shiftKey && selection.length) {
+        const edge = ALIGN_KEYS[event.code];
+        if (edge) {
+          event.preventDefault();
+          store.align(selection, edge);
+          return;
+        }
       }
       // ⌃⌥T / ⌃⌥V / ⌃⌥H — tidy up and distribute, as Figma binds them
       if (event.ctrlKey && event.altKey && !event.metaKey && selection.length > 1) {
