@@ -322,6 +322,56 @@ test('a frame set to another variable mode publishes that mode’s values', asyn
   }, modes as unknown as { token: string; collection: string; dark: string });
 });
 
+/**
+ * Text sizing is three states in Figma — Auto width, Auto height, Fixed — and
+ * the handles are how you move between them. Every handle used to write both
+ * axes fixed, so setting a column width by dragging the side of a text also
+ * pinned its height, and the next sentence typed into it overflowed the box
+ * instead of growing it.
+ */
+test("a text's side handle sets a column width and leaves the height to the copy", async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  const id = await makeNode(page, 'text', {
+    name: 'Column',
+    x: 400,
+    y: 400,
+    w: 120,
+    h: 24,
+    wMode: 'fit',
+    hMode: 'fit',
+    text: 'hello brave new world',
+  });
+  await select(page, [id]);
+
+  const side = await page.locator('[data-handle="e"]').boundingBox();
+
+  await dragBy(page, { x: side!.x + side!.width / 2, y: side!.y + side!.height / 2 }, { x: 80, y: 0 });
+  const after = (await doc(page))[id];
+  expect([after.wMode, after.hMode]).toEqual(['fixed', 'fit']);
+
+  // the bottom is what pins the height, and it leaves the width alone
+  const bottom = await page.locator('[data-handle="s"]').boundingBox();
+  await dragBy(page, { x: bottom!.x + bottom!.width / 2, y: bottom!.y + bottom!.height / 2 }, { x: 0, y: 40 });
+  expect((await doc(page))[id].hMode).toBe('fixed');
+  await removeNodes(page, [id]);
+});
+
+test('a text dragged out with the T tool keeps the width you dragged', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('text'));
+  await page.mouse.move(700, 640);
+  await page.mouse.down();
+  await page.mouse.move(900, 700);
+  await page.mouse.up();
+  await page.keyboard.press('Escape');
+
+  const nodes = await doc(page);
+  const drawn = Object.values(nodes).find((n) => n.type === 'text' && Math.round(n.w) === 200);
+  expect(drawn).toBeTruthy();
+  // the drag chose a column: the width is kept, the height still follows the copy
+  expect([drawn!.wMode, drawn!.hMode]).toEqual(['fixed', 'fit']);
+  await removeNodes(page, [drawn!.id]);
+});
+
 test.describe('rich text', () => {
   const seed = async (page: import('@playwright/test').Page) => {
     const board = (await nodeNamed(page, 'Fixture Board'))!;

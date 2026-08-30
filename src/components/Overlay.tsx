@@ -500,7 +500,20 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         centre.y + (angle ? offX * Math.sin(rad) + offY * Math.cos(rad) : offY) - h / 2,
       );
 
-      const patch: Partial<SceneNode> = { w, h, wMode: 'fixed', hMode: 'fixed' };
+      // Figma's text sizing is three states and the handles move between them:
+      // a side handle chooses a column width and leaves the height to the copy
+      // (Auto height), and only the bottom or a corner pins that too (Fixed).
+      // Every other kind of layer is pinned in both directions by any handle,
+      // because there is nothing for its box to hug.
+      const patch: Partial<SceneNode> =
+        node.type === 'text'
+          ? {
+              w,
+              h,
+              ...(ex ? { wMode: 'fixed' as const } : null),
+              ...(ey ? { hMode: 'fixed' as const } : null),
+            }
+          : { w, h, wMode: 'fixed', hMode: 'fixed' };
       // only write a field that actually changed: a no-op write still pins it
       // as an override on a layer inside an instance
       const live = store.getSnapshot()[id];
