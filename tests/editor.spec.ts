@@ -927,6 +927,72 @@ test('the size readout counts up while a shape is being drawn', async ({ page })
   await removeNodes(page, [drawn.id]);
 });
 
+/**
+ * ⇧ and ⌥ while drawing.
+ *
+ * Neither is in Figma's shortcut panel — they are drawing modifiers, not
+ * shortcuts — which is why they went unnoticed for so long. They are also the
+ * first thing a hand reaches for: ⇧ for a circle, ⌥ to drop one on a point.
+ */
+test('⇧ while drawing gives a square, sized by the axis you pulled furthest', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('ellipse'));
+  await dragBy(page, { x: 500, y: 600 }, { x: 150, y: 60 }, ['Shift']);
+  const wide = (await doc(page))[(await selection(page))[0]];
+  expect([wide.w, wide.h]).toEqual([150, 150]);
+
+  // and pulling back up the other way keeps the press on the far corner
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('ellipse'));
+  await dragBy(page, { x: 700, y: 700 }, { x: -150, y: -60 }, ['Shift']);
+  const back = (await doc(page))[(await selection(page))[0]];
+  expect([back.w, back.h]).toEqual([150, 150]);
+  expect([back.x + back.w, back.y + back.h]).toEqual([wide.x + 200, wide.y + 100]);
+
+  await removeNodes(page, [wide.id, back.id]);
+});
+
+test('⌥ draws the shape out from the press point as its centre', async ({ page }) => {
+  // the same gesture twice, from the same press, with the first shape cleared
+  // away in between — a layer left on the canvas puts its own chrome under the
+  // second press, and the comparison stops being about ⌥
+  const draw = async (modifiers: string[]) => {
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+    await dragBy(page, { x: 500, y: 600 }, { x: 60, y: 40 }, modifiers);
+    const drawn = (await doc(page))[(await selection(page))[0]];
+    await removeNodes(page, [drawn.id]);
+    await select(page, []);
+    return drawn;
+  };
+
+  const corner = await draw([]);
+  const centred = await draw(['Alt']);
+
+  // twice the box, and the press is in the middle of it rather than at a corner
+  expect([centred.w, centred.h]).toEqual([corner.w * 2, corner.h * 2]);
+  expect([centred.x, centred.y]).toEqual([corner.x - corner.w, corner.y - corner.h]);
+});
+
+test('⇧ pressed mid-draw squares the box without waiting for the pointer', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+  const badge = page.locator('text=/^\\d+ × \\d+$/').first();
+
+  await page.mouse.move(500, 600);
+  await page.mouse.down();
+  await page.mouse.move(650, 660);
+  await expect(badge).toHaveText('150 × 60');
+
+  // the pointer never moves again — the key alone reshapes the box, and
+  // releasing it puts the box back
+  await page.keyboard.down('Shift');
+  await expect(badge).toHaveText('150 × 150');
+  await page.keyboard.up('Shift');
+  await expect(badge).toHaveText('150 × 60');
+  await page.mouse.up();
+
+  const drawn = (await doc(page))[(await selection(page))[0]];
+  expect([drawn.w, drawn.h]).toEqual([150, 60]);
+  await removeNodes(page, [drawn.id]);
+});
+
 test('dragging snaps to a sibling edge', async ({ page }) => {
   const anchor = await makeNode(page, 'rect', { name: 'SnapAnchor', x: 40, y: 500, w: 120, h: 80, fill: '#4CC3F0' });
   const mover = await makeNode(page, 'rect', { name: 'SnapMover', x: 40, y: 620, w: 120, h: 80, fill: '#F2637F' });
@@ -4082,7 +4148,3 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 });
-
-
-
-

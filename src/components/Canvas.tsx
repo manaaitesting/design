@@ -77,6 +77,33 @@ function constrain45(
   return { x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length };
 }
 
+/**
+ * The box a draw gesture is describing, with Figma's two modifiers applied.
+ *
+ * ⇧ constrains it to 1:1 — a square, a circle — by taking whichever axis you
+ * pulled furthest along, so the shape follows the gesture rather than snapping
+ * to the smaller of the two. ⌥ reads the press as the *centre* instead of a
+ * corner, so the box grows both ways at once. Together they give a centred
+ * square, which is the pair everyone uses to drop a circle on a point.
+ */
+function drawBox(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  square: boolean,
+  fromCentre: boolean,
+): { x: number; y: number; w: number; h: number } {
+  let w = Math.abs(to.x - from.x);
+  let h = Math.abs(to.y - from.y);
+  if (square) w = h = Math.max(w, h);
+  if (fromCentre) return { x: from.x - w, y: from.y - h, w: w * 2, h: h * 2 };
+  return {
+    x: to.x < from.x ? from.x - w : from.x,
+    y: to.y < from.y ? from.y - h : from.y,
+    w,
+    h,
+  };
+}
+
 /** Dragging a flex child moves the container it flows inside, not the child. */
 function draggableTarget(id: string, doc: Doc): string {
   let current: SceneNode | undefined = doc[id];
@@ -548,21 +575,42 @@ export function Canvas() {
       // the live box lives in this closure — React state only mirrors it for
       // the preview, and would lag behind a fast drag
       let box: Draft | null = null;
+      let last = start;
+      let square = false;
+      let centred = false;
+
+      const paint = () => {
+        box = { type: drawType, ...drawBox(start, last, square, centred) };
+        setDraft(box);
+      };
+
+      // ⇧ and ⌥ are read off the window as well as off the pointer, because
+      // Figma reshapes the box the moment you press one — waiting for the next
+      // mouse move would leave the shape wrong for as long as you held still.
+      const onModifier = (e: KeyboardEvent) => {
+        if (e.shiftKey === square && e.altKey === centred) return;
+        square = e.shiftKey;
+        centred = e.altKey;
+        if (box) paint();
+      };
+      window.addEventListener('keydown', onModifier);
+      window.addEventListener('keyup', onModifier);
+      const stopModifiers = () => {
+        window.removeEventListener('keydown', onModifier);
+        window.removeEventListener('keyup', onModifier);
+      };
+
       drag(
         store,
         event,
         (e) => {
-          const current = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
-          box = {
-            type: drawType,
-            x: Math.min(start.x, current.x),
-            y: Math.min(start.y, current.y),
-            w: Math.abs(current.x - start.x),
-            h: Math.abs(current.y - start.y),
-          };
-          setDraft(box);
+          last = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
+          square = e.shiftKey;
+          centred = e.altKey;
+          paint();
         },
         () => {
+          stopModifiers();
           const size = box && box.w > 4 && box.h > 4
             ? box
             : { x: start.x, y: start.y, w: drawType === 'text' ? 120 : 100, h: drawType === 'text' ? 24 : 100 };
