@@ -30,6 +30,15 @@ update it at the end of every session.** It outlives compaction; nothing else he
 - **199 parity, 8 deliberate, 0 partial.** The two rows that were `partial` were
   argued rather than fixed, twice, and the user overruled that both times —
   correctly. See the session log.
+- **Motion — 2026-08-30, sixth pass.** Figma Motion: a timeline on a frame, not
+  a transition between two. Fifteen new rows (`MO-01`…`MO-15`): 11 parity, 2
+  partial, 2 missing, all sourced.
+- **Motion — 2026-08-30, seventh pass.** The four rows that were not `parity`
+  worked one at a time, plus a bug sweep. Now **17 rows: 16 parity, 1 partial**
+  (`MO-02`, which is eleven properties against Figma's longer list). Two new
+  rows, `MO-16` and `MO-17`, for behaviour the sweep turned up rather than for
+  anything Figma publishes. The work is in the working tree and not yet
+  committed, so these rows cite tests rather than hashes.
 
 ### What Phase 3 changed
 
@@ -304,6 +313,33 @@ Everything below rank 20 is in the tables; unranked rows are either `parity`,
 | P-08 | Prototype settings live on the page | Yes | Yes | parity | `Inspector.tsx:977-1012`; test `features.spec.ts:1356` |
 | P-09 | Present: device frames, hotspot flash, Escape closes | Yes | Yes | parity | `Present.tsx`; tests `editor.spec.ts:983,1022,1060` |
 
+## Motion — the timeline (`motion.ts`, `Timeline.tsx`, `MotionStyle.tsx`)
+
+Figma Motion is a different thing from the Prototype tab above: a transition
+animates the step *between* two frames, a timeline animates what happens
+*inside* one. Added this session; the commit is pending, so the rows carry test
+names rather than hashes (see the session log).
+
+| id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
+|----|-----------|-------------------|-----------------|---------|----------|
+| MO-01 | A frame carries a timeline | Per-frame, with a duration and a loop | Same; `motion` on the frame node | parity | `types.ts:978`; `motion.ts:400`; tests `motion.spec.ts` "the model", `motion-ui.spec.ts:655` |
+| MO-02 | Tracks: one property of one layer | Position, size, rotation, opacity, radius, fill, stroke, effects, text | Eleven: those, plus stroke weight, stroke colour and layer blur. No text or shadow tracks | partial | `motion.ts` `PROPERTIES`; tests `motion.spec.ts` "every property lands on the CSS…", "a stroke animates as whatever CSS the layer draws it with", "a blur animates wherever the layer keeps it" |
+| MO-03 | Keyframes: add, drag, delete | Yes, with snapping | Yes; snaps to the ends, the playhead and every other key, ⌥ to override | parity | `Timeline.tsx:244-320` (`msAt`, `snapped`, `dragKey`); tests `motion-ui.spec.ts:276,301,407` |
+| MO-04 | Per-keyframe easing | The presets plus a custom curve editor | All thirteen: eleven presets drawn from the sampler, plus a bezier with draggable handles and a spring's three numbers | parity | `Timeline.tsx` `Curve`, `CurveEditor`; tests `motion-ui.spec.ts` "a custom bezier can be dragged…", "a custom spring is three numbers…" |
+| MO-05 | Editing a property with the timeline open keyframes it | Yes | Yes — a drag, a field or a nudge, through one `recorder` seam on the store | parity | `store.ts:2567` (`recorder`); `Timeline.tsx:158`; tests `motion-ui.spec.ts:201,224,258` |
+| MO-06 | Transport: scrub, play, pause, loop, rewind | Yes; Space plays | Yes; Space plays while the panel is open | parity | `Timeline.tsx:183-220`; `Canvas.tsx:292-312`; tests `motion-ui.spec.ts:186,473,496,515` |
+| MO-07 | The canvas shows the frame the playhead is on | Yes | Yes — a negative `animation-delay` on a paused animation, so the browser interpolates | parity | `motion.ts:400` (`motionCss`); `MotionStyle.tsx`; tests `motion-ui.spec.ts:109,381` |
+| MO-08 | Selection chrome tracks the animated layer | Yes | Follows a scrub; stands back while it plays | parity | `Overlay.tsx:52-90` (`useRects`); test `motion-ui.spec.ts:124` |
+| MO-09 | A frame plays its timeline in the prototype | Yes | Yes, from the top, on every arrival | parity | `Present.tsx:659`; test `motion-ui.spec.ts:550` |
+| MO-10 | The animation survives export | Figma exports video | This exports the animation itself: the same `@keyframes` in the React and HTML exports, no runtime | parity | `toCode.ts:541,929`; tests `motion.spec.ts` "carried out by the export" (incl. one that plays the exported page in a real browser) |
+| MO-11 | A copy animates its own layers | n/a — a Figma-shaped invariant, not a Figma feature | Duplicate, paste and instance all re-point the tracks | parity | `motion.ts:164`; `store.ts` `remapTimelines`; tests `motion-ui.spec.ts:580,604,627` |
+| MO-12 | Agents can author and read a timeline | n/a | `edit_design` takes `set_motion` / `set_keyframe` / `clear_motion`, over all eleven properties; `get_motion_context` reports the tracks and the CSS | parity | `mcp.ts` `set_keyframe`, `timelineBlock`; test `mcp.spec.ts` "an agent can animate a frame, and read the timeline back as CSS" |
+| MO-13 | Timeline zoom and horizontal scroll | Yes | Fit, to 16×: the transport's buttons or ⌘ with the wheel, which holds the moment under the pointer still. The lanes scroll, and the playhead pulls them along | parity | `Timeline.tsx` `zoomBy`, `.mo-span`; tests `motion-ui.spec.ts` "the timeline zooms…", "zooming holds the moment under the pointer still" |
+| MO-14 | Multi-select keyframes, box-select, copy/paste | Yes | ⇧/⌘ adds, a band over the lanes selects, a drag moves them together, ⌘C/⌘V keeps their spacing | parity | `Timeline.tsx` `marquee`, `copySelection`; `store.ts` `updateKeyframes`, `addKeyframes`; tests `motion-ui.spec.ts` "⇧-click adds…", "a band drawn over the lanes…", "⌘C and ⌘V…" |
+| MO-16 | A fill track lands on the element that paints it | n/a | A star, a pen path or an arc paints through a clipped layer inside its box; a fill track animates that layer, which the canvas and the export both mark `data-paint` | parity | `motion.ts` `targetOf`; `Shape.tsx:118`; tests `motion.spec.ts` "a shape's colour is animated on the layer that paints it", `motion-ui.spec.ts` "a star's fill really changes colour on the canvas" |
+| MO-17 | Two tracks that write one CSS property | n/a | Compiled as one animation carrying both — CSS gives a property to the last animation that names it, so two would silently cancel | parity | `motion.ts` `channelOf`, `writerFor`; test `motion.spec.ts` "a stroke animates as whatever CSS the layer draws it with" |
+| MO-15 | Where you find it | A mode of its own | ⇧M on the selected board, and the Prototype tab's Motion section | parity | `Editor.tsx:714`; `Inspector.tsx` `MotionSection`; test `motion-ui.spec.ts:448` |
+
 ## Inspector — Inspect tab (`Inspect.tsx`)
 
 | id | capability | Figma's behaviour | Paperlike today | verdict | evidence |
@@ -453,6 +489,26 @@ anyone disagrees with the trade.
   rotation, so this is an approximation rather than a bug — but it is one.
 - **Android has no gap.** A `LinearLayout` spaces children by their margins, so
   a layout with a gap emits a comment saying so rather than silently losing it.
+- **A timeline drives eleven properties.** They are what `nodeStyle` writes and
+  CSS interpolates, which is what keeps the compiler honest — a track CSS
+  cannot tween would have to be animated by a frame loop, and that is the one
+  thing this design does not do. Text properties and shadows are the candidates
+  left (MO-02).
+- **A gradient fill steps rather than tweens**, and the panel greys the chip
+  rather than animating nothing. CSS has no interpolation between two
+  gradients; `valueAt` says the same thing rather than inventing a blend, so the
+  panel and the canvas agree about it. The same goes for a stroke on a shape
+  (an SVG attribute, not CSS), a stroke weight where four individual sides have
+  replaced it, and a blur on a layer whose effects list has no blur entry.
+- **Two tracks sharing one CSS property share one curve.** They have to compile
+  into a single animation (MO-17), and a CSS keyframe has one
+  `animation-timing-function` — so a stroke weight easing in while its colour
+  eases out is not expressible. The weight's curve wins, being first in the
+  panel's order.
+- **A component instance keeps its own timeline.** It is re-pointed at the
+  instance's layers when the instance is made, and then left alone: propagating
+  the main's would point it back at the main's layers. So a later edit to the
+  main's timeline does not reach existing instances.
 
 **Deliberate — do not fix, argue here if you disagree:** M-06, M-07, T-11, T-12,
 V-07, and the four approximate adjustments. All six README limits stand.
@@ -468,6 +524,79 @@ V-07, and the four approximate adjustments. All six README limits stand.
   pre-existing test bent. Three ledger corrections recorded above; the C-10 edge
   anchor is the one place a model of Figma was reasoned to rather than known, and
   is flagged for challenge.
+- **2026-08-30, sixth pass — Motion.** The user asked for Figma Motion, "like a
+  clone", and to keep going without checking in. Fifteen rows (`MO-01`…`MO-15`)
+  and a feature that did not exist: a per-frame timeline, a panel at the foot of
+  the canvas, recording, playback, export and MCP verbs. Suite **399 → 455
+  passing**, typecheck clean, no pre-existing test bent or weakened.
+  **The design decision the rest falls out of: the timeline compiles to CSS.**
+  `motion.ts` emits one `@keyframes` per track and one rule per layer, and the
+  browser interpolates. Scrubbing is then a negative `animation-delay` on a
+  paused animation rather than a frame loop pushing styles at React; playing is
+  the same sheet unpaused; and the export animates with no runtime, because the
+  export is the same compiler pointed at class names instead of node ids. It is
+  the same bargain `nodeStyle` makes, and it was chosen for the same reason.
+  **Three things the work turned up that reading could not have.**
+  1. **CSS does not hold a property outside its keyframes.** A track keyed only
+     in the middle was tweening the layer's *design* value into the first key,
+     because the browser synthesises the missing 0% and 100% from the element's
+     own style. A timeline holds the first and last key. Found by screenshotting
+     the canvas and reading the computed `top` against what `valueAt` said —
+     not by any test written up to that point. The compiler now writes both
+     stops, and `motion.spec.ts` asserts the sampler and the compiled CSS
+     against *each other* rather than trusting either.
+  2. **A copy would have animated the original.** A timeline names the layers it
+     drives, and it is the only thing in this document that names a layer from
+     inside another layer's data — so duplicate, paste and instance all had to
+     re-point it. `serialize` now carries `from`, which is what lets a paste
+     rebuild the mapping at all.
+  3. **⌫ went to both.** With a keyframe selected in the panel and its layer
+     selected on the canvas, both handlers fired and the layer was deleted along
+     with the key. Two window listeners, no precedence between them.
+  **Deliberately not done:** timeline zoom (MO-13) and multi-select of keyframes
+  (MO-14) — both are real Figma behaviour and both are recorded as `missing`
+  rather than argued away. The custom-curve editor (MO-04) is `partial` for the
+  same reason: the model takes a bezier or a spring, the panel has no editor.
+  **Left uncommitted**, at the working tree, because the user did not ask for a
+  commit — the MO rows should take the hash when it lands.
+- **2026-08-30, seventh pass — the rest of Motion, and a bug sweep.** The user
+  asked for the unfinished rows one at a time and for the bugs to be found
+  first. Suite **455 → 477 passing**, typecheck clean.
+  **Five bugs, four of them silent.**
+  1. **The export only carried the root's timeline.** A board with animated
+     boards inside it — the ordinary shape of a screens page — exported the
+     outer one and dropped the rest. `timelinesIn` walks the subtree now.
+  2. **A key dragged onto another left two at one moment.** Snapping made it
+     likely rather than rare: the snap targets *are* the other keys. Two keys at
+     one time compile to one stop, so the model held a value the canvas had
+     already dropped — the exact drift the suite exists to catch, and it took a
+     test to see it.
+  3. **A fill track on a star animated nothing.** A shape paints through a
+     clipped layer inside its box, so the box's background was being animated
+     where nobody could see it. The layer carries `data-paint` now, in the
+     canvas and in the export, and `targetOf` sends fill tracks there (MO-16).
+  4. **A stroke's weight and its colour cancelled each other.** Two animations
+     naming one property do not combine; the last one named wins. They compile
+     as one animation now (MO-17) — found only because the *second* property was
+     added, which is the argument for adding properties in pairs.
+  5. **⌫ went to the layer as well as the keyframe**, and a nested edit
+     keyframed every field of the spec it arrived in rather than the one that
+     moved.
+  **What the four rows cost.** Zoom (MO-13) was mostly geometry, and turned up
+  a sixth bug on the way: the last ruler label overflowed the timeline, which
+  widened the scroller past the lanes and left a strip at the right-hand end
+  that scrubbed nothing. Multi-select (MO-14) needed the store to gain batch
+  verbs — `updateKeyframes`, `removeKeyframes`, `addKeyframes` — because one
+  write per key is one undo step and one stylesheet per key. The curve editor
+  (MO-04) is the sampler drawn: what you drag is the function that interpolates.
+  Eleven properties (MO-02) needed the compiler to stop spelling CSS out and
+  start asking `nodeStyle`, which is how a stroke lands on whatever shape that
+  layer's stroke actually takes.
+  **The lesson worth keeping: three of the five bugs were invisible to a
+  passing suite and visible in a screenshot or a computed style.** Two of them
+  were found by reading `getComputedStyle` back off the canvas and comparing it
+  with what `valueAt` said. A compiler that emits CSS has to be tested against
+  the browser, not against its own output.
 - **2026-08-30, fifth pass** — the user asked for the rows to be worked one at
   a time. There were none left, so Phase 1 ran again over surface the first
   sweep had not walked: text editing, the arrange commands, and the shortcuts

@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import { BOOLEAN_LABEL, DEFAULT_FLEX, makeNode, nameFor } from './defaults';
 import { applyConstraints } from './constraints';
 import { newInteraction } from './prototype';
+import { motionOf, newKeyframe, newMotion, newTrack, remapMotion, sortKeys, trackFor } from './motion';
 import {
   anchorBounds,
   cloneAnchor,
@@ -36,6 +37,10 @@ import {
   type Doc,
   type FlexSpec,
   type Interaction,
+  type Keyframe,
+  type MotionProperty,
+  type MotionSpec,
+  type MotionTrack,
   type NodeType,
   type NumericField,
   FONT_FIELDS,
@@ -74,6 +79,11 @@ const NOT_INHERITED = new Set([
   // where a main came from is the main's business; an instance of it is not
   // itself an import, and saying so would offer the update twice
   'libraryId', 'libraryVersion',
+  // A timeline names the layers it drives. An instance's copy was re-pointed at
+  // the instance's own layers when it was made (see `remapTimelines`), and
+  // propagating the main's would point it back at the main's — so the one thing
+  // an instance keeps for itself, besides its placement, is its animation.
+  'motion',
 ]);
 
 function toY(node: SceneNode): YNode {
@@ -294,6 +304,12 @@ export interface Style {
   value: unknown;
 }
 
+/** One keyframe, named by the track it is on — what a selection is made of. */
+export interface KeyframeRef {
+  track: string;
+  key: string;
+}
+
 export class DocStore {
   readonly ydoc: Y.Doc;
   readonly nodes: Y.Map<YNode>;
@@ -389,6 +405,39 @@ export class DocStore {
   private childrenOf(id: string): Y.Array<string> | null {
     const node = this.nodes.get(id);
     return (node?.get(CHILDREN) as Y.Array<string> | undefined) ?? null;
+  }
+
+  /**
+   * Re-points the timelines in a copied subtree at the copy.
+   *
+   * A frame carries its animation as tracks naming the layers they drive, so a
+   * duplicate, a paste and a new instance all have to rewrite those names or
+   * they would animate the layers they were copied from. Runs inside the
+   * caller's transaction, so a duplicate stays one undo step.
+   */
+  private remapTimelines(pairs: [string, string][]): void {
+    const map = new Map(pairs);
+    for (const [from, to] of pairs) {
+      const spec = motionOf(this.snap[from]);
+      if (spec) this.nodes.get(to)?.set('motion', remapMotion(spec, map));
+    }
+  }
+
+  /**
+   * The same, for a paste — where the source layers may not be in this
+   * document at all, so the timeline is read out of the payload rather than
+   * off a node.
+   */
+  private remapPastedTimelines(pairs: [string, string][], roots: Partial<SceneNode>[]): void {
+    const map = new Map(pairs);
+    const walk = (raw: Partial<SceneNode> & { from?: string; children?: unknown[] }): void => {
+      const to = raw.from ? map.get(raw.from) : undefined;
+      if (to && raw.motion) this.nodes.get(to)?.set('motion', remapMotion(raw.motion, map));
+      for (const child of (raw.children ?? []) as (Partial<SceneNode> & { children?: unknown[] })[]) {
+        walk(child);
+      }
+    };
+    for (const raw of roots) walk(raw);
   }
 
   private detach(id: string): void {
@@ -923,6 +972,9 @@ export class DocStore {
       this.markOverridden(id, Object.keys(patch));
       this.reflowChildren(id, before, patch);
     });
+    // `before` is the layer as it was: a patch of a nested spec names every
+    // field in it, and only the ones that actually moved are worth recording
+    this.record(id, patch, before);
     this.schedulePropagation();
   }
 
@@ -968,6 +1020,8 @@ export class DocStore {
   }
 
   updateMany(ids: string[], patch: Partial<SceneNode> | ((node: SceneNode) => Partial<SceneNode>)): void {
+    // a recording is a write of its own, so it waits until this one has closed
+    const recorded: [string, Partial<SceneNode>, SceneNode | undefined][] = [];
     this.transact(() => {
       for (const id of ids) {
         const node = this.nodes.get(id);
@@ -978,8 +1032,10 @@ export class DocStore {
           node.set(key, value);
         }
         this.markOverridden(id, Object.keys(delta));
+        recorded.push([id, delta, this.snap[id]]);
       }
     });
+    for (const [id, delta, before] of recorded) this.record(id, delta, before);
     this.schedulePropagation();
   }
 
@@ -1136,9 +1192,11 @@ export class DocStore {
       for (const id of ids) {
         const source = this.snap[id];
         if (!source?.parent) continue;
+        const pairs: [string, string][] = [];
         const copy = (srcId: string, parentId: string, shift: boolean): string => {
           const src = this.snap[srcId];
           const newNodeId = newId();
+          pairs.push([srcId, newNodeId]);
           const node = makeNode(newNodeId, src.type, parentId, {
             ...src,
             id: newNodeId,
@@ -1156,6 +1214,7 @@ export class DocStore {
           return newNodeId;
         };
         const dupId = copy(id, source.parent, true);
+        this.remapTimelines(pairs);
         const siblings = this.childrenOf(source.parent);
         if (siblings) siblings.insert(siblings.toArray().indexOf(id) + 1, [dupId]);
         created.push(dupId);
@@ -2287,6 +2346,10 @@ export class DocStore {
       return {
         ...node,
         id: undefined,
+        // where this layer came from, so a paste can re-point the things that
+        // name a layer from inside another layer's data — a frame's timeline
+        // is the one that does
+        from: id,
         parent: undefined,
         x: isRoot ? node.x - originX : node.x,
         y: isRoot ? node.y - originY : node.y,
@@ -2314,11 +2377,15 @@ export class DocStore {
 
     const created: string[] = [];
     this.transact(() => {
-      const insert = (raw: Partial<SceneNode> & { children?: unknown[] }, parent: string, isRoot: boolean): string => {
+      /** what each pasted layer was called in the document it was copied from */
+      const pairs: [string, string][] = [];
+      const insert = (raw: Partial<SceneNode> & { children?: unknown[]; from?: string }, parent: string, isRoot: boolean): string => {
         const id = newId();
         const kids = (raw.children ?? []) as (Partial<SceneNode> & { children?: unknown[] })[];
+        const { from, ...rest } = raw;
+        if (from) pairs.push([from, id]);
         const node = makeNode(id, (raw.type ?? 'rect') as NodeType, parent, {
-          ...(raw as Partial<SceneNode>),
+          ...(rest as Partial<SceneNode>),
           id,
           parent,
           children: [],
@@ -2337,6 +2404,10 @@ export class DocStore {
         siblings?.push([id]);
         created.push(id);
       }
+      // A pasted timeline names the layers it was copied from; they may not
+      // even be in this document. `remapMotion` drops the tracks that did not
+      // come along and re-points the ones that did.
+      this.remapPastedTimelines(pairs, parsed.nodes as Partial<SceneNode>[]);
     });
     return created;
   }
@@ -2372,6 +2443,240 @@ export class DocStore {
     });
   }
 
+
+  // ── Motion ─────────────────────────────────────────────────────────────
+
+  /**
+   * The timeline is edited through here rather than through `update` because
+   * every one of these is a read-modify-write of one nested list, and doing
+   * that in the panel would mean five components agreeing on how a keyframe is
+   * sorted. `motion.ts` owns the shape; this owns writing it down.
+   */
+  private writeMotion(frame: string, next: MotionSpec): void {
+    if (!this.snap[frame]) return;
+    this.update(frame, { motion: next });
+  }
+
+  /** The frame's timeline, created on first use — Figma's "add animation". */
+  ensureMotion(frame: string, patch: Partial<MotionSpec> = {}): MotionSpec | null {
+    const node = this.snap[frame];
+    if (!node) return null;
+    const existing = motionOf(node);
+    const next = existing ? { ...existing, ...patch } : newMotion(patch);
+    this.writeMotion(frame, next);
+    return next;
+  }
+
+  setMotion(frame: string, patch: Partial<MotionSpec>): void {
+    const existing = motionOf(this.snap[frame]);
+    if (!existing) {
+      this.ensureMotion(frame, patch);
+      return;
+    }
+    this.writeMotion(frame, { ...existing, ...patch });
+  }
+
+  /** Drops the timeline entirely. */
+  clearMotion(frame: string): void {
+    if (!this.snap[frame]) return;
+    this.update(frame, { motion: null });
+  }
+
+  /**
+   * Pins a property of a layer to a value at a moment.
+   *
+   * A key already at that moment is rewritten rather than doubled — which is
+   * what makes recording work: a drag calls this on every move, and the moment
+   * it is writing to does not change while the pointer is down.
+   */
+  setKeyframe(
+    frame: string,
+    node: string,
+    property: MotionProperty,
+    at: number,
+    value: number | string,
+    patch: Partial<Keyframe> = {},
+  ): string | null {
+    if (!this.snap[frame] || !this.snap[node]) return null;
+    const spec = motionOf(this.snap[frame]) ?? newMotion();
+    const when = Math.max(0, Math.round(at));
+    const track = trackFor(spec, node, property);
+
+    if (!track) {
+      const created = newTrack(node, property, [newKeyframe(when, value, patch)]);
+      this.writeMotion(frame, { ...spec, tracks: [...spec.tracks, created] });
+      return created.keys[0].id;
+    }
+
+    const existing = track.keys.find((key) => key.at === when);
+    const key = existing ? { ...existing, ...patch, value } : newKeyframe(when, value, patch);
+    const keys = sortKeys([...track.keys.filter((entry) => entry.at !== when), key]);
+    this.writeMotion(frame, {
+      ...spec,
+      tracks: spec.tracks.map((entry) => (entry.id === track.id ? { ...entry, keys } : entry)),
+    });
+    return key.id;
+  }
+
+  updateKeyframe(frame: string, trackId: string, keyId: string, patch: Partial<Keyframe>): void {
+    this.updateKeyframes(frame, [{ track: trackId, key: keyId }], patch);
+  }
+
+  /**
+   * Changes several keyframes in one write.
+   *
+   * A drag on one key of a multi-selection moves all of them, and an easing
+   * chosen with several selected sets all of them — a timeline that wrote once
+   * per key would be one undo step and one stylesheet per key on the way. The
+   * patch may be a function, which is how a drag says "each of you, this much
+   * later" without the panel having to know where any of them started.
+   */
+  updateKeyframes(
+    frame: string,
+    refs: KeyframeRef[],
+    patch: Partial<Keyframe> | ((key: Keyframe) => Partial<Keyframe>),
+  ): void {
+    const spec = motionOf(this.snap[frame]);
+    if (!spec || !refs.length) return;
+    const touched = new Map<string, Set<string>>();
+    for (const ref of refs) {
+      const set = touched.get(ref.track) ?? new Set<string>();
+      set.add(ref.key);
+      touched.set(ref.track, set);
+    }
+
+    this.writeMotion(frame, {
+      ...spec,
+      tracks: spec.tracks.map((track) => {
+        const mine = touched.get(track.id);
+        if (!mine) return track;
+        const moved = track.keys.map((key) => {
+          if (!mine.has(key.id)) return key;
+          const delta = typeof patch === 'function' ? patch(key) : patch;
+          return { ...key, ...delta, at: Math.max(0, Math.round(delta.at ?? key.at)) };
+        });
+        // A key dragged onto another replaces it, which is what Figma does and
+        // what the compiler needs: two keys at one moment compile to one
+        // `@keyframes` stop, so the model would go on holding a value the
+        // canvas had already dropped.
+        const landed = new Set(moved.filter((key) => mine.has(key.id)).map((key) => key.at));
+        const keys = moved.filter((key) => mine.has(key.id) || !landed.has(key.at));
+        return { ...track, keys: sortKeys(keys) };
+      }),
+    });
+  }
+
+  /** Removes a key, and the track with it once it holds nothing. */
+  removeKeyframe(frame: string, trackId: string, keyId: string): void {
+    const spec = motionOf(this.snap[frame]);
+    if (!spec) return;
+    const tracks: MotionTrack[] = [];
+    for (const track of spec.tracks) {
+      if (track.id !== trackId) {
+        tracks.push(track);
+        continue;
+      }
+      const keys = track.keys.filter((key) => key.id !== keyId);
+      if (keys.length) tracks.push({ ...track, keys });
+    }
+    this.writeMotion(frame, { ...spec, tracks });
+  }
+
+  /** Removes several keyframes at once, dropping any track left empty. */
+  removeKeyframes(frame: string, refs: KeyframeRef[]): void {
+    const spec = motionOf(this.snap[frame]);
+    if (!spec || !refs.length) return;
+    const going = new Map<string, Set<string>>();
+    for (const ref of refs) {
+      const set = going.get(ref.track) ?? new Set<string>();
+      set.add(ref.key);
+      going.set(ref.track, set);
+    }
+
+    const tracks: MotionTrack[] = [];
+    for (const track of spec.tracks) {
+      const mine = going.get(track.id);
+      if (!mine) {
+        tracks.push(track);
+        continue;
+      }
+      const keys = track.keys.filter((key) => !mine.has(key.id));
+      if (keys.length) tracks.push({ ...track, keys });
+    }
+    this.writeMotion(frame, { ...spec, tracks });
+  }
+
+  /**
+   * Writes several keyframes in one go, and says where they landed.
+   *
+   * This is what a paste is: a handful of keys, on the tracks they came from,
+   * at an offset from wherever the playhead is now. The refs come back so the
+   * panel can leave the paste selected, which is what you want to drag next.
+   */
+  addKeyframes(
+    frame: string,
+    entries: { node: string; property: MotionProperty; at: number; key: Partial<Keyframe> }[],
+  ): KeyframeRef[] {
+    if (!this.snap[frame] || !entries.length) return [];
+    let spec = motionOf(this.snap[frame]) ?? newMotion();
+    const refs: KeyframeRef[] = [];
+
+    for (const entry of entries) {
+      if (!this.snap[entry.node]) continue;
+      const when = Math.max(0, Math.round(entry.at));
+      const value = entry.key.value ?? 0;
+      const track = trackFor(spec, entry.node, entry.property);
+      const key = newKeyframe(when, value, { ...entry.key, at: when, value });
+      if (!track) {
+        spec = { ...spec, tracks: [...spec.tracks, newTrack(entry.node, entry.property, [key])] };
+        refs.push({ track: spec.tracks[spec.tracks.length - 1].id, key: key.id });
+        continue;
+      }
+      // as everywhere else, a key already at that moment is replaced
+      const keys = sortKeys([...track.keys.filter((existing) => existing.at !== when), key]);
+      spec = {
+        ...spec,
+        tracks: spec.tracks.map((entry2) => (entry2.id === track.id ? { ...entry2, keys } : entry2)),
+      };
+      refs.push({ track: track.id, key: key.id });
+    }
+
+    this.writeMotion(frame, spec);
+    return refs;
+  }
+
+  removeTrack(frame: string, trackId: string): void {
+    const spec = motionOf(this.snap[frame]);
+    if (!spec) return;
+    this.writeMotion(frame, { ...spec, tracks: spec.tracks.filter((track) => track.id !== trackId) });
+  }
+
+  /**
+   * Where the editor puts the timeline while it is recording.
+   *
+   * Every property edit in the app already funnels through `update` and
+   * `updateMany` — a drag on the canvas, a field in the inspector, a nudge
+   * from the keyboard — so a recording that hooks those catches all of them
+   * and needs no cooperation from any of them. The store stays a document:
+   * what "recording" means, and where the playhead is, belong to the editor,
+   * which is why this is a function it installs rather than state kept here.
+   */
+  recorder:
+    | ((id: string, patch: Partial<SceneNode>, before: SceneNode | undefined) => void)
+    | null = null;
+
+  private record(id: string, patch: Partial<SceneNode>, before: SceneNode | undefined): void {
+    if (!this.recorder || this.readOnly) return;
+    // a write *by* the recorder must not feed itself
+    const recorder = this.recorder;
+    this.recorder = null;
+    try {
+      recorder(id, patch, before);
+    } finally {
+      this.recorder = recorder;
+    }
+  }
+
   /** Names a frame as a flow starting point, or clears it with null. */
   setFlowStart(id: string, name: string | null): void {
     if (!this.snap[id]) return;
@@ -2394,9 +2699,11 @@ export class DocStore {
 
     let rootId = '';
     this.transact(() => {
+      const pairs: [string, string][] = [];
       const copy = (sourceId: string, parent: string, isRoot: boolean): string => {
         const source = this.snap[sourceId];
         const id = newId();
+        pairs.push([sourceId, id]);
         this.nodes.set(
           id,
           toY(
@@ -2422,6 +2729,7 @@ export class DocStore {
         return id;
       };
       rootId = copy(mainId, parentId, true);
+      this.remapTimelines(pairs);
       // start from what the component publishes, so an instance is usable
       // before anyone touches its properties
       const defaults: Record<string, string> = {};

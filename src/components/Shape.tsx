@@ -111,7 +111,11 @@ export function PathShape({ node }: { node: SceneNode }) {
       {paint.fill && (
         // the shader draws inside the clipped layer, so it is the shape that is
         // filled rather than the box the shape happens to sit in
-        <div aria-hidden style={paint.fill}>
+        //
+        // `data-paint` is how a timeline reaches it: a star's colour lives on
+        // this layer rather than on the box, so a fill track has to animate
+        // this element and not its parent. See `document/motion`.
+        <div data-paint={node.id} aria-hidden style={paint.fill}>
           {paint.shader && <ShaderSurface shaderId={paint.shader.id} params={paint.shader.params} />}
         </div>
       )}

@@ -52,6 +52,7 @@ import {
   interactionsOf,
   newInteraction,
 } from '../src/document/prototype';
+import { hasMotion, motionCss as timelineCss, motionOf } from '../src/document/motion';
 import { defaultModes, publish, resolveToken } from '../src/document/variables';
 import type {
   BooleanOp,
@@ -502,6 +503,32 @@ server.registerTool(
   },
 );
 
+/** The frame's timeline, as the CSS an implementation would actually run. */
+function timelineBlock(frame: SceneNode, doc: Doc): string {
+  const spec = motionOf(frame);
+  if (!spec) return '';
+  const rows = spec.tracks
+    .filter((track) => track.keys.length)
+    .map((track) => {
+      const layer = doc[track.node];
+      const keys = track.keys
+        .map((key) => `${key.at}ms ${JSON.stringify(key.value)} (${key.easing})`)
+        .join(', ');
+      return `  "${layer?.name ?? track.node}" (${track.node}) ${track.property}: ${keys}`;
+    });
+  if (!rows.length) return '';
+  return [
+    `frame "${frame.name}" (${frame.id}) — timeline, ${spec.duration}ms${spec.loop ? ', looping' : ''}`,
+    ...rows,
+    indent(
+      timelineCss(spec, doc, {
+        selector: (id) => `.${cssName(doc[id]?.name ?? 'layer')}`,
+        playing: true,
+      }),
+    ),
+  ].join('\n');
+}
+
 const TRAVEL: Record<string, [number, number]> = {
   left: [-100, 0],
   right: [100, 0],
@@ -538,7 +565,7 @@ server.registerTool(
   {
     title: 'Get prototype behaviour',
     description:
-      'What a node does when you use it: its interactions, their triggers and destinations, and the CSS that plays each transition. Call it after get_design_context to build a screen that behaves like the prototype.',
+      'What a node does: its interactions, their triggers and destinations, the CSS that plays each transition, and the timeline of any frame that animates on its own — its tracks, keyframes and the @keyframes they compile to. Call it after get_design_context to build a screen that behaves like the prototype.',
     inputSchema: {
       fileId: z.string(),
       nodeId: z.string(),
@@ -552,15 +579,21 @@ server.registerTool(
     if (!node) return text(`No node "${nodeId}" in ${fileId}.`);
 
     const targets: SceneNode[] = [];
+    // frames that animate on their own, which is a different question from
+    // what a click does — see `src/document/motion.ts`
+    const timelines: SceneNode[] = [];
     const walk = (id: string): void => {
       const current = doc[id];
       if (!current) return;
       if (interactionsOf(current).length || current.flowStart) targets.push(current);
+      if (hasMotion(current)) timelines.push(current);
       if (recursive) for (const child of current.children) walk(child);
     };
     walk(nodeId);
 
-    if (!targets.length) return text(`Nothing under "${node.name}" is interactive.`);
+    if (!targets.length && !timelines.length) {
+      return text(`Nothing under "${node.name}" is interactive, and nothing animates.`);
+    }
 
     const blocks = targets.map((target) => {
       const header = target.flowStart
@@ -575,6 +608,11 @@ server.registerTool(
       });
       return [header, ...rows].join('\n');
     });
+
+    for (const frame of timelines) {
+      const block = timelineBlock(frame, doc);
+      if (block) blocks.push(block);
+    }
 
     const flows = flowsOn(doc, pageOf(nodeId, doc));
     const trailer = flows.length
@@ -1444,6 +1482,9 @@ const OPS = [
   'combine_variants',
   'add_interaction',
   'set_flow_start',
+  'set_motion',
+  'set_keyframe',
+  'clear_motion',
   'create_style',
   'apply_style',
   'add_page',
@@ -1489,7 +1530,48 @@ const OP = z.object({
   propId: z.string().optional().describe('set_prop_value'),
   propType: z.enum(['boolean', 'text', 'instance', 'variant']).optional().describe('add_component_prop'),
   options: z.array(z.string()).optional().describe('add_component_prop: the variant values'),
-  value: z.string().optional().describe('add_component_prop default · set_prop_value'),
+  value: z
+    .string()
+    .optional()
+    .describe(
+      'add_component_prop default · set_prop_value · set_keyframe (a number as text, or a colour)',
+    ),
+  frameId: z.string().optional().describe('set_motion · set_keyframe · clear_motion: the frame whose timeline it is. May be "@ref".'),
+  property: z
+    .enum([
+      'x',
+      'y',
+      'w',
+      'h',
+      'rotation',
+      'opacity',
+      'radius',
+      'fill',
+      'strokeWidth',
+      'strokeColor',
+      'blur',
+    ])
+    .optional()
+    .describe('set_keyframe: which property of the layer the track drives'),
+  at: z.number().optional().describe('set_keyframe: ms from the start of the timeline'),
+  easing: z
+    .enum([
+      'linear',
+      'ease-in',
+      'ease-out',
+      'ease-in-out',
+      'ease-in-back',
+      'ease-out-back',
+      'ease-in-out-back',
+      'gentle',
+      'quick',
+      'bouncy',
+      'slow',
+    ])
+    .optional()
+    .describe('set_keyframe: how the curve leaves this key toward the next one'),
+  duration: z.number().optional().describe('set_motion: how long the timeline runs, in ms'),
+  loop: z.boolean().optional().describe('set_motion: whether it repeats'),
   trigger: z
     .enum([
       'none',
@@ -1678,6 +1760,9 @@ server.registerTool(
       '',
       '  add_interaction  nodeId, trigger, action, destination, url, transition',
       '  set_flow_start   nodeId, name (null clears it)',
+      '  set_motion       frameId, duration, loop — the frame\'s timeline',
+      '  set_keyframe     frameId, nodeId, property, at, value, easing',
+      '  clear_motion     frameId',
       '',
       'Every change lands on the live document, so open canvases show it immediately.',
       'The reply is the log of what each op did, plus the ids every ref bound to.',
@@ -1721,6 +1806,7 @@ server.registerTool(
         styleId: deref(source.styleId),
         propId: deref(source.propId),
         animation: deref(source.animation),
+        frameId: deref(source.frameId),
         nodeIds: source.nodeIds?.map(deref),
         branches: source.branches?.map((branch) => ({
           ...branch,
@@ -1930,6 +2016,44 @@ server.registerTool(
               : {}),
           });
           log.push(`${step}: ${id ?? 'no such layer'}`);
+          break;
+        }
+        case 'set_motion': {
+          const frame = op.frameId ?? op.nodeId;
+          if (!frame) { log.push(`${step}: needs frameId`); break; }
+          store.ensureMotion(frame, {
+            ...(op.duration !== undefined ? { duration: Math.round(op.duration) } : {}),
+            ...(op.loop !== undefined ? { loop: op.loop } : {}),
+          });
+          const spec = motionOf(store.getSnapshot()[frame]);
+          log.push(`${step}: ${spec ? `${spec.duration}ms${spec.loop ? ', looping' : ''}` : 'no such frame'}`);
+          break;
+        }
+        case 'set_keyframe': {
+          const frame = op.frameId;
+          if (!frame || !op.nodeId || !op.property || op.value === undefined) {
+            log.push(`${step}: needs frameId, nodeId, property and value`);
+            break;
+          }
+          // a number arrives as text, as every value on this op does; a colour
+          // stays text, which is what the track holds anyway
+          const raw =
+            op.property === 'fill' || op.property === 'strokeColor' ? op.value : Number(op.value);
+          if (typeof raw === 'number' && !Number.isFinite(raw)) {
+            log.push(`${step}: "${op.value}" is not a number`);
+            break;
+          }
+          const id = store.setKeyframe(frame, op.nodeId, op.property, op.at ?? 0, raw, {
+            ...(op.easing ? { easing: op.easing } : {}),
+          });
+          log.push(`${step}: ${id ? `${op.property} at ${op.at ?? 0}ms` : 'no such frame or layer'}`);
+          break;
+        }
+        case 'clear_motion': {
+          const frame = op.frameId ?? op.nodeId;
+          if (!frame) { log.push(`${step}: needs frameId`); break; }
+          store.clearMotion(frame);
+          log.push(`${step}: cleared`);
           break;
         }
         case 'set_flow_start':

@@ -164,6 +164,56 @@ test('edit_design runs the canvas verbs in order', async () => {
   expect(motion).toContain('flow start: Main');
 });
 
+test('an agent can animate a frame, and read the timeline back as CSS', async () => {
+  const boardId = /frame (\S+) in/.exec(
+    await call('create_node', {
+      fileId,
+      type: 'frame',
+      props: { name: 'Reel', x: 900, y: 0, w: 400, h: 300, fill: '#101014' },
+    }),
+  )![1];
+  const chipId = /rect (\S+) in/.exec(
+    await call('create_node', {
+      fileId,
+      type: 'rect',
+      parentId: boardId,
+      props: { name: 'Chip', x: 20, y: 20, w: 80, h: 80, fill: '#4CC3F0' },
+    }),
+  )![1];
+
+  const log = await call('edit_design', {
+    fileId,
+    ops: [
+      { op: 'set_motion', frameId: boardId, duration: 1200, loop: true },
+      { op: 'set_keyframe', frameId: boardId, nodeId: chipId, property: 'x', at: 0, value: '20', easing: 'linear' },
+      { op: 'set_keyframe', frameId: boardId, nodeId: chipId, property: 'x', at: 1200, value: '300', easing: 'bouncy' },
+      { op: 'set_keyframe', frameId: boardId, nodeId: chipId, property: 'fill', at: 0, value: '#4CC3F0' },
+      { op: 'set_keyframe', frameId: boardId, nodeId: chipId, property: 'x', at: 600, value: 'not a number' },
+      // the three that live inside something else are reachable too
+      { op: 'set_keyframe', frameId: boardId, nodeId: chipId, property: 'blur', at: 0, value: '0' },
+      { op: 'set_keyframe', frameId: boardId, nodeId: chipId, property: 'blur', at: 1200, value: '6' },
+    ],
+  });
+  expect(log).toContain('1200ms, looping');
+  expect(log).toContain('x at 1200ms');
+  // a value that is not a number is refused rather than written as NaN
+  expect(log).toContain('"not a number" is not a number');
+
+  const motion = await call('get_motion_context', { fileId, nodeId: boardId });
+  expect(motion).toContain('timeline, 1200ms, looping');
+  expect(motion).toContain('"Chip"');
+  expect(motion).toContain('0ms 20 (linear), 1200ms 300 (bouncy)');
+  // and the CSS an implementation would actually run
+  expect(motion).toContain('@keyframes pl-motion-');
+  expect(motion).toContain('left: 300px');
+  expect(motion).toContain('animation-iteration-count: infinite;');
+  expect(motion).toContain('filter: blur(6px)');
+
+  // and it can be taken off again
+  await call('edit_design', { fileId, ops: [{ op: 'clear_motion', frameId: boardId }] });
+  expect(await call('get_motion_context', { fileId, nodeId: boardId })).toContain('nothing animates');
+});
+
 test('a whole screen lands in one edit_design call', async () => {
   // The point of refs. Without them this is one round trip per node — the
   // difference between three tool calls and a hundred — so the test is really

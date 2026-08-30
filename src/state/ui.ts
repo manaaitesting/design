@@ -59,10 +59,49 @@ export type VectorTool =
   | 'builder'
   | 'width';
 
+/** How far the timeline can be stretched, and how far it can be squeezed. */
+export const MOTION_ZOOM = { min: 1, max: 16, step: 1.5 };
+
 export interface Viewport {
   /** World-space offset of the viewport origin, in screen px. */
   x: number;
   y: number;
+  zoom: number;
+}
+
+/** Which keyframe the timeline has selected — a track and a key inside it. */
+export interface SelectedKey {
+  track: string;
+  key: string;
+}
+
+/** A keyframe on the timeline's clipboard: what it drove, and how far in. */
+export interface CopiedKey {
+  node: string;
+  property: string;
+  /** ms after the earliest key in the copy, so a paste keeps their spacing */
+  offset: number;
+  value: number | string;
+  easing: string;
+}
+
+export interface MotionUI {
+  /** the frame whose timeline is open, or null when the panel is closed */
+  frame: string | null;
+  /** the playhead, in ms from the start */
+  at: number;
+  playing: boolean;
+  /** while on, a property edit writes a keyframe at the playhead */
+  recording: boolean;
+  /** the keyframes the panel has selected, in no particular order */
+  selected: SelectedKey[];
+  /**
+   * How much wider than the panel the timeline is drawn.
+   *
+   * 1 fits the whole duration across the lanes, which is where it opens; above
+   * that the lanes scroll, so a long timeline can be worked on at the
+   * resolution the keyframes need rather than the one the window has.
+   */
   zoom: number;
 }
 
@@ -247,6 +286,26 @@ export interface UIState {
   /** the frame Present is playing, or null when it is closed */
   presenting: string | null;
   present: (frame: string | null) => void;
+
+  /**
+   * The timeline, when one is open.
+   *
+   * Which frame it belongs to, where the playhead is and whether it is running
+   * are all *views* of the document rather than parts of it — two people can
+   * look at the same timeline from different moments — so they live here, and
+   * only the keyframes themselves are in the file.
+   */
+  motion: MotionUI;
+  openMotion: (frame: string | null) => void;
+  setMotionAt: (at: number) => void;
+  setMotionPlaying: (playing: boolean) => void;
+  setMotionRecording: (recording: boolean) => void;
+  setMotionZoom: (zoom: number) => void;
+  /** what the panel has selected, for the easing menu, ⌫ and ⌘C */
+  selectKeyframes: (selected: SelectedKey[]) => void;
+  /** the keyframes ⌘C put down, kept per session rather than in the document */
+  motionClipboard: CopiedKey[];
+  copyKeyframes: (keys: CopiedKey[]) => void;
 
   /** the bezel Present draws around the frame */
   /** the device the *viewer* has picked for this run; the page holds the default */
@@ -656,6 +715,28 @@ export const useUI = create<UIState>((set) => ({
   presenting: null,
   present: (presenting) => set({ presenting, editing: null }),
 
+  motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
+  openMotion: (frame) =>
+    set((state) => ({
+      // opening it on another frame starts that timeline from the top rather
+      // than from wherever the last one was left
+      // Recording is on the moment it opens, which is what Figma Motion does:
+      // the timeline being open is the statement that you are animating, and
+      // an edit that does not land on it is almost never what was meant.
+      motion:
+        frame === state.motion.frame
+          ? { ...state.motion, frame }
+          : { frame, at: 0, playing: false, recording: !!frame, selected: [], zoom: 1 },
+    })),
+  setMotionAt: (at) => set((state) => ({ motion: { ...state.motion, at: Math.max(0, at) } })),
+  setMotionPlaying: (playing) => set((state) => ({ motion: { ...state.motion, playing } })),
+  setMotionRecording: (recording) => set((state) => ({ motion: { ...state.motion, recording } })),
+  selectKeyframes: (selected) => set((state) => ({ motion: { ...state.motion, selected } })),
+  motionClipboard: [],
+  copyKeyframes: (motionClipboard) => set({ motionClipboard }),
+  setMotionZoom: (zoom) =>
+    set((state) => ({ motion: { ...state.motion, zoom: clamp(zoom, MOTION_ZOOM.min, MOTION_ZOOM.max) } })),
+
   device: 'none',
   setDevice: (device) => set({ device }),
 
@@ -678,6 +759,7 @@ export const useUI = create<UIState>((set) => ({
       lockedHint: null,
       contextMenu: null,
       presenting: null,
+      motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
       paletteOpen: false,
       historyOpen: false,
       exportOpen: false,

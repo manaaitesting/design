@@ -3312,3 +3312,497 @@ select {
   color: var(--fig-dim);
   font-variant-numeric: tabular-nums;
 }
+
+/* ─── Motion ─────────────────────────────────────────────────────────────
+   The timeline, docked over the foot of the canvas. Dark chrome like the
+   vector bar, for the same reason: it belongs to a mode you are in rather
+   than to the panels you always have. */
+.mo-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  /* the height is the panel's own — see `Timeline`, which grows it with its
+     rows and stops when it would start eating the canvas */
+  /* the lane column is inset by this much, so a keyframe on 0 or on the very
+     end is drawn whole rather than sliced by the edge of the panel */
+  --mo-pad: 8px;
+  border-radius: 12px;
+  background: #1e1e1e;
+  color: #fff;
+  box-shadow:
+    0 2px 14px rgb(0 0 0 / 0.28),
+    0 0 0 0.5px rgb(255 255 255 / 0.12);
+  z-index: 28;
+  user-select: none;
+}
+
+.mo-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 38px;
+  padding: 0 8px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+}
+
+.mo-title {
+  max-width: 150px;
+  margin-right: 6px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 550;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mo-btn:hover {
+  background: rgb(255 255 255 / 0.11);
+}
+
+.mo-btn[data-on='true'] {
+  background: var(--color-select, #0d99ff);
+}
+
+/* the record dot is red whether or not it is armed — off is hollow */
+.mo-dot {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid #ff5c5c;
+  border-radius: 50%;
+}
+
+.mo-record[data-on='true'] {
+  background: rgb(255 92 92 / 0.22);
+}
+
+.mo-record[data-on='true'] .mo-dot {
+  background: #ff5c5c;
+}
+
+.mo-clock {
+  margin: 0 4px 0 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mo-clock-total {
+  color: rgb(255 255 255 / 0.5);
+}
+
+.mo-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 7px;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(255 255 255 / 0.6);
+  font-size: 11px;
+}
+
+.mo-num {
+  width: 46px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+
+.mo-num::-webkit-outer-spin-button,
+.mo-num::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.mo-num:focus-visible {
+  outline: none;
+}
+
+.mo-select {
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 0.08);
+  color: #fff;
+  font-size: 11px;
+}
+
+.mo-close {
+  margin-left: auto;
+}
+
+.mo-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 4px;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 0.08);
+}
+
+.mo-zoom .mo-btn {
+  padding: 0 5px;
+}
+
+.mo-zoom-level {
+  min-width: 34px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.mo-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.mo-btn:disabled:hover {
+  background: transparent;
+}
+
+/* The property strip: the eight things a track can drive, for the layer the
+   selection is on. A lit chip is one that already has a track. */
+.mo-props {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+  overflow-x: auto;
+}
+
+.mo-props-label {
+  max-width: 130px;
+  margin-right: 4px;
+  overflow: hidden;
+  color: rgb(255 255 255 / 0.55);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mo-chip {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(255 255 255 / 0.75);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mo-chip:hover {
+  background: rgb(255 255 255 / 0.16);
+  color: #fff;
+}
+
+.mo-chip[data-on='true'] {
+  background: var(--color-select, #0d99ff);
+  color: #fff;
+}
+
+.mo-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 6px;
+  overflow-y: auto;
+}
+
+/* Chromium draws a scrollbar over the last lane otherwise. Thin, and only
+   while the lanes are wider than the panel. */
+.mo-lanes::-webkit-scrollbar {
+  height: 6px;
+}
+
+.mo-lanes::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.22);
+}
+
+.mo-lanes::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mo-names {
+  flex: 0 0 190px;
+  border-right: 1px solid rgb(255 255 255 / 0.08);
+}
+
+/* lines the name column up with the lanes, which start under the ruler */
+.mo-ruler-gutter {
+  height: 24px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+}
+
+.mo-name,
+.mo-track-name {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mo-name {
+  font-weight: 550;
+}
+
+.mo-name[data-on='true'] {
+  color: var(--color-select, #0d99ff);
+}
+
+.mo-track-name {
+  padding-left: 20px;
+  color: rgb(255 255 255 / 0.6);
+  cursor: default;
+}
+
+.mo-track-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mo-drop {
+  height: 18px;
+  margin-left: auto;
+  padding: 0 3px;
+  opacity: 0;
+}
+
+.mo-track-name:hover .mo-drop {
+  opacity: 1;
+}
+
+.mo-lanes {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  /* zoomed in, the timeline is wider than the panel and the lanes scroll —
+     the names column beside them does not, which is what keeps a track's name
+     beside the track however far along you have scrolled */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+}
+
+.mo-span {
+  position: relative;
+  min-width: 100%;
+}
+
+/* Where time is drawn.
+   Every row measures and positions against this box rather than against its
+   own, so the ruler, the lanes and the playhead all agree on where 0 and the
+   end of the timeline are — and a keyframe sitting on either is drawn whole. */
+.mo-field {
+  position: absolute;
+  inset: 0 var(--mo-pad);
+  pointer-events: none;
+}
+
+/* spans the same box the lanes measure against, so the playhead's percentage
+   and a keyframe's percentage mean the same moment */
+.mo-playhead-area {
+  position: absolute;
+  inset: 0 var(--mo-pad);
+  pointer-events: none;
+}
+
+.mo-ruler {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+  cursor: ew-resize;
+}
+
+.mo-tick {
+  position: absolute;
+  top: 6px;
+  padding-left: 4px;
+  border-left: 1px solid rgb(255 255 255 / 0.16);
+  color: rgb(255 255 255 / 0.45);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.mo-tick[data-end='true'] {
+  padding: 0 4px 0 0;
+  border-left: 0;
+  border-right: 1px solid rgb(255 255 255 / 0.16);
+  transform: translateX(-100%);
+}
+
+.mo-lane {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.04);
+}
+
+.mo-lane-layer {
+  background: rgb(255 255 255 / 0.03);
+}
+
+/* A keyframe is a diamond, as every timeline has drawn one since After
+   Effects: it reads as a point in time rather than a block of it. */
+.mo-key {
+  position: absolute;
+  pointer-events: auto;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -5px 0 0 -5px;
+  border: 1px solid rgb(0 0 0 / 0.4);
+  background: #fff;
+  transform: rotate(45deg);
+  cursor: ew-resize;
+  padding: 0;
+}
+
+/* a key stranded past the end of a shortened timeline */
+.mo-key[data-past='true'] {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.mo-key[data-on='true'] {
+  background: var(--color-select, #0d99ff);
+  border-color: #fff;
+}
+
+.mo-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #ff5c5c;
+  pointer-events: none;
+}
+
+.mo-playhead-grip {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: #ff5c5c;
+}
+
+.mo-curve {
+  color: rgb(255 255 255 / 0.75);
+}
+
+.mo-value {
+  margin-left: 6px;
+  color: rgb(255 255 255 / 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+.mo-chip:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.mo-chip:disabled:hover {
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(255 255 255 / 0.75);
+}
+
+/* the rubber band drawn over the lanes */
+.mo-band {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid var(--color-select, #0d99ff);
+  background: rgb(13 153 255 / 0.14);
+  pointer-events: none;
+}
+
+/* The curve, and the numbers behind it when it is a custom one. The popover
+   opens upward: the panel is at the foot of the canvas, so there is nothing
+   below it to open into. */
+.mo-curve-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mo-curve-btn {
+  padding: 0 4px;
+}
+
+.mo-curve-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #1e1e1e;
+  color: #fff;
+  box-shadow:
+    0 6px 20px rgb(0 0 0 / 0.35),
+    0 0 0 0.5px rgb(255 255 255 / 0.12);
+}
+
+.mo-curve-nums {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.mo-curve-nums .mo-num,
+.mo-field-row .mo-num {
+  width: 100%;
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 0.08);
+}
+
+.mo-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: rgb(255 255 255 / 0.6);
+}
+
+.mo-field-row .mo-num {
+  width: 62px;
+}

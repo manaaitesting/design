@@ -15,6 +15,7 @@ import { Present } from './Present';
 import { PromptBar } from './PromptBar';
 import { Resizer } from './Resizer';
 import { ShadersModal } from './ShadersModal';
+import { Timeline } from './Timeline';
 import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
 import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
@@ -299,6 +300,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         else if (ui.shadersOpen) ui.setShadersOpen(false);
         else if (ui.editing) ui.setEditing(null);
         else if (ui.contextMenu) ui.setContextMenu(null);
+        else if (ui.motion.frame) ui.openMotion(null);
         else if (ui.prompt) {
           ui.setPrompt(null);
           ui.setTool('move');
@@ -593,19 +595,24 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       }
 
       // ── Clipboard ──────────────────────────────────────────────────────
-      if (mod && event.key.toLowerCase() === 'c' && selection.length) {
+      // The timeline's own selection takes the clipboard while it has one, in
+      // the same way it takes ⌫: copying a keyframe and copying the layer it
+      // sits on are different things, and only one of them was asked for.
+      const keying = ui.motion.selected.length > 0;
+      if (mod && event.key.toLowerCase() === 'c' && selection.length && !keying) {
         event.preventDefault();
         void writeNodes(store.serialize(selection));
         return;
       }
-      if (mod && event.key.toLowerCase() === 'x' && selection.length) {
+      if (mod && event.key.toLowerCase() === 'x' && selection.length && !keying) {
         event.preventDefault();
         void writeNodes(store.serialize(selection));
         store.remove(selection);
         select([]);
         return;
       }
-      if (mod && event.key.toLowerCase() === 'v') {
+      // a paste goes to the timeline when it is the one holding a copy
+      if (mod && event.key.toLowerCase() === 'v' && !(ui.motion.frame && ui.motionClipboard.length)) {
         event.preventDefault();
         const inPlace = event.shiftKey;
         void readNodes().then((payload) => {
@@ -706,6 +713,16 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         ui.setHistoryOpen(true);
         return;
       }
+      // ⇧M — the timeline for the board the selection is on. Figma Motion
+      // publishes no shortcut for it, so this follows the panel toggles rather
+      // than inventing a modifier: bare, one letter, on the mode's initial.
+      if (!mod && !event.altKey && event.shiftKey && event.code === 'KeyM') {
+        event.preventDefault();
+        const board = selection.length ? topLevelOf(selection[0], doc) : null;
+        const frame = board && doc[board]?.type === 'frame' ? board : null;
+        ui.openMotion(frame && frame !== ui.motion.frame ? frame : null);
+        return;
+      }
       if (mod && event.shiftKey && event.key.toLowerCase() === 'h' && selection.length) {
         event.preventDefault();
         store.updateMany(selection, (n) => ({ visible: !n.visible }));
@@ -717,7 +734,13 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         return;
       }
 
-      if ((event.key === 'Delete' || event.key === 'Backspace') && selection.length) {
+      // ⌫ belongs to the timeline while keyframes are selected there — the
+      // panel removes them, and the layers they belong to stay where they are.
+      if (
+        (event.key === 'Delete' || event.key === 'Backspace') &&
+        selection.length &&
+        !ui.motion.selected.length
+      ) {
         event.preventDefault();
         store.remove(selection);
         select([]);
@@ -894,6 +917,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       <div style={{ position: 'relative', flex: 1, display: 'flex', minWidth: 0 }}>
         <Canvas />
         <PromptBar />
+        {chrome && <Timeline />}
       </div>
       {chrome && (
       <Resizer
