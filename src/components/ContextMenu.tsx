@@ -218,6 +218,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
   const selection = useUI((s) => s.selection);
   const select = useUI((s) => s.select);
   const pageId = useUI((s) => s.page);
+  const pages = usePages();
   const setHover = useUI((s) => s.setHover);
 
   const close = () => useUI.getState().setContextMenu(null);
@@ -399,6 +400,24 @@ function Menu({ menu }: { menu: OpenMenu }) {
       shortcut: '⌘R',
       disabled: !has,
       run: () => useUI.getState().setRenameOpen(true),
+    },
+    {
+      label: 'Move to page',
+      // a file with one page has nowhere to move to, so the row greys rather
+      // than opening onto an empty list
+      disabled: !has || pages.length < 2,
+      items: pages
+        .filter((id) => id !== pageId)
+        .map((id) => ({
+          label: doc[id]?.name ?? 'Page',
+          run: () => {
+            store.moveToPage(selection, id);
+            store.commit();
+            // the layers are on another page now; keeping them selected would
+            // leave the panels describing something nobody can see
+            select([]);
+          },
+        })),
     },
     {
       label: 'Detach instance',

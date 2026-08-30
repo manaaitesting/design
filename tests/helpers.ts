@@ -77,6 +77,7 @@ declare global {
         addPage(name?: string): string;
         duplicatePage(id: string): string | null;
         removePage(id: string): void;
+        moveToPage(ids: string[], pageId: string): string[];
         undo(): void;
         redo(): void;
       };

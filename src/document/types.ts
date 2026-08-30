@@ -1127,6 +1127,28 @@ export function pageOf(id: string, doc: Doc): string | null {
   return null;
 }
 
+/**
+ * Where a node sits in the space of its page, with every ancestor added back on.
+ *
+ * `x`/`y` are parent-local, so a layer three frames deep says nothing about
+ * where it is on the board until the frames between it and the page have been
+ * added back. Anything that has to reason across that boundary — moving a layer
+ * to another page, framing one on screen — needs this rather than `node.x`.
+ */
+export function pagePoint(id: string, doc: Doc): { x: number; y: number } {
+  let x = 0;
+  let y = 0;
+  let node = doc[id];
+  while (node?.parent) {
+    x += node.x ?? 0;
+    y += node.y ?? 0;
+    const parent = doc[node.parent];
+    if (!parent || parent.type === 'page') break;
+    node = parent;
+  }
+  return { x, y };
+}
+
 /** The outermost ancestor that still sits on the page — what a single click selects. */
 export function topLevelOf(id: string, doc: Doc): string {
   let cur = doc[id];

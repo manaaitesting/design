@@ -27,6 +27,7 @@ import {
   instanceRoot,
   isCanvasRoot,
   isInFlow,
+  pagePoint,
   setOf,
   ROOT_ID,
   type Align,
@@ -1095,6 +1096,52 @@ export class DocStore {
       // as one block, so they keep the order they were given
       if (lifted.length) target.insert(Math.min(at, target.length), lifted);
     });
+  }
+
+  /**
+   * Figma's Move to page.
+   *
+   * The layers land at canvas level on the destination, keeping the position
+   * they had on the board they came from. They cannot keep their parents: a
+   * layer three frames deep has no meaning on a page without those frames, and
+   * inventing them would be a copy rather than a move. So the move flattens to
+   * the page and rebases the coordinates, which is what Figma does too.
+   *
+   * Returns the ids that actually moved, so the caller can decide what to
+   * select — they are no longer on the page the user is looking at.
+   */
+  moveToPage(ids: string[], pageId: string): string[] {
+    const page = this.snap[pageId];
+    if (!page || page.type !== 'page') return [];
+
+    const movers = ids.filter((id) => {
+      const node = this.snap[id];
+      if (!node || node.type === 'page') return false;
+      // a node carried along inside another mover must not move twice
+      return !ids.some((other) => other !== id && descendants(other, this.snap).includes(id));
+    });
+    if (!movers.length) return [];
+
+    // read every position before the first detach: taking one node out can
+    // resize a hug-sized ancestor, and the rest would then rebase off it
+    const at = movers.map((id) => pagePoint(id, this.snap));
+
+    this.transact(() => {
+      const target = this.childrenOf(pageId);
+      if (!target) return;
+      movers.forEach((id, index) => {
+        const ymap = this.nodes.get(id);
+        if (!ymap) return;
+        this.detach(id);
+        ymap.set('parent', pageId);
+        ymap.set('x', Math.round(at[index].x));
+        ymap.set('y', Math.round(at[index].y));
+      });
+      // as one block, so they keep the order they were given
+      target.insert(target.length, movers);
+    });
+
+    return movers;
   }
 
   /**

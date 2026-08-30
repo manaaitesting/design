@@ -1020,6 +1020,87 @@ test('Space while drawing walks the box without resizing it', async ({ page }) =
   await removeNodes(page, [drawn.id]);
 });
 
+/**
+ * Move to page.
+ *
+ * The layers land at canvas level on the destination — a layer three frames
+ * deep has no meaning on a page that does not have those frames — so the test
+ * that matters is the rebase: it has to come out where it looked like it was.
+ */
+test('a layer moved to another page keeps the position it looked like it had', async ({ page }) => {
+  const outer = await makeNode(page, 'frame', { name: 'MTP Outer', x: 200, y: 300, w: 400, h: 400, fill: '#FFFFFF', flex: null });
+  const [inner, shallow, deep] = await page.evaluate((parent) => {
+    const store = window.paperlike!.store;
+    const mid = store.create('frame', parent, { name: 'MTP Inner', x: 10, y: 20, w: 200, h: 200, flex: null });
+    const near = store.create('rect', parent, { name: 'MTP Shallow', x: 40, y: 50, w: 30, h: 30 });
+    const far = store.create('rect', mid, { name: 'MTP Deep', x: 5, y: 5, w: 20, h: 20 });
+    store.commit();
+    return [mid, near, far];
+  }, outer);
+
+  const other = await page.evaluate(() => {
+    const id = window.paperlike!.store.addPage('Elsewhere');
+    window.paperlike!.store.commit();
+    return id;
+  });
+
+  const moved = await page.evaluate(
+    ({ ids, to }) => {
+      const list = window.paperlike!.store.moveToPage(ids, to);
+      window.paperlike!.store.commit();
+      return list;
+    },
+    { ids: [shallow, deep], to: other },
+  );
+  expect(moved).toEqual([shallow, deep]);
+
+  const after = await doc(page);
+  // one frame deep: 200 + 40 across, 300 + 50 down
+  expect([after[shallow].x, after[shallow].y, after[shallow].parent]).toEqual([240, 350, other]);
+  // two frames deep, so both ancestors have to be added back on
+  expect([after[deep].x, after[deep].y, after[deep].parent]).toEqual([215, 325, other]);
+  // and they left the page they came from
+  expect(after[outer].children).not.toContain(shallow);
+  expect(after[inner].children).not.toContain(deep);
+
+  await page.evaluate((id) => window.paperlike!.store.removePage(id), other);
+  await removeNodes(page, [outer]);
+});
+
+test('moving a frame carries its children, and nothing moves twice', async ({ page }) => {
+  const board = await makeNode(page, 'frame', { name: 'MTP Board', x: 100, y: 100, w: 300, h: 300, fill: '#FFFFFF', flex: null });
+  const child = await page.evaluate((parent) => {
+    const id = window.paperlike!.store.create('rect', parent, { name: 'MTP Rider', x: 20, y: 30, w: 40, h: 40 });
+    window.paperlike!.store.commit();
+    return id;
+  }, board);
+
+  const other = await page.evaluate(() => {
+    const id = window.paperlike!.store.addPage('Second');
+    window.paperlike!.store.commit();
+    return id;
+  });
+
+  // both are named, and the child is inside the frame: only the frame moves
+  const moved = await page.evaluate(
+    ({ ids, to }) => {
+      const list = window.paperlike!.store.moveToPage(ids, to);
+      window.paperlike!.store.commit();
+      return list;
+    },
+    { ids: [board, child], to: other },
+  );
+  expect(moved).toEqual([board]);
+
+  const after = await doc(page);
+  expect(after[board].parent).toBe(other);
+  // the child rode along inside it and kept its place in the frame
+  expect(after[child].parent).toBe(board);
+  expect([after[child].x, after[child].y]).toEqual([20, 30]);
+
+  await page.evaluate((id) => window.paperlike!.store.removePage(id), other);
+});
+
 test('dragging snaps to a sibling edge', async ({ page }) => {
   const anchor = await makeNode(page, 'rect', { name: 'SnapAnchor', x: 40, y: 500, w: 120, h: 80, fill: '#4CC3F0' });
   const mover = await makeNode(page, 'rect', { name: 'SnapMover', x: 40, y: 620, w: 120, h: 80, fill: '#F2637F' });
@@ -2095,6 +2176,28 @@ test('right-clicking a layer row opens the same menu and acts on that row', asyn
   const order = (await doc(page)).root.children.filter((c: string) => c === a || c === b);
   expect(order[0]).toBe(b);
   await removeNodes(page, [a, b]);
+});
+
+test('Move to page lists the other pages, and moving empties the selection', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxMove', x: 220, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  const other = await page.evaluate(() => {
+    const made = window.paperlike!.store.addPage('Somewhere Else');
+    window.paperlike!.store.commit();
+    return made;
+  });
+
+  await openMenu(page, id);
+  await row(page, 'Move to page').hover();
+  // the page you are on is not offered — there is nowhere to move to
+  await expect(row(page, 'Somewhere Else')).toBeVisible();
+  await expect(row(page, 'Page 1')).toHaveCount(0);
+  await row(page, 'Somewhere Else').click();
+
+  expect((await doc(page))[id].parent).toBe(other);
+  // nothing stays selected: the layer is on a page nobody is looking at
+  expect(await selection(page)).toEqual([]);
+
+  await page.evaluate((p) => window.paperlike!.store.removePage(p), other);
 });
 
 test('submenus open two levels deep and stay open on the way in', async ({ page }) => {
