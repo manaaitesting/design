@@ -440,6 +440,11 @@ anyone disagrees with the trade.
   re-laying out type the browser has already laid out, which the real-DOM
   invariant forbids. This is the honest boundary; the earlier "it would need a
   second renderer" was over-claimed, since `toNative.ts` walks the same tree.
+- **Smart selection reads rows and columns, not grids.** A grid selection gets
+  no handles rather than handles that do the wrong thing. The detector would
+  need to group into rows first, as `tidyUp` does, and then decide which of the
+  two axes a dot belongs to — worth a row if anyone works in grids often enough
+  to want it.
 - **SwiftUI and Android XML only.** Figma also offers Compose and UIKit.
   Gradients, image fills and shaders emit a comment naming the CSS instead of a
   colour, because they have no one colour to name.
@@ -463,6 +468,25 @@ V-07, and the four approximate adjustments. All six README limits stand.
   pre-existing test bent. Three ledger corrections recorded above; the C-10 edge
   anchor is the one place a model of Figma was reasoned to rather than known, and
   is flagged for challenge.
+- **2026-08-30, fifth pass** — the user asked for the rows to be worked one at
+  a time. There were none left, so Phase 1 ran again over surface the first
+  sweep had not walked: text editing, the arrange commands, and the shortcuts
+  Figma publishes but this ledger had never checked. Eight rows, eight commits,
+  399 tests passing.
+  **What the second sweep says about the first.** The first ledger's 116 rows
+  were not wrong; they were the rows that come of walking the *panels*. Three of
+  the eight below were invisible from there because they are not controls at
+  all — ⇧ during a drag, a handle pulled past the far edge, ⌘B inside a
+  contentEditable. Two of those were `wrong` rather than `missing`, and one of
+  them (T-14) is the worst kind: the browser answered the key, the user saw the
+  text go bold, and the styling was gone by the next render. **A row that reads
+  "no control for this" is not the same as "nothing happens", and only the
+  second is a gesture worth ranking.** The next sweep should start from the
+  gestures, not the panels.
+  The other thing worth recording: `tabs.spec.ts:98` came back. The guard added
+  two passes ago waits for the handle to belong to the file, which is not the
+  same as the file having arrived over the socket. Reported before it was
+  touched, then fixed by polling the same assertion rather than weakening it.
 - **2026-08-30, fourth pass** — the user said "fix it then" to the two rows I had
   been arguing instead of closing, and was right on both.
   **SV-01**: my defence was literally true — no route ran SQL — and beside the
