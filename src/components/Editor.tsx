@@ -492,6 +492,17 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         pasteProperties(store, selection);
         return;
       }
+      // ⌥⌘B — detach an instance from its main, as Figma binds it. Only
+      // instances answer, so the key falls through on anything else.
+      if (mod && event.altKey && event.code === 'KeyB' && selection.length) {
+        const instances = selection.filter((id) => doc[id]?.instanceOf);
+        if (instances.length) {
+          event.preventDefault();
+          for (const id of instances) store.detachInstance(id);
+          store.commit();
+          return;
+        }
+      }
       // ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J — text alignment, which is a layer property here
       // and so belongs on the selection rather than on a run
       if (mod && event.altKey && !event.shiftKey && TEXT_ALIGN_KEYS[event.code] && selection.length) {

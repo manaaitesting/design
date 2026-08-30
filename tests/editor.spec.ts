@@ -2886,6 +2886,40 @@ test('swapping an instance rebuilds it from the other component, in place', asyn
   await removeNodes(page, [blue, green, next]);
 });
 
+/**
+ * ⌥⌘B cuts an instance loose from its main. The button in the panel has always
+ * been there; the key is what a Figma user reaches for, and it falls through on
+ * anything that is not an instance rather than swallowing the shortcut.
+ */
+test('\u2325\u2318B detaches an instance from its main', async ({ page }) => {
+  const main = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', { name: 'Chip', x: 700, y: 900, w: 120, h: 40, flex: null });
+    store.create('text', frame, { name: 'ChipLabel', x: 8, y: 8, text: 'chip' });
+    store.createComponent(frame);
+    store.commit();
+    // createComponent turns the frame into the main in place, as the swap test
+    // above also relies on
+    return frame;
+  });
+
+  const instance = await page.evaluate(
+    (id) => window.paperlike!.store.createInstance(id, 'root', { x: 900, y: 900 }),
+    main,
+  );
+  await select(page, [instance!]);
+  expect((await doc(page))[instance!].instanceOf).toBe(main);
+
+  await page.keyboard.press('Alt+Meta+b');
+
+  const after = (await doc(page))[instance!];
+  expect(after.instanceOf).toBeUndefined();
+  // it is still the same layer in the same place, only no longer following
+  expect([after.x, after.y]).toEqual([900, 900]);
+
+  await removeNodes(page, [main!, instance!]);
+});
+
 test.describe('multi-selection', () => {
   async function twoUnalike(page: import('@playwright/test').Page) {
     return page.evaluate(() => {

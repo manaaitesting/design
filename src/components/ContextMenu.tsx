@@ -400,6 +400,15 @@ function Menu({ menu }: { menu: OpenMenu }) {
       disabled: !has,
       run: () => useUI.getState().setRenameOpen(true),
     },
+    {
+      label: 'Detach instance',
+      shortcut: '⌥⌘B',
+      disabled: !selection.some((id) => doc[id]?.instanceOf),
+      run: () => {
+        for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
+        store.commit();
+      },
+    },
 
     { label: 'Bring to front', shortcut: ']', divider: true, disabled: !has, run: () => store.reorder(selection, 'front') },
     { label: 'Bring forward', shortcut: '⌘]', disabled: !has, run: () => store.reorder(selection, 'forward') },
