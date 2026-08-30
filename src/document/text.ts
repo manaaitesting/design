@@ -32,6 +32,19 @@ export interface TextRun {
   letterSpacing?: number;
   lineHeight?: number;
   case?: FontSpec['case'];
+  /**
+   * The paragraph properties.
+   *
+   * A list style belongs to a paragraph rather than to a layer — that is how a
+   * heading, three bullets and a closing line live in one text object — and the
+   * indent is how deep a nested item sits. They are carried by every character
+   * of the line rather than by a parallel array because that is the one place
+   * they survive editing: splitting, merging and typing already move a run's
+   * properties with its characters, so ⏎ in a list makes another item and
+   * nothing has to be kept in step by hand.
+   */
+  list?: FontSpec['list'];
+  indent?: number;
   /** makes the run a link in the export */
   link?: string;
 }
@@ -51,6 +64,8 @@ const RUN_KEYS: (keyof RunPatch)[] = [
   'letterSpacing',
   'lineHeight',
   'case',
+  'list',
+  'indent',
   'link',
 ];
 
@@ -280,31 +295,94 @@ export function runStyle(run: TextRun, font?: FontSpec): CSSProperties {
  * reads as a list; the flush version is here because sometimes a list is really
  * a paragraph that happens to be numbered.
  */
-export function listBoxStyle(font?: FontSpec): CSSProperties {
+export function listBoxStyle(font?: FontSpec, indent = 0): CSSProperties {
   const hanging = font?.hangingList !== false;
+  // a nested level steps in by the same amount the marker already hangs out by
+  const nest = indent ? { marginLeft: `${indent * 1.4}em` } : null;
   return hanging
-    ? { margin: 0, paddingLeft: '1.4em', listStylePosition: 'outside' }
-    : { margin: 0, paddingLeft: 0, listStylePosition: 'inside' };
+    ? { margin: 0, paddingLeft: '1.4em', listStylePosition: 'outside', ...nest }
+    : { margin: 0, paddingLeft: 0, listStylePosition: 'inside', ...nest };
+}
+
+/** One run of consecutive paragraphs that share an element. */
+export interface TextGroup {
+  /** the list they sit in, or null for plain paragraphs */
+  list: 'ul' | 'ol' | null;
+  /** how many levels in a nested list sits */
+  indent: number;
+  /** where a numbered group carries on from, so a nested list does not renumber its parent */
+  start?: number;
+  lines: { runs: TextRun[]; gap: boolean }[];
 }
 
 /**
  * How a text layer's lines are laid out.
  *
- * `null` means the whole layer is one flowing block — no list, no paragraph
- * spacing — where the newlines can be left to `pre-wrap` and there is nothing
- * to build. Anything else has to become real elements, and the canvas and the
- * in-place editor both build them from here: they used to decide separately,
- * which is why the bullets and the paragraph gaps vanished the moment a caret
- * appeared.
+ * `null` means the whole layer is one flowing block — no list, no indent, no
+ * paragraph spacing — where the newlines can be left to `pre-wrap` and there is
+ * nothing to build. Anything else has to become real elements, and the canvas,
+ * the in-place editor and the export all build them from here: they used to
+ * decide separately, which is why the bullets vanished the moment a caret
+ * appeared and why the export could disagree with the canvas.
  */
-export function textBlocks(
-  runs: TextRun[],
-  font?: FontSpec,
-): { list: 'ul' | 'ol' | null; spacing: number; lines: TextRun[][] } | null {
+export function textGroups(runs: TextRun[], font?: FontSpec): TextGroup[] | null {
   const spacing = font?.paragraphSpacing ?? 0;
-  const kind = font?.list && font.list !== 'none' ? font.list : null;
-  if (!kind && !spacing) return null;
-  return { list: kind ? (kind === 'number' ? 'ol' : 'ul') : null, spacing, lines: runLines(runs) };
+  // the layer's own list style is what a paragraph that says nothing inherits
+  const fallback = font?.list && font.list !== 'none' ? font.list : 'none';
+  const lines = runLines(runs);
+  const kindOf = (line: TextRun[]): 'ul' | 'ol' | null => {
+    const list = line[0]?.list ?? fallback;
+    return list === 'number' ? 'ol' : list === 'bullet' ? 'ul' : null;
+  };
+
+  if (!spacing && lines.every((line) => !kindOf(line))) return null;
+
+  const groups: TextGroup[] = [];
+  // how many items each level has numbered, so an `<ol>` can carry on
+  const counted: number[] = [];
+  lines.forEach((line, index) => {
+    const list = kindOf(line);
+    const indent = list ? Math.max(0, Math.round(line[0]?.indent ?? 0)) : 0;
+    // a shallower line closes the deeper levels, and a nested list that comes
+    // back starts at one again
+    for (let level = indent + 1; level < counted.length; level++) counted[level] = 0;
+    if (!list) counted.length = 0;
+
+    const last = groups[groups.length - 1];
+    const entry = { runs: line, gap: index > 0 };
+    if (last && last.list === list && last.indent === indent) last.lines.push(entry);
+    else {
+      groups.push({
+        list,
+        indent,
+        start: list === 'ol' ? (counted[indent] ?? 0) + 1 : undefined,
+        lines: [entry],
+      });
+    }
+    if (list === 'ol') counted[indent] = (counted[indent] ?? 0) + 1;
+  });
+  return groups;
+}
+
+/**
+ * The character range of every paragraph a selection touches.
+ *
+ * A list mark and an indent are properties of a whole line, so the commands
+ * that set them widen the range they were given to the lines it lands in.
+ */
+export function paragraphsIn(
+  runs: TextRun[],
+  start: number,
+  end: number,
+): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let at = 0;
+  for (const line of plainText(runs).split('\n')) {
+    const to = at + line.length;
+    if (to >= start && at <= end) out.push({ start: at, end: to });
+    at = to + 1;
+  }
+  return out;
 }
 
 /**

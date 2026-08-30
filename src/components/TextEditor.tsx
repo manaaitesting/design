@@ -10,6 +10,7 @@ import {
   isPlain,
   LINE_BREAK,
   listBoxStyle,
+  paragraphsIn,
   plainText,
   replaceRange,
   runSegments,
@@ -17,7 +18,7 @@ import {
   styleAt,
   runsOf,
   styleOfRange,
-  textBlocks,
+  textGroups,
   type RunPatch,
   type TextRun,
 } from '../document/text';
@@ -70,9 +71,6 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
       return span;
     };
 
-    // The same blocks the canvas draws: editing is in place, so a bulleted list
-    // has to stay bulleted and a paragraph gap has to stay open while the caret
-    // is in it, or the text jumps the moment you double-click it.
     // a soft break is a <br> inside the paragraph; an empty paragraph gets one
     // too, because a block with no height cannot be clicked into
     const fill = (line: TextRun[]): Node[] => {
@@ -84,26 +82,35 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
       return out.length ? out : [document.createElement('br')];
     };
 
-    const blocks = textBlocks(runs.current, node.font);
-    if (!blocks) {
+    // The same groups the canvas draws: editing is in place, so a bulleted list
+    // has to stay bulleted and a paragraph gap has to stay open while the caret
+    // is in it, or the text jumps the moment you double-click it.
+    const groups = textGroups(runs.current, node.font);
+    const spacing = node.font?.paragraphSpacing ?? 0;
+    if (!groups) {
       el.replaceChildren(...fill(runs.current));
       return;
     }
 
-    const lines = blocks.lines.map((line, at) => {
-      const box = document.createElement(blocks.list ? 'li' : 'div');
-      if (at && blocks.spacing) box.style.marginTop = `${blocks.spacing}px`;
-      box.replaceChildren(...fill(line));
-      return box;
-    });
-    if (!blocks.list) {
-      el.replaceChildren(...lines);
-      return;
-    }
-    const list = document.createElement(blocks.list);
-    Object.assign(list.style, listBoxStyle(node.font) as Record<string, string>);
-    list.replaceChildren(...lines);
-    el.replaceChildren(list);
+    el.replaceChildren(
+      ...groups.flatMap((group): HTMLElement[] => {
+        const lines = group.lines.map((line) => {
+          const box = document.createElement(group.list ? 'li' : 'div');
+          if (line.gap && spacing) box.style.marginTop = `${spacing}px`;
+          box.replaceChildren(...fill(line.runs));
+          return box;
+        });
+        if (!group.list) return lines;
+        const list = document.createElement(group.list);
+        if (group.start && group.start > 1) list.setAttribute('start', String(group.start));
+        Object.assign(
+          list.style,
+          listBoxStyle(node.font, group.indent) as Record<string, string>,
+        );
+        list.replaceChildren(...lines);
+        return [list];
+      }),
+    );
   }, [generation, node.font]);
 
   /**
@@ -209,6 +216,29 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
     requestAnimationFrame(() => restore(editorRef.current, caret, caret));
   };
 
+  /**
+   * Applies a patch to every paragraph the selection touches.
+   *
+   * A list mark and an indent are properties of a whole line rather than of a
+   * range of characters, so the commands that set them widen whatever the caret
+   * has to the lines it lands in — which is also why they read the line's own
+   * style rather than being handed a fixed patch.
+   */
+  const applyToLines = (patch: (style: RunPatch) => RunPatch) => {
+    const { start, end } = liveRange();
+    let next = runs.current;
+    for (const line of paragraphsIn(next, start, end)) {
+      if (line.end <= line.start) continue;
+      const style = styleOfRange(next, line.start, line.end);
+      next = applyToRange(next, line.start, line.end, patch(style));
+    }
+    if (next === runs.current) return;
+    runs.current = next;
+    store.update(node.id, { runs: next, text: plainText(next) });
+    setGeneration((value) => value + 1);
+    requestAnimationFrame(() => restore(editorRef.current, start, end));
+  };
+
   const applyStyle = (patch: RunPatch) => {
     const { start, end } = targetRange();
     if (end <= start) return;
@@ -257,6 +287,13 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
 
   const current = styleOfRange(runs.current, selection.start, selection.end);
   const hasRange = selection.end > selection.start;
+  // the list style of the line the caret is in — a paragraph that says nothing
+  // of its own wears the layer's
+  const line = paragraphsIn(runs.current, selection.start, selection.end)[0];
+  const list =
+    (line ? styleOfRange(runs.current, line.start, line.end).list : undefined) ??
+    node.font?.list ??
+    'none';
   // Truncation is a view of the text rather than the text itself, and keeping
   // the clamp on while you edit hides the very lines you are typing. `display`
   // comes off with it because the clamp is what made the box a `-webkit-box`.
@@ -287,6 +324,19 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
             event.preventDefault();
             insert(event.shiftKey ? LINE_BREAK : '\n');
+            return;
+          }
+
+          // Tab nests the list item and Shift+Tab brings it back out. It has to
+          // be claimed whatever it finds: left to the browser it moves the focus
+          // out of the editable, which commits the edit and closes it.
+          if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            event.preventDefault();
+            const by = event.shiftKey ? -1 : 1;
+            applyToLines((style) => {
+              const level = Math.max(0, Math.round(style.indent ?? 0) + by);
+              return { indent: level || undefined };
+            });
             return;
           }
 
@@ -384,7 +434,15 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
         }}
       />
 
-      {hasRange && <RangeBar node={node} current={current} onApply={applyStyle} />}
+      {hasRange && (
+        <RangeBar
+          node={node}
+          current={current}
+          list={list}
+          onApply={applyStyle}
+          onList={(kind) => applyToLines(() => ({ list: kind }))}
+        />
+      )}
     </>
   );
 }
@@ -399,11 +457,16 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
 function RangeBar({
   node,
   current,
+  list,
   onApply,
+  onList,
 }: {
   node: SceneNode;
   current: RunPatch;
+  /** the list style of the paragraph the selection starts in */
+  list: NonNullable<RunPatch['list']>;
   onApply: (patch: RunPatch) => void;
+  onList: (kind: NonNullable<RunPatch['list']>) => void;
 }) {
   const rect = document.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)?.getBoundingClientRect();
   if (!rect) return null;
@@ -451,6 +514,23 @@ function RangeBar({
         onClick={toggle('strike')}
       >
         S
+      </button>
+      <span className="fig-range-sep" />
+      <button
+        type="button"
+        data-on={list === 'bullet' || undefined}
+        title="Bulleted list"
+        onClick={() => onList(list === 'bullet' ? 'none' : 'bullet')}
+      >
+        •
+      </button>
+      <button
+        type="button"
+        data-on={list === 'number' || undefined}
+        title="Numbered list"
+        onClick={() => onList(list === 'number' ? 'none' : 'number')}
+      >
+        1.
       </button>
       <span className="fig-range-sep" />
       <input

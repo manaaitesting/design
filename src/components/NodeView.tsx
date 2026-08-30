@@ -32,7 +32,7 @@ import {
   runSegments,
   runStyle,
   runsOf,
-  textBlocks,
+  textGroups,
   type TextRun,
 } from '../document/text';
 import { TextEditor } from './TextEditor';
@@ -112,12 +112,12 @@ function TextBody({ node }: { node: SceneNode }) {
   const font = node.font;
   const runs = runsOf(node);
   const plain = isPlain(runs);
-  const blocks = textBlocks(runs, font);
+  const groups = textGroups(runs, font);
+  const spacing = font?.paragraphSpacing ?? 0;
 
   const text = plainText(runs);
-  if (plain && !blocks && !text.includes(LINE_BREAK)) return <>{text}</>;
+  if (plain && !groups && !text.includes(LINE_BREAK)) return <>{text}</>;
 
-  const lines = blocks?.lines ?? runLines(runs);
   // a soft break is a line inside the paragraph, so it becomes a <br> and takes
   // none of the paragraph spacing with it
   const body = (line: TextRun[]) => (
@@ -137,12 +137,12 @@ function TextBody({ node }: { node: SceneNode }) {
     </>
   );
 
-  if (!blocks) {
+  if (!groups) {
     // styled, but a single flowing block: the spans carry the styling and the
     // newlines are still newlines, because the box is `pre-wrap`
     return (
       <>
-        {lines.map((line, index) => (
+        {runLines(runs).map((line, index) => (
           <span key={index}>
             {index ? '\n' : ''}
             {body(line)}
@@ -152,30 +152,34 @@ function TextBody({ node }: { node: SceneNode }) {
     );
   }
 
-  const gap = (index: number) =>
-    index && blocks.spacing ? { marginTop: blocks.spacing } : undefined;
+  const gap = (line: { gap: boolean }) => (line.gap && spacing ? { marginTop: spacing } : undefined);
 
-  if (!blocks.list) {
-    return (
-      <>
-        {lines.map((line, index) => (
-          <div key={index} style={gap(index)}>
-            {body(line)}
-          </div>
-        ))}
-      </>
-    );
-  }
-
-  const Tag = blocks.list;
   return (
-    <Tag style={listBoxStyle(font)}>
-      {lines.map((line, index) => (
-        <li key={index} style={gap(index)}>
-          {body(line)}
-        </li>
-      ))}
-    </Tag>
+    <>
+      {groups.map((group, index) => {
+        if (!group.list) {
+          return (
+            <Fragment key={index}>
+              {group.lines.map((line, at) => (
+                <div key={at} style={gap(line)}>
+                  {body(line.runs)}
+                </div>
+              ))}
+            </Fragment>
+          );
+        }
+        const Tag = group.list;
+        return (
+          <Tag key={index} start={group.start} style={listBoxStyle(font, group.indent)}>
+            {group.lines.map((line, at) => (
+              <li key={at} style={gap(line)}>
+                {body(line.runs)}
+              </li>
+            ))}
+          </Tag>
+        );
+      })}
+    </>
   );
 }
 

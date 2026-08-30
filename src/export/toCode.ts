@@ -30,6 +30,7 @@ import {
   runSegments,
   runStyle,
   runsOf,
+  textGroups,
 } from '../document/text';
 import { compose, defaultParams, SHADER_BY_ID } from '../webgl/shaders';
 import type { Token } from '../document/store';
@@ -132,12 +133,12 @@ function textMarkup(
 ): string {
   const font = node.font;
   const spacing = font?.paragraphSpacing ?? 0;
-  const list = font?.list && font.list !== 'none' ? font.list : null;
   const runs = runsOf(node);
   const plain = isPlain(runs);
+  const groups = textGroups(runs, font);
 
   const text = plainText(runs);
-  if (plain && !spacing && !list && !text.includes(LINE_BREAK)) return escape(text);
+  if (plain && !groups && !text.includes(LINE_BREAK)) return escape(text);
 
   // a styled run becomes a span carrying only what it overrides — the rest is
   // still inherited from the layer's own rule, as it is on the canvas, and a
@@ -158,15 +159,24 @@ function textMarkup(
       )
       .join('<br>');
 
-  const lines = runLines(runs);
-  const gap = (index: number) => (index && spacing ? ` ${inlineStyle({ marginTop: spacing })}` : '');
+  if (!groups) return runLines(runs).map(body).join(escape('\n'));
 
-  if (!list && !spacing) return lines.map(body).join(escape('\n'));
-  if (!list) return lines.map((line, i) => `<div${gap(i)}>${body(line)}</div>`).join('');
+  const gap = (line: { gap: boolean }) =>
+    line.gap && spacing ? ` ${inlineStyle({ marginTop: spacing })}` : '';
 
-  const tag = list === 'number' ? 'ol' : 'ul';
-  const items = lines.map((line, i) => `<li${gap(i)}>${body(line)}</li>`).join('');
-  return `<${tag} ${inlineStyle(listBoxStyle(font) as Record<string, string | number>)}>${items}</${tag}>`;
+  return groups
+    .map((group) => {
+      if (!group.list) {
+        return group.lines.map((line) => `<div${gap(line)}>${body(line.runs)}</div>`).join('');
+      }
+      const items = group.lines
+        .map((line) => `<li${gap(line)}>${body(line.runs)}</li>`)
+        .join('');
+      const box = listBoxStyle(font, group.indent) as Record<string, string | number>;
+      const from = group.start && group.start > 1 ? ` start="${group.start}"` : '';
+      return `<${group.list}${from} ${inlineStyle(box)}>${items}</${group.list}>`;
+    })
+    .join('');
 }
 
 /** A number variable is published unitless; everything else passes through. */

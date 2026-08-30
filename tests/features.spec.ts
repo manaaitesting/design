@@ -523,6 +523,49 @@ test.describe('rich text', () => {
   });
 
   /**
+   * A list style belongs to the paragraphs it is applied to, not to the layer.
+   * It used to live on `FontSpec`, so turning bullets on wrapped every line of
+   * the layer in an `<li>` — a heading with three bullets under it had to be
+   * two text layers aligned by hand.
+   */
+  test('bullets apply to the selected paragraphs, leaving the heading alone', async ({ page }) => {
+    const id = await seedTyped(page, 'Heading\nOne\nTwo', {});
+    await enter(page, id);
+    await selectRange(page, 8, 15);
+    await page.locator('.fig-range-bar button[title="Bulleted list"]').click();
+
+    const editable = page.locator('[contenteditable]');
+    await expect(editable.locator('ul > li')).toHaveCount(2);
+    await expect(editable.locator('> div')).toHaveCount(1);
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * Tab was not claimed at all while editing, so the browser's default ran:
+   * focus left the contentEditable, `onBlur` fired, and the edit was committed
+   * and closed. Reaching for it to nest a sub-bullet ended the session.
+   */
+  test('⇥ nests the list item it is in, and does not end the edit', async ({ page }) => {
+    const id = await seedTyped(page, 'One\nTwo', { list: 'bullet' });
+    await enter(page, id);
+    await selectRange(page, 5, 5);
+    await page.keyboard.press('Tab');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}@${run.indent ?? 0}`))
+      .toEqual(['One\n@0', 'Two@1']);
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().editing)).toBe(id);
+    // the nested item is a list of its own, stepped in from its parent
+    await expect(page.locator('[contenteditable] ul')).toHaveCount(2);
+
+    await page.keyboard.press('Shift+Tab');
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.some((run) => run.indent))
+      .toBeFalsy();
+    await removeNodes(page, [id]);
+  });
+
+  /**
    * ⏎ starts a paragraph and ⇧⏎ breaks a line inside one. The model used to
    * have a single delimiter, so paragraph spacing opened up between every line
    * and every line of a bulleted layer became its own bullet — an address
