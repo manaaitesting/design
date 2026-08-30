@@ -40,6 +40,37 @@ export interface Version {
   names: string[];
   /** kept because the document was wiped just after it; never rotated away */
   pinned: boolean;
+  /** what someone called this moment, and who — absent on the timer's own saves */
+  title?: string;
+  description?: string;
+  authorName?: string;
+}
+
+/** What a person adds to a snapshot the timer would otherwise leave anonymous. */
+export interface VersionNote {
+  title: string;
+  description?: string;
+  authorId: string;
+  authorName: string;
+}
+
+/**
+ * Names live beside the snapshots rather than in them.
+ *
+ * A snapshot is a Yjs update — the document, and nothing about the moment it
+ * was taken. The filename has carried the whole metadata model until now, and a
+ * title with a description in it is more than a filename should hold.
+ */
+function notesFile(fileId: string): string {
+  return path.join(SNAPSHOT_DIR, `${encodeURIComponent(fileId)}.versions.json`);
+}
+
+function readNotes(fileId: string): Record<string, VersionNote | undefined> {
+  try {
+    return JSON.parse(fs.readFileSync(notesFile(fileId), 'utf8')) as Record<string, VersionNote>;
+  } catch {
+    return {};
+  }
 }
 
 function readDoc(file: string): DocStore {
@@ -64,6 +95,7 @@ function filesFor(fileId: string): { file: string; stamp: string; pinned: boolea
 
 /** Newest first — the order a history panel reads in. */
 export function listVersions(fileId: string): Version[] {
+  const notes = readNotes(fileId);
   return filesFor(fileId)
     .map(({ file, stamp, pinned }) => {
       let doc: ReturnType<DocStore['getSnapshot']> = {};
@@ -76,12 +108,18 @@ export function listVersions(fileId: string): Version[] {
       const names = Object.values(doc)
         .filter((node) => node.type !== 'page')
         .map((node) => node.name);
+      const note = notes[stamp];
       return {
         stamp,
         at: Date.parse(isoFrom(stamp)) || 0,
         nodes: Object.keys(doc).length,
         names: names.slice(0, 6),
         pinned,
+        ...(note && {
+          title: note.title,
+          description: note.description,
+          authorName: note.authorName,
+        }),
       } satisfies Version;
     })
     .filter((entry): entry is Version => !!entry)
@@ -160,6 +198,69 @@ function syncToken(fileId: string): string {
   return `${payload}.${createHmac('sha256', secret).update(payload).digest('base64url')}`;
 }
 
+/** Joins the room as an editor and waits for the document to arrive. */
+async function joinRoom(fileId: string): Promise<{ ydoc: Y.Doc; provider: WebsocketProvider }> {
+  const ydoc = new Y.Doc();
+  const provider = new WebsocketProvider(SYNC_URL, fileId, ydoc, {
+    params: { token: syncToken(fileId) },
+    // y-websocket expects a browser WebSocket; `ws` is the Node equivalent
+    WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out reaching the sync server.')), 8000);
+      provider.once('sync', (isSynced: boolean) => {
+        if (!isSynced) return;
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  } catch (error) {
+    provider.destroy();
+    ydoc.destroy();
+    throw error;
+  }
+  return { ydoc, provider };
+}
+
+/**
+ * Saves a version on purpose, with a name and an author on it.
+ *
+ * The shelf until now was the sync server's timer: twenty anonymous minutes,
+ * after which the state worth keeping has rotated out. That is not a history
+ * anyone can navigate — "the one I sent the client" has to be findable months
+ * later, and with two people editing you cannot even tell whose state a
+ * timestamp is.
+ *
+ * This joins the room the way a restore does and writes what it is handed to
+ * the same shelf, under the pinned name so the rotation leaves it alone. The
+ * sync server needs no new message for it: the document it would snapshot is
+ * exactly the document it just sent us.
+ */
+export async function saveVersion(fileId: string, note: VersionNote): Promise<Version> {
+  const { ydoc, provider } = await joinRoom(fileId);
+  try {
+    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const name = `${encodeURIComponent(fileId)}__${stamp}__keep.bin`;
+    fs.writeFileSync(
+      path.join(SNAPSHOT_DIR, name),
+      Buffer.from(Y.encodeStateAsUpdate(ydoc)),
+    );
+
+    const notes = readNotes(fileId);
+    notes[stamp] = note;
+    fs.writeFileSync(notesFile(fileId), JSON.stringify(notes, null, 2));
+
+    const saved = listVersions(fileId).find((version) => version.stamp === stamp);
+    if (!saved) throw new Error('Could not read the version back.');
+    return saved;
+  } finally {
+    provider.destroy();
+    ydoc.destroy();
+  }
+}
+
 export interface Restored {
   layers: number;
   /** the pages they went into, named — so the panel can say where they landed */
@@ -192,27 +293,10 @@ export async function restoreVersion(fileId: string, stamp: string): Promise<Res
   );
   if (!pages.length) throw new Error('That version has nothing on it.');
 
-  const ydoc = new Y.Doc();
+  const { ydoc, provider } = await joinRoom(fileId);
   const store = new DocStore(ydoc);
-  const provider = new WebsocketProvider(SYNC_URL, fileId, ydoc, {
-    params: { token: syncToken(fileId) },
-    // y-websocket expects a browser WebSocket; `ws` is the Node equivalent
-    WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
-  });
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error('Timed out reaching the sync server.')),
-        8000,
-      );
-      provider.once('sync', (isSynced: boolean) => {
-        if (!isSynced) return;
-        clearTimeout(timer);
-        resolve();
-      });
-    });
-
     store.ensureRoot();
     // a page the live document holds but has not indexed is a page nobody can
     // reach, so it counts as gone

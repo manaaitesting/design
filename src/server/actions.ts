@@ -36,6 +36,7 @@ import {
   compareVersion,
   listVersions,
   restoreVersion,
+  saveVersion,
   type Restored,
   type Version,
   type VersionDiff,
@@ -211,6 +212,31 @@ export async function listVersionsAction(fileId: string): Promise<Version[]> {
   if (!user) return [];
   if (!getFileFor(fileId, user.id)) return [];
   return listVersions(fileId);
+}
+
+export async function saveVersionAction(
+  fileId: string,
+  title: string,
+  description: string,
+): Promise<{ version?: Version; error?: string }> {
+  const user = await currentUser();
+  if (!user) return { error: 'Sign in first.' };
+  const file = getFileFor(fileId, user.id);
+  if (!file) return { error: 'You do not have access to that file.' };
+  // a version is a claim about the document, so it belongs to someone who edits it
+  if (!canEdit(roleOf(file.role))) return { error: 'You have view-only access to this file.' };
+
+  try {
+    const version = await saveVersion(fileId, {
+      title: title.trim() || 'Untitled version',
+      description: description.trim() || undefined,
+      authorId: user.id,
+      authorName: user.name,
+    });
+    return { version };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not save that version.' };
+  }
 }
 
 export async function compareVersionAction(

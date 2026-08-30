@@ -1570,6 +1570,28 @@ select {
     white-space: pre;
   }
 
+  /* naming a version: the row above the list that makes a checkpoint */
+  .fig-version-save {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--fig-line);
+  }
+  .fig-version-save input {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 24px;
+    border: 0;
+    border-radius: 5px;
+    padding: 0 8px;
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+    font: inherit;
+    outline: none;
+  }
+
   /* one row of the version-history list */
   .fig-version {
     display: flex;

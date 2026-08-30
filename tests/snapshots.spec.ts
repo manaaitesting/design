@@ -158,6 +158,45 @@ test('restoring re-inserts content that a connected client already deleted', asy
 });
 
 /**
+ * The timer's snapshots are anonymous: twenty minutes of locale timestamps, and
+ * with two people editing there is nothing to say whose state any of them is.
+ * A version you can find months later is one somebody named.
+ */
+test('a version can be saved deliberately, with a name and an author on it', async () => {
+  const room = 'named-probe';
+  const { store, provider } = await join('editor', room);
+  store.create('rect', ROOT_ID, { name: 'Hero', x: 0, y: 0, w: 40, h: 40 });
+
+  // let the sync server take one of its own first, so the two kinds sit together
+  await expect.poll(() => history.listVersions(room).length, { timeout: 15_000 }).toBe(1);
+
+  const saved = await history.saveVersion(room, {
+    title: 'v2 sent to client',
+    description: 'the hero, before the rewrite',
+    authorId: 'tester',
+    authorName: 'Ada',
+  });
+
+  const versions = history.listVersions(room);
+  expect(versions).toHaveLength(2);
+
+  const named = versions.find((version) => version.stamp === saved.stamp)!;
+  expect(named.title).toBe('v2 sent to client');
+  expect(named.description).toBe('the hero, before the rewrite');
+  expect(named.authorName).toBe('Ada');
+  // it holds the document as it stood, and outlives rotation
+  expect(named.names).toContain('Hero');
+  expect(named.pinned).toBe(true);
+
+  // and the timer's own is still an anonymous timestamp
+  const auto = versions.find((version) => version.stamp !== saved.stamp)!;
+  expect(auto.title).toBeUndefined();
+  expect(auto.authorName).toBeUndefined();
+
+  provider.destroy();
+});
+
+/**
  * Restoring a version means the file looks like that version, and a file is its
  * pages. It used to read the children of the hard-coded root page and paste
  * them straight back into it: pages 2..n were silently dropped, and a snapshot
