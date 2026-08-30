@@ -338,14 +338,22 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         } else if (ex) h = w / ratio;
         else if (ey) w = h * ratio;
       }
-      w = Math.max(1, Math.round(w));
-      h = Math.max(1, Math.round(h));
+      // Pulling a handle past the far edge turns the layer over rather than
+      // stopping at nothing: the box carries on growing the other way and the
+      // artwork mirrors with it, which is what Figma does and what makes the
+      // gesture recoverable — drag back and you are where you were.
+      const turnedX = w < 0;
+      const turnedY = h < 0;
+      w = Math.max(1, Math.round(Math.abs(w)));
+      h = Math.max(1, Math.round(Math.abs(h)));
 
       // Snap the edge being dragged to its siblings, the way a move already
       // does. Skipped when the gesture has its own idea of the size — a ratio
       // or a centre — and on a turned layer, whose edges are not on these axes.
-      // ⌘ bypasses it, as it does for a move.
-      const held = e.shiftKey || node.aspectLocked || e.altKey;
+      // A layer that has just been turned over is skipped too: the edge under
+      // the pointer is on the other side of the anchor, so the arithmetic below
+      // would snap the wrong one. ⌘ bypasses it, as it does for a move.
+      const held = e.shiftKey || node.aspectLocked || e.altKey || turnedX || turnedY;
       const guides: SnapGuide[] = [];
       if (!angle && !held && !e.metaKey && !e.ctrlKey && candidates.length) {
         const tolerance = 6 / viewport.zoom;
@@ -368,16 +376,17 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
       }
       setGuides(guides);
 
-      // The point the box is held by, as a fraction of it: the side opposite the
-      // handle, or the middle under ⌥. Decided *after* the size is final —
-      // computing it first is what made a ⇧-drag on a north or west handle slide
-      // the box while it scaled.
-      const ax = e.altKey ? 0.5 : ex > 0 ? 0 : ex < 0 ? 1 : 0.5;
-      const ay = e.altKey ? 0.5 : ey > 0 ? 0 : ey < 0 ? 1 : 0.5;
-      // A layer turns about its middle, so keeping a corner still means moving
-      // the middle. With no rotation this is the plain "opposite edge stays".
-      const offX = (ax - 0.5) * (startW - w);
-      const offY = (ay - 0.5) * (startH - h);
+      // How far the middle has to move for the anchor to stay put.
+      //
+      // The anchor is the edge opposite the handle, or the middle under ⌥, and
+      // it is worked out *after* the size is final — doing it first is what made
+      // a ⇧-drag on a north or west handle slide the box while it scaled. When
+      // the layer has been turned over the anchor is the same edge, but the box
+      // now hangs off the other side of it, which is the `+ w` rather than `- w`.
+      // A layer turns about its middle, so keeping an edge still means moving
+      // the middle; with no rotation this is the plain "opposite edge stays".
+      const offX = e.altKey ? 0 : (-ex * (startW + (turnedX ? w : -w))) / 2;
+      const offY = e.altKey ? 0 : (-ey * (startH + (turnedY ? h : -h))) / 2;
       const x = Math.round(
         centre.x + (angle ? offX * Math.cos(rad) - offY * Math.sin(rad) : offX) - w / 2,
       );
@@ -386,11 +395,18 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
       );
 
       const patch: Partial<SceneNode> = { w, h, wMode: 'fixed', hMode: 'fixed' };
-      // only write a coordinate that actually moved: a no-op write still pins
-      // the field as an override on a layer inside an instance
+      // only write a field that actually changed: a no-op write still pins it
+      // as an override on a layer inside an instance
       const live = store.getSnapshot()[id];
       if (live && live.x !== x) patch.x = x;
       if (live && live.y !== y) patch.y = y;
+      // The mirror is relative to however the layer already sat, and it is
+      // re-derived every move rather than toggled — so dragging back across the
+      // edge puts it the right way round again instead of flapping.
+      const wantH = turnedX ? !(node.flipH ?? false) : (node.flipH ?? false);
+      const wantV = turnedY ? !(node.flipV ?? false) : (node.flipV ?? false);
+      if (live && (live.flipH ?? false) !== wantH) patch.flipH = wantH;
+      if (live && (live.flipV ?? false) !== wantV) patch.flipV = wantV;
       store.update(id, patch);
     };
     const up = () => {

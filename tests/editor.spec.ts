@@ -828,6 +828,48 @@ test.describe('resize modifiers', () => {
     await removeNodes(page, [id]);
   });
 
+  /**
+   * Pulling a handle past the far edge turns the layer over in Figma rather than
+   * stopping at nothing. It matters most that the gesture is recoverable: drag
+   * back across the edge and the layer is the way round it started.
+   */
+  test('dragging a handle past the far edge turns the layer over', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'Turnover', x: 700, y: 500, w: 100, h: 60, fill: '#4CC3F0' });
+    await select(page, [id]);
+
+    // the east handle, dragged 160 to the left: 60 past the west edge
+    await dragBy(page, await handleAt(page, id, 1, 0.5), { x: -160, y: 0 });
+
+    const after = (await doc(page))[id];
+    expect(after.w).toBe(60);
+    // it hangs off the west edge, which is where it was held
+    expect(after.x).toBe(640);
+    expect(after.flipH).toBe(true);
+    // and the axis nobody dragged is untouched, mirror included
+    expect([after.h, after.y]).toEqual([60, 500]);
+    expect(after.flipV ?? false).toBe(false);
+
+    await removeNodes(page, [id]);
+  });
+
+  test('and dragging back across it puts the layer the right way round', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'ThereAndBack', x: 700, y: 500, w: 100, h: 60, fill: '#F2637F' });
+    await select(page, [id]);
+
+    const handle = await handleAt(page, id, 1, 0.5);
+    await page.mouse.move(handle.x, handle.y);
+    await page.mouse.down();
+    for (const dx of [-40, -120, -180, -120, -40, 40]) {
+      await page.mouse.move(handle.x + dx, handle.y);
+    }
+    await page.mouse.up();
+
+    const after = (await doc(page))[id];
+    expect(after.flipH ?? false).toBe(false);
+    expect([after.x, after.w]).toEqual([700, 140]);
+    await removeNodes(page, [id]);
+  });
+
   test('⇧ keeps the proportion on an edge handle, not only a corner', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'EdgeRatio', x: 700, y: 500, w: 100, h: 50, fill: '#F2637F' });
     await select(page, [id]);
