@@ -26,6 +26,7 @@ import {
   descendants,
   instanceRoot,
   isCanvasRoot,
+  isBooleanField,
   isInFlow,
   pagePoint,
   setOf,
@@ -38,6 +39,7 @@ import {
   type FlexSpec,
   type Interaction,
   type NodeType,
+  type BoundField,
   type NumericField,
   FONT_FIELDS,
   isFontField,
@@ -51,7 +53,7 @@ import {
 } from './types';
 import { newId } from '../lib/id';
 import type { CustomFont } from '../lib/fonts';
-import { DEFAULT_COLLECTION, DEFAULT_COLLECTION_ID, type Collection } from './variables';
+import { collectionOf, DEFAULT_COLLECTION, DEFAULT_COLLECTION_ID, type Collection } from './variables';
 
 /** Tag for edits made by this client, so the UndoManager only rewinds our own work. */
 export const LOCAL_ORIGIN = Symbol('local');
@@ -97,6 +99,21 @@ function fromY(map: YNode): SceneNode {
     out[key] = value instanceof Y.Array ? value.toArray() : value;
   }
   return out as unknown as SceneNode;
+}
+
+/**
+ * A boolean variable's value.
+ *
+ * Values are stored as strings throughout, so this is where "false" stops
+ * being a non-empty string and starts being false. Anything that is not one of
+ * the two words is not an answer, and the binding is left alone rather than
+ * guessed at.
+ */
+function booleanOf(value: string): boolean | null {
+  const word = value.trim().toLowerCase();
+  if (word === 'true') return true;
+  if (word === 'false') return false;
+  return null;
 }
 
 /** The number inside a token's value — "16", "16px" and "1.5rem" all count. */
@@ -722,9 +739,34 @@ export class DocStore {
    * The field's number is set from the variable straight away, so nothing has
    * to wait a propagation tick to look right.
    */
-  bindVariable(ids: string[], field: NumericField, tokenId: string | null): void {
+  /**
+   * The value a variable has *for this layer*.
+   *
+   * A number resolves through CSS, where the cascade already answers this: the
+   * frame that sets a mode re-declares the custom properties on itself and
+   * everything inside inherits them. A boolean has no such route — `visible` is
+   * not a property a `var()` can drive — so the mode has to be resolved here,
+   * by walking up to the nearest ancestor that names one. Without this a
+   * feature flag would read the default mode everywhere, which is the one thing
+   * a flag must not do.
+   */
+  private valueFor(token: Token, nodeId: string): string {
+    const collection = collectionOf(token);
+    let node: SceneNode | undefined = this.snap[nodeId];
+    while (node) {
+      const mode = node.modes?.[collection];
+      if (mode) return token.values?.[mode] ?? token.value;
+      node = node.parent ? this.snap[node.parent] : undefined;
+    }
+    return token.value;
+  }
+
+  bindVariable(ids: string[], field: BoundField, tokenId: string | null): void {
     const token = tokenId ? this.tokens.get(tokenId) : null;
-    const resolved = token ? numberOf(token.value) : null;
+    // a boolean drives `visible`, which is not a number and has no CSS var to
+    // render through — the stored flag is the only copy of the answer
+    const boolean = isBooleanField(field);
+    const resolved = !boolean && token ? numberOf(token.value) : null;
     this.transact(() => {
       for (const id of ids) {
         const node = this.snap[id];
@@ -734,7 +776,12 @@ export class DocStore {
         if (tokenId) bound[field] = tokenId;
         else delete bound[field];
         ymap.set('vars', bound);
-        if (resolved !== null) writeBound(ymap, node, field, resolved);
+        if (boolean) {
+          const flag = token ? booleanOf(this.valueFor(token, id)) : null;
+          if (flag !== null) ymap.set('visible', flag);
+        } else if (resolved !== null) {
+          writeBound(ymap, node, field as NumericField, resolved);
+        }
       }
     });
   }
@@ -755,12 +802,18 @@ export class DocStore {
         if (!ymap) continue;
         // Line height is stored as a ratio of the font size, so a layer with
         // both bound has to resolve its size before the ratio is worked out.
-        const fields = (Object.entries(node.vars) as [NumericField, string][]).sort(
+        const fields = (Object.entries(node.vars) as [BoundField, string][]).sort(
           ([a], [b]) => Number(b === 'fontSize') - Number(a === 'fontSize'),
         );
         for (const [field, tokenId] of fields) {
           const token = this.tokens.get(tokenId);
-          const value = token ? numberOf(token.value) : null;
+          if (!token) continue;
+          if (isBooleanField(field)) {
+            const flag = booleanOf(this.valueFor(token, node.id));
+            if (flag !== null && node.visible !== flag) ymap.set('visible', flag);
+            continue;
+          }
+          const value = numberOf(token.value);
           if (value === null) continue;
           writeBound(ymap, node, field, value);
         }

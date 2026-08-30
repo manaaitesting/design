@@ -2427,6 +2427,33 @@ function PositionSection({
  * a bound field shows the variable's name rather than the number it resolved
  * to — which is what tells you the value is the variable's to change.
  */
+/**
+ * Binding a layer's visibility to a boolean variable.
+ *
+ * The one thing Figma's boolean variables drive, and the reason they exist: a
+ * design system ships a feature behind a flag by binding every layer that
+ * belongs to it to one variable, and switching a mode turns the feature off
+ * everywhere at once.
+ */
+function VisibilityVariable({ node }: { node: SceneNode }) {
+  const names = useVarNames();
+  const [open, setOpen] = useState(false);
+  const bound = variableLabel(node, 'visible', names);
+
+  return (
+    <>
+      <FigButton
+        title={bound ? `Visibility follows ${bound}` : 'Apply variable to visibility'}
+        on={!!bound}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <FigIcon name="Apply variable" size={12} />
+      </FigButton>
+      {open && <VariableMenu node={node} field="visible" onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 function VarField({
   node,
   field,
@@ -3239,10 +3266,14 @@ function AppearanceSection({
         <>
           <FigButton
             title={node.visible ? 'Hide' : 'Show'}
+            // a bound layer's visibility belongs to the variable: toggling it
+            // by hand would be overwritten the next time the mode changed
+            disabled={!!node.vars?.visible}
             onClick={() => set({ visible: !node.visible })}
           >
             <Icon.Eye off={!node.visible} />
           </FigButton>
+          <VisibilityVariable node={node} />
           <FigButton
             title={node.locked ? 'Unlock layer' : 'Lock layer'}
             on={node.locked}

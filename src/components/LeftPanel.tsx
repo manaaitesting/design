@@ -13,6 +13,7 @@ import {
   type LibraryEntry,
 } from '../server/actions';
 import {
+  BOOLEAN_SCOPES,
   COLOR_SCOPES,
   DEFAULT_COLLECTION,
   DEFAULT_COLLECTION_ID,
@@ -521,6 +522,14 @@ function PageMenuBridge({
   return null;
 }
 
+/** What a variable holds the moment its type is chosen. */
+const NEW_TOKEN_VALUE: Record<Token['type'], string> = {
+  color: '#BDEE63',
+  number: '0',
+  text: '',
+  boolean: 'true',
+};
+
 /**
  * Where a variable may be used, and what it is for.
  *
@@ -531,7 +540,12 @@ function PageMenuBridge({
  */
 function ScopeEditor({ token }: { token: Token }) {
   const store = useStore();
-  const available = token.type === 'color' ? COLOR_SCOPES : NUMBER_SCOPES;
+  const available =
+    token.type === 'color'
+      ? COLOR_SCOPES
+      : token.type === 'boolean'
+        ? BOOLEAN_SCOPES
+        : NUMBER_SCOPES;
   const scopes = token.scopes ?? [];
 
   const toggle = (scope: VarScope) => {
@@ -544,6 +558,29 @@ function ScopeEditor({ token }: { token: Token }) {
   return (
     <div className="fig-scope">
       <div className="fig-scope-head">Where “{token.name}” can be used</div>
+      <div className="fig-scope-item" style={{ marginBottom: 6 }}>
+        <select
+          value={token.type}
+          aria-label="Variable type"
+          // the value and the scopes are both about the old type, so changing
+          // it starts them again rather than carrying a hex into a boolean
+          onChange={(event) => {
+            const type = event.target.value as Token['type'];
+            store.updateToken(token.id, {
+              type,
+              value: NEW_TOKEN_VALUE[type],
+              values: {},
+              scopes: [],
+            });
+          }}
+          style={{ font: 'inherit', width: '100%' }}
+        >
+          <option value="color">Color</option>
+          <option value="number">Number</option>
+          <option value="text">Text</option>
+          <option value="boolean">Boolean</option>
+        </select>
+      </div>
       <div className="fig-scope-grid">
         {available.map((scope) => (
           <label key={scope} className="fig-scope-item">
@@ -1332,8 +1369,11 @@ function ThemeTab() {
                 }}
               />
             ) : (
-              <span style={{ width: 16, flex: 'none', textAlign: 'center', color: 'var(--color-ink-dim)' }}>
-                #
+              <span
+                style={{ width: 16, flex: 'none', textAlign: 'center', color: 'var(--color-ink-dim)' }}
+                title={token.type}
+              >
+                {token.type === 'boolean' ? '◑' : token.type === 'text' ? 'T' : '#'}
               </span>
             )}
             <input
@@ -1348,28 +1388,51 @@ function ThemeTab() {
               }}
               style={{ flex: 1, minWidth: 0, border: 0, background: 'transparent', outline: 'none' }}
             />
-            {modes.map((mode) => (
-              <input
-                key={`${token.id}-${mode.id}`}
-                // keyed by value as well: a mode switch has to re-seed the field
-                defaultValue={valueIn(token, mode.id)}
-                title={`${token.name} · ${mode.name}`}
-                onBlur={(e) => store.setTokenValue(token.id, mode.id, e.target.value.trim())}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                }}
-                style={{
-                  width: modes.length > 1 ? 58 : 66,
-                  flex: 'none',
-                  border: 0,
-                  background: 'transparent',
-                  outline: 'none',
-                  color: 'var(--color-ink-muted)',
-                  textAlign: 'right',
-                }}
-              />
-            ))}
+            {modes.map((mode) =>
+              // a boolean has two values, so it gets the control that has two
+              // rather than a text field you can type nonsense into
+              token.type === 'boolean' ? (
+                <select
+                  key={`${token.id}-${mode.id}`}
+                  value={valueIn(token, mode.id) === 'false' ? 'false' : 'true'}
+                  title={`${token.name} · ${mode.name}`}
+                  onChange={(e) => store.setTokenValue(token.id, mode.id, e.target.value)}
+                  style={{
+                    width: modes.length > 1 ? 58 : 66,
+                    flex: 'none',
+                    border: 0,
+                    background: 'transparent',
+                    outline: 'none',
+                    color: 'var(--color-ink-muted)',
+                    font: 'inherit',
+                  }}
+                >
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              ) : (
+                <input
+                  key={`${token.id}-${mode.id}`}
+                  // keyed by value as well: a mode switch has to re-seed the field
+                  defaultValue={valueIn(token, mode.id)}
+                  title={`${token.name} · ${mode.name}`}
+                  onBlur={(e) => store.setTokenValue(token.id, mode.id, e.target.value.trim())}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                  }}
+                  style={{
+                    width: modes.length > 1 ? 58 : 66,
+                    flex: 'none',
+                    border: 0,
+                    background: 'transparent',
+                    outline: 'none',
+                    color: 'var(--color-ink-muted)',
+                    textAlign: 'right',
+                  }}
+                />
+              ),
+            )}
             <button
               type="button"
               className="btn layer-eye"

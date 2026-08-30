@@ -34,9 +34,13 @@ export type VarScope =
   | 'radius'
   | 'strokeWidth'
   | 'opacity'
-  | 'typography';
+  | 'typography'
+  | 'visible';
 
 export const COLOR_SCOPES: VarScope[] = ['fill', 'stroke', 'text', 'effect'];
+/** A boolean drives one thing, so its scope list is one entry long. */
+export const BOOLEAN_SCOPES: VarScope[] = ['visible'];
+
 export const NUMBER_SCOPES: VarScope[] = [
   'size',
   'position',
@@ -58,6 +62,7 @@ export const SCOPE_LABEL: Record<VarScope, string> = {
   radius: 'Corner radius',
   strokeWidth: 'Stroke weight',
   opacity: 'Opacity',
+  visible: 'Show and hide',
   typography: 'Type size and weight',
 };
 
@@ -75,6 +80,7 @@ export const FIELD_SCOPE: Record<string, VarScope> = {
   fontWeight: 'typography',
   lineHeight: 'typography',
   letterSpacing: 'typography',
+  visible: 'visible',
 };
 
 /**

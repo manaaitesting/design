@@ -35,7 +35,7 @@ declare global {
         combineAsVariants(ids: string[]): string | null;
         swapInstance(id: string, mainId: string): string | null;
         commit(): void;
-        addToken(token: { name: string; type: string; value: string }): string;
+        addToken(token: { name: string; type: string; value: string; collection?: string }): string;
         addStyle(style: { name: string; kind: string; value: unknown }): string;
         updateStyle(id: string, patch: Record<string, unknown>): void;
         removeStyle(id: string): void;

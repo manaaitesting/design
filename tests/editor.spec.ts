@@ -1356,6 +1356,112 @@ test('an instance whose main has gone can rebuild it, and the orphans follow', a
   await removeNodes(page, [restored!, orphan, sibling]);
 });
 
+/**
+ * Boolean variables.
+ *
+ * The type existed for colours, numbers and text but not for the fourth thing
+ * Figma has one for — and the fourth is the one that drives *visibility*, which
+ * is how a design system ships a feature behind a flag.
+ */
+test('a boolean variable drives a layer\'s visibility, in both directions', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'FlagLayer', x: 40, y: 500, w: 80, h: 80, fill: '#0D99FF' });
+  const flag = await page.evaluate(() => {
+    const made = window.paperlike!.store.addToken({ name: 'promo', type: 'boolean', value: 'true' });
+    window.paperlike!.store.commit();
+    return made;
+  });
+
+  await page.evaluate(({ node, token }) => {
+    window.paperlike!.store.bindVariable([node], 'visible', token);
+    window.paperlike!.store.commit();
+  }, { node: id, token: flag });
+  expect((await doc(page))[id].visible).toBe(true);
+
+  // the flag goes off, and the layer goes with it
+  await page.evaluate((token) => {
+    window.paperlike!.store.updateToken(token, { value: 'false' });
+    window.paperlike!.store.commit();
+  }, flag);
+  await expect.poll(async () => (await doc(page))[id].visible).toBe(false);
+
+  // and back on again
+  await page.evaluate((token) => {
+    window.paperlike!.store.updateToken(token, { value: 'true' });
+    window.paperlike!.store.commit();
+  }, flag);
+  await expect.poll(async () => (await doc(page))[id].visible).toBe(true);
+
+  // detaching leaves the layer where the variable left it, and stops following
+  await page.evaluate((node) => {
+    window.paperlike!.store.bindVariable([node], 'visible', null);
+    window.paperlike!.store.commit();
+  }, id);
+  await page.evaluate((token) => {
+    window.paperlike!.store.updateToken(token, { value: 'false' });
+    window.paperlike!.store.commit();
+  }, flag);
+  await page.waitForTimeout(300);
+  expect((await doc(page))[id].visible).toBe(true);
+
+  await page.evaluate((token) => window.paperlike!.store.removeToken(token), flag);
+  await removeNodes(page, [id]);
+});
+
+test('a bound layer\'s eye is greyed, because the variable owns it', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'BoundEye', x: 40, y: 500, w: 80, h: 80, fill: '#0D99FF' });
+  await select(page, [id]);
+
+  const eye = page.locator('.fig-btn[aria-label="Hide"], .fig-btn[aria-label="Show"]').first();
+  await expect(eye).toBeEnabled();
+
+  const flag = await page.evaluate((node) => {
+    const store = window.paperlike!.store;
+    const token = store.addToken({ name: 'shown', type: 'boolean', value: 'true' });
+    store.bindVariable([node], 'visible', token);
+    store.commit();
+    return token;
+  }, id);
+
+  // toggling it by hand would be undone the next time the mode changed, so the
+  // control says so rather than letting you try
+  await expect(eye).toBeDisabled();
+  await expect(page.locator('.fig-btn[aria-label="Visibility follows shown"]')).toBeVisible();
+
+  await page.evaluate((token) => window.paperlike!.store.removeToken(token), flag);
+  await removeNodes(page, [id]);
+});
+
+test('a frame that sets a mode hides what that mode says to hide', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'ModeFrame', x: 40, y: 500, w: 200, h: 200, fill: '#FFFFFF', flex: null,
+  });
+  const { child, flag, collection, off } = await page.evaluate((parent) => {
+    const store = window.paperlike!.store;
+    const set = store.addCollection('Flags');
+    const dark = store.addMode(set, 'Off')!;
+    const token = store.addToken({ name: 'promo', type: 'boolean', value: 'true', collection: set });
+    store.setTokenValue(token, dark, 'false');
+    const rect = store.create('rect', parent, { name: 'ModeChild', x: 10, y: 10, w: 40, h: 40, fill: '#0D99FF' });
+    store.bindVariable([rect], 'visible', token);
+    store.commit();
+    return { child: rect, flag: token, collection: set, off: dark };
+  }, frame);
+
+  // the default mode says true, so the layer is on
+  expect((await doc(page))[child].visible).toBe(true);
+
+  // the frame switches mode, and the layer inside it follows — a number would
+  // have got this from the CSS cascade, but `visible` is not a var()
+  await page.evaluate(({ id, set, mode }) => {
+    window.paperlike!.store.setNodeMode(id, set, mode);
+    window.paperlike!.store.commit();
+  }, { id: frame, set: collection, mode: off });
+  await expect.poll(async () => (await doc(page))[child].visible).toBe(false);
+
+  await page.evaluate((token) => window.paperlike!.store.removeToken(token), flag);
+  await removeNodes(page, [frame]);
+});
+
 test('constraints reposition children when their frame resizes', async ({ page }) => {
   const frame = await makeNode(page, 'frame', {
     name: 'ConstraintFrame', x: 40, y: 500, w: 400, h: 200, fill: '#FFFFFF', flex: null,

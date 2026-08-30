@@ -595,7 +595,7 @@ export type StyleKind = 'paint' | 'text' | 'effect' | 'grid';
 export interface Token {
   id: string;
   name: string;
-  type: 'color' | 'number' | 'text';
+  type: 'color' | 'number' | 'text' | 'boolean';
   value: string;
   /** the collection this variable belongs to; absent means the default one */
   collection?: string;
@@ -635,6 +635,22 @@ export type NumericField =
   | 'fontWeight'
   | 'lineHeight'
   | 'letterSpacing';
+
+/**
+ * The boolean fields a boolean variable can drive.
+ *
+ * Figma has one, and it is the reason boolean variables exist: a design system
+ * ships a feature flag by binding the layers it hides to a single variable, and
+ * switching a mode turns the whole feature off in one place.
+ */
+export type BooleanField = 'visible';
+
+/** Everything a variable can be bound to, whatever its type. */
+export type BoundField = NumericField | BooleanField;
+
+export function isBooleanField(field: BoundField): field is BooleanField {
+  return field === 'visible';
+}
 
 /** The bound fields that are a property of `font` rather than of the node. */
 export const FONT_FIELDS = {
@@ -969,7 +985,7 @@ export interface SceneNode {
    * what makes the rendered CSS a `var()`, and what the store re-resolves when
    * the variable moves.
    */
-  vars?: Partial<Record<NumericField, string>>;
+  vars?: Partial<Record<BoundField, string>>;
   /**
    * Properties edited locally inside an instance. Propagation from the main
    * skips these, which is what makes an instance useful rather than a copy.

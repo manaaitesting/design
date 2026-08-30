@@ -5,17 +5,19 @@ import { FigIcon } from './ui/FigIcon';
 import { FigButton, FigMenuItem, FigPopover } from './ui/Figma';
 import { useStore, useTokens } from './Session';
 import { useUI } from '../state/ui';
-import type { NumericField, SceneNode } from '../document/types';
+import { isBooleanField, type BoundField, type SceneNode } from '../document/types';
 import { FIELD_SCOPE, inScope } from '../document/variables';
 
 /**
- * Figma's applied number variables.
+ * Figma's applied variables.
  *
  * The button used to sit inside every numeric field and do nothing. It offers
- * the document's number variables now: picking one writes its value into the
- * field and makes the rendered CSS a `var()`, so the layer moves when the
- * variable does. Only number tokens are listed — a colour cannot be a width,
- * and offering one would be the same empty gesture as before.
+ * the document's variables now: picking one writes its value into the field
+ * and, for a number, makes the rendered CSS a `var()`, so the layer moves when
+ * the variable does. Only tokens of the field's own type are listed — a colour
+ * cannot be a width, and offering one would be the same empty gesture as
+ * before. `visible` takes booleans, which is how a design system ships a
+ * feature flag: one variable, every layer that belongs to the feature.
  */
 export function VariableMenu({
   node,
@@ -23,15 +25,16 @@ export function VariableMenu({
   onClose,
 }: {
   node: SceneNode;
-  field: NumericField;
+  field: BoundField;
   onClose: () => void;
 }) {
   const store = useStore();
   // only number variables, and only those scoped to this kind of field — a
   // corner-radius token has no business being offered as an X position
   const scope = FIELD_SCOPE[field];
+  const wanted = isBooleanField(field) ? 'boolean' : 'number';
   const tokens = useTokens().filter(
-    (token) => token.type === 'number' && (!scope || inScope(token, scope)),
+    (token) => token.type === wanted && (!scope || inScope(token, scope)),
   );
   const selection = useUI((s) => s.selection);
   const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
@@ -56,11 +59,11 @@ export function VariableMenu({
           )}
           {tokens.length === 0 ? (
             <div style={{ color: 'var(--fig-dim)', padding: 6 }}>
-              No number variables scoped to this field. Create one in the Theme tab, or widen an
+              No {wanted} variables scoped to this field. Create one in the Theme tab, or widen an
               existing variable&rsquo;s scope.
             </div>
           ) : (
-            <ul role="listbox" aria-label="Number variables" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            <ul role="listbox" aria-label={`${wanted === 'boolean' ? 'Boolean' : 'Number'} variables`} style={{ margin: 0, padding: 0, listStyle: 'none' }}>
               {tokens.map((token) => (
                 <li key={token.id}>
                   <FigMenuItem
@@ -89,7 +92,7 @@ export function VariableMenu({
  */
 export function variableLabel(
   node: SceneNode,
-  field: NumericField,
+  field: BoundField,
   names: Record<string, string>,
 ): string | null {
   const id = node.vars?.[field];
