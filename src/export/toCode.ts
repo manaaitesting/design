@@ -11,6 +11,7 @@ import {
 } from '../document/css';
 import { colourMatrix, transferFunctions } from '../document/adjust';
 import { effectLayers, effectsOf } from '../document/effects';
+import { motionCss, timelinesIn } from '../document/motion';
 import { booleanClips, paintsWithPath } from '../document/geometry';
 import { booleanOutlinePath } from '../document/boolean';
 import { maskStyles } from '../document/mask';
@@ -321,7 +322,9 @@ function shapeMarkup(
     // rather than the star's bounding box — the same nesting the canvas uses
     if (paint.shader) used.add(paint.shader.id);
     const inner = paint.shader ? shaderMarkup(paint.shader, mode) : '';
-    out.push(`${pad}  <div ${styleAttr(paint.fill, mode)}>${inner}</div>`);
+    // the same `data-paint` handle the canvas puts here, so a fill track on a
+    // shape animates in the export as well
+    out.push(`${pad}  <div data-paint="${node.id}" ${styleAttr(paint.fill, mode)}>${inner}</div>`);
   }
   if (paint.stroke && paint.band) {
     // a variable-width stroke is the band it sweeps, not a stroked line — the
@@ -591,6 +594,19 @@ export function toReact(
   // else's page, which may not do that — without this every padded frame comes
   // out wider than it was designed.
   rules.unshift(BORDER_BOX(slug(doc[rootId]?.name ?? 'component', rootId)));
+
+  // Every timeline in the subtree, as the same `@keyframes` the canvas was
+  // animating with — the root's own and any board nested inside it. They need
+  // no runtime: an exported component animates because the stylesheet says so,
+  // which is the whole reason the timeline compiles to CSS rather than to a
+  // frame loop.
+  for (const timeline of timelinesIn(doc, rootId)) {
+    const animation = motionCss(timeline, doc, {
+      selector: (id) => `.${slug(doc[id]?.name ?? 'layer', id)}`,
+      playing: true,
+    });
+    if (animation) rules.push(animation);
+  }
 
   const shaderRuntime = usedShaders.size ? emitShaderRuntime([...usedShaders]) : '';
   // a web face the design uses has to come with it, or the export renders in a
@@ -887,10 +903,16 @@ export function toHtml(
   const varNames = namesOf(tokens);
   const baseModes = defaultModes(collections);
   const usedShaders = new Set<string>();
+  // An HTML export styles every layer inline, and an inline style has nothing
+  // for a keyframe rule to hang off — so the layers a timeline drives are the
+  // only ones that carry a handle, and the animation names them by it.
+  const timelines = timelinesIn(doc, rootId);
+  const animated = new Set(timelines.flatMap((spec) => spec.tracks.map((track) => track.node)));
   const walk = (id: string, depth: number, extra?: CSSProperties): string => {
     const node = doc[id];
     if (!node || !node.visible) return '';
     const pad = '  '.repeat(depth + 2);
+    const mark = animated.has(id) ? `data-motion="${id}" ` : '';
     const style = {
       ...nodeStyle(node, doc, varNames),
       ...extra,
@@ -919,28 +941,28 @@ export function toHtml(
         return `${pad}<div ${inline}>\n${[svg, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
       }
       const text = linked(node, textMarkup(node, (value) => value, htmlStyle), 'html');
-      if (!overlays) return `${pad}<div ${inline}>${text}</div>`;
-      return `${pad}<div ${inline}>\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
+      if (!overlays) return `${pad}<div ${mark}${inline}>${text}</div>`;
+      return `${pad}<div ${mark}${inline}>\n${pad}  ${text}\n${overlays}\n${pad}</div>`;
     }
     if (node.type === 'shader' && node.shader) {
       usedShaders.add(node.shader.id);
       const surface = `${pad}  ${shaderMarkup(node.shader, 'html')}`;
-      return `${pad}<div ${inline}>\n${[surface, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      return `${pad}<div ${mark}${inline}>\n${[surface, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (paintsWithPath(node)) {
       const shape = shapeMarkup(node, pad, 'html', usedShaders);
-      return `${pad}<div ${inline}>\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      return `${pad}<div ${mark}${inline}>\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     if (node.type === 'boolean') {
       const shape = booleanMarkup(node, doc, pad, 'html', usedShaders);
-      return `${pad}<div ${inline}>\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
+      return `${pad}<div ${mark}${inline}>\n${[shape, overlays].filter(Boolean).join('\n')}\n${pad}</div>`;
     }
     // a shader fill sits at the bottom of the stack, under the image paints
     const surface = surfaceMarkup(node, pad, 'html', usedShaders);
     const paints = paintMarkup(node, pad, 'html');
     if (node.children.length === 0) {
       const inner = [surface, paints, overlays].filter(Boolean).join('\n');
-      return `${pad}<div ${inline}>${inner ? `\n${inner}\n${pad}` : ''}</div>`;
+      return `${pad}<div ${mark}${inline}>${inner ? `\n${inner}\n${pad}` : ''}</div>`;
     }
     const children = [
       surface,
@@ -953,7 +975,7 @@ export function toHtml(
     ]
       .filter(Boolean)
       .join('\n');
-    return `${pad}<div ${inline}>\n${children}\n${pad}</div>`;
+    return `${pad}<div ${mark}${inline}>\n${children}\n${pad}</div>`;
   };
 
   const body = walk(rootId, 0);
@@ -973,6 +995,11 @@ export function toHtml(
     families.some((family) => family?.includes(`"${font.name}"`)),
   );
   const faceCss = faces.length ? `\n    <style>${fontFaceCss(faces)}</style>` : '';
+  const animation = timelines
+    .map((spec) => motionCss(spec, doc, { selector: (id) => `[data-motion="${id}"]`, playing: true }))
+    .filter(Boolean)
+    .join('\n\n');
+  const motionStyle = animation ? `\n    <style>\n${animation}\n    </style>` : '';
   // The GLSL travels with the page. A shader has no static equivalent, so the
   // alternative was a comment where the surface should be — this emits the same
   // programs the canvas ran, driven by one shared frame loop.
@@ -981,7 +1008,7 @@ export function toHtml(
   return `<!doctype html>
 <html>
   <head>
-    <style>*, *::before, *::after { box-sizing: border-box }</style>${links}${faceCss}${style}
+    <style>*, *::before, *::after { box-sizing: border-box }</style>${links}${faceCss}${style}${motionStyle}
   </head>
   <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#EEEEEE">
 ${body}${runtime}

@@ -396,6 +396,72 @@ export interface Interaction {
 }
 
 /**
+ * Motion.
+ *
+ * A frame carries a timeline: a duration, and a list of tracks saying how one
+ * property of one layer changes over it. That is Figma Motion's model, and it
+ * is deliberately a different thing from the transitions above — a transition
+ * animates the step *between* two frames, a timeline animates what happens
+ * *inside* one.
+ *
+ * Every property here is one CSS can interpolate, because that is what the
+ * timeline compiles to: `src/document/motion.ts` turns these tracks into real
+ * `@keyframes`, the browser does the interpolation, and the export carries the
+ * same rules out with no runtime behind them.
+ */
+export type MotionProperty =
+  | 'x'
+  | 'y'
+  | 'w'
+  | 'h'
+  | 'rotation'
+  | 'opacity'
+  | 'radius'
+  | 'fill'
+  /** the stroke's weight and its colour, which are two tracks and not one */
+  | 'strokeWidth'
+  | 'strokeColor'
+  /** layer blur, wherever this layer keeps it — an effect, or the older field */
+  | 'blur';
+
+/**
+ * One value a property is pinned to at one moment.
+ *
+ * `easing` is how the curve *leaves* this key toward the next one, which is
+ * where CSS puts a per-keyframe timing function too — so the field means the
+ * same thing in the model and in the compiled animation.
+ */
+export interface Keyframe {
+  id: string;
+  /** ms from the start of the timeline */
+  at: number;
+  /** a number for every property but `fill`, which holds a colour */
+  value: number | string;
+  easing: Easing;
+  /** control points, when the easing is a custom bezier */
+  bezier?: [number, number, number, number];
+  /** parameters, when the easing is a custom spring */
+  spring?: SpringSpec;
+}
+
+/** One layer's one property, over the whole timeline. */
+export interface MotionTrack {
+  id: string;
+  /** the layer this drives */
+  node: string;
+  property: MotionProperty;
+  /** in time order — the store keeps them sorted */
+  keys: Keyframe[];
+}
+
+export interface MotionSpec {
+  /** ms */
+  duration: number;
+  loop: boolean;
+  tracks: MotionTrack[];
+}
+
+/**
  * How a set of columns or rows sits in its frame — Figma's grid Type.
  *
  * `stretch` fills the frame and honours the margin; the other three pin a run
@@ -941,6 +1007,16 @@ export interface SceneNode {
    * artboard, and where Present begins.
    */
   flowStart?: string | null;
+
+  /**
+   * The timeline this frame plays — Figma Motion's, kept on the board it
+   * animates rather than on the page, because a timeline is about one screen.
+   *
+   * It is stored whole, the way `interactions` and `effects` are: a keyframe
+   * is small, and a list that is replaced as a unit merges the same way the
+   * rest of the document's lists do.
+   */
+  motion?: MotionSpec | null;
 
   /**
    * Prototype settings, carried by the page.

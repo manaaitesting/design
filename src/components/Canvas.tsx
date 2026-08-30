@@ -21,6 +21,7 @@ import { FollowLayer } from './Follow';
 import { Measure } from './Measure';
 import { Rulers } from './Rulers';
 import { VectorEdit } from './VectorEdit';
+import { CanvasMotion } from './MotionStyle';
 import { useDoc, useSession, useStore, useTokenVars } from './Session';
 import type { DocStore } from '../document/store';
 import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
@@ -324,10 +325,19 @@ export function Canvas() {
       // — but only once the guard above has ruled out everything it belongs to.
       e.preventDefault();
       if (e.repeat) return;
-      // A draw in progress owns Space: there it moves the shape being drawn,
-      // and lighting the hand tool underneath it would say the wrong thing.
+      // A draw in progress owns Space before anything else: there it moves the
+      // shape being drawn, and lighting the hand tool — or starting playback —
+      // underneath it would say the wrong thing.
       if (drawing.current) return;
-      useUI.getState().setSpacePan(true);
+      // Otherwise, while a timeline is open Space is the transport — Figma's
+      // binding, and the one your hands expect the moment there is something to
+      // play. The hand tool is still on H, and a middle-drag still pans.
+      const ui = useUI.getState();
+      if (ui.motion.frame) {
+        ui.setMotionPlaying(!ui.motion.playing);
+        return;
+      }
+      ui.setSpacePan(true);
     };
     const up = (e: KeyboardEvent) => {
       if (e.code === 'Space') useUI.getState().setSpacePan(false);
@@ -1156,6 +1166,11 @@ export function Canvas() {
         setContextMenu({ x: e.clientX, y: e.clientY, stack });
       }}
     >
+      {/* The open timeline, as an animation on the layers it drives. The canvas
+          renders the document unchanged — what the playhead shows is the
+          browser interpolating between these keyframes, and moving it does not
+          re-render anything here. */}
+      <CanvasMotion />
       <div
         style={{
           position: 'absolute',

@@ -118,6 +118,59 @@ export function easingCss(spec: {
   return CURVES[spec.easing] ?? 'ease';
 }
 
+/**
+ * The named curves as control points.
+ *
+ * `easingCss` can hand the browser a keyword — `ease-in` and its two
+ * neighbours are keywords in CSS — but a sampler needs the numbers, so the
+ * beziers the spec defines those keywords as are written out here beside the
+ * three "back" curves, which were always beziers. `linear` needs no entry and
+ * `custom-bezier` brings its own.
+ */
+const CURVE_POINTS: Record<string, [number, number, number, number]> = {
+  'ease-in': [0.42, 0, 1, 1],
+  'ease-out': [0, 0, 0.58, 1],
+  'ease-in-out': [0.42, 0, 0.58, 1],
+  'ease-in-back': [0.36, 0, 0.66, -0.56],
+  'ease-out-back': [0.34, 1.56, 0.64, 1],
+  'ease-in-out-back': [0.68, -0.6, 0.32, 1.6],
+};
+
+/** y of a cubic bezier at x, by bisection — enough for a readout or a test. */
+function bezierAt([x1, y1, x2, y2]: [number, number, number, number], x: number): number {
+  const curve = (t: number, a: number, b: number) =>
+    3 * (1 - t) * (1 - t) * t * a + 3 * (1 - t) * t * t * b + t * t * t;
+  let low = 0;
+  let high = 1;
+  for (let i = 0; i < 24; i++) {
+    const mid = (low + high) / 2;
+    if (curve(mid, x1, x2) < x) low = mid;
+    else high = mid;
+  }
+  return curve((low + high) / 2, y1, y2);
+}
+
+/**
+ * How far along a transition is, as a fraction, when a fraction of its time has
+ * passed.
+ *
+ * The canvas never calls this — there the browser interpolates, which is the
+ * point of compiling to CSS. It is what lets the *model* be asked the same
+ * question: what does this timeline read at 350ms, with no DOM in the room.
+ */
+export function easeAt(
+  spec: { easing: Easing; duration: number; bezier?: [number, number, number, number]; spring?: SpringSpec },
+  progress: number,
+): number {
+  const t = Math.min(1, Math.max(0, progress));
+  const spring = springOf(spec);
+  if (spring) return springAt(spring, (t * Math.max(spec.duration, 1)) / 1000);
+  if (spec.easing === 'linear') return t;
+  if (spec.easing === 'custom-bezier') return bezierAt(spec.bezier ?? DEFAULT_BEZIER, t);
+  const points = CURVE_POINTS[spec.easing];
+  return points ? bezierAt(points, t) : t;
+}
+
 /** A fresh interaction — Figma's default is a click that goes nowhere yet. */
 export function newInteraction(patch: Partial<Interaction> = {}): Interaction {
   return {

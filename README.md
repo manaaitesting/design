@@ -612,6 +612,103 @@ a click while presenting follows it.
 `⇧⌘⏎` plays it. Present renders the same `NodeView` tree the canvas draws, so
 there is no second renderer to drift.
 
+## Motion
+
+A transition animates the step *between* two frames. A **timeline** animates
+what happens *inside* one — Figma Motion's model, and a separate thing from
+prototyping, which is why it lives on the frame rather than on an interaction.
+`⇧M` opens it on the board the selection is on; the Prototype tab's Motion
+section is where you find out a frame has one.
+
+A track drives one property of one layer — X, Y, width, height, rotation,
+opacity, corner radius, fill, stroke weight, stroke colour or blur — and a
+keyframe pins that property to a value at a moment, carrying its own easing.
+The menu is the prototype panel's thirteen: eleven named curves and springs,
+each drawn by the same sampler that interpolates it, and two custom ones whose
+numbers the panel opens an editor for — a bezier with handles you drag, or a
+spring's stiffness, damping and mass.
+
+The list ends where CSS does. Every one of those is something `nodeStyle`
+already writes and the browser already interpolates, and the panel greys out
+the ones a particular layer cannot honour rather than animating nothing: a
+gradient fill (CSS has no interpolation between two gradients), a stroke on a
+shape (an SVG attribute rather than CSS), a blur on a layer whose effects list
+has no blur in it to drive.
+
+**The timeline compiles to CSS.** Nothing in `src/document/motion.ts`
+interpolates anything on the canvas: it emits one `@keyframes` per track and one
+rule per layer, and the browser does the rest. That single decision is what
+makes the rest fall out —
+
+- **Scrubbing is a negative `animation-delay` on a paused animation.** The
+  playhead is one number in one declaration, so dragging it re-renders the
+  `<style>` element that carries it and the panel that drew it — and nothing on
+  the board. The layers move because the browser moved them.
+- **Playing is the same stylesheet, unpaused.** The panel's own playhead is
+  walked along by a frame loop that writes to two elements; the design is not
+  re-rendered while it runs, because rewriting the stylesheet is exactly what
+  would restart what it is following.
+- **The export animates.** `toReact` emits the same keyframes against the
+  classes it already gives each layer, and `toHtml` marks the animated ones with
+  `data-motion` and names them in the head. An exported component animates with
+  no runtime behind it, in the same way its layout is the layout and not a
+  picture of one.
+- **A frame with a timeline plays it in Present**, from the top, every time you
+  arrive at it.
+
+One animation per *track* rather than per layer, because a keyframe's easing
+belongs to that keyframe: CSS puts `animation-timing-function` inside a keyframe
+block, where it governs the segment starting there, and two properties keyed at
+the same moment with different curves cannot share a block.
+
+The exception is tracks that land on the same CSS. A stroke's weight and its
+colour are two tracks and one `box-shadow`, and two animations naming one
+property do not combine — the last one named simply wins, and the other track
+would silently do nothing. Those compile into a single animation whose every
+stop carries both, built by asking `nodeStyle` what the layer looks like with
+both values written onto it. A shape's colour has the opposite problem: a star
+paints through a clipped layer *inside* its box, so a fill track there animates
+that layer, which both the canvas and the export mark with `data-paint`.
+
+The one place the compiler has to argue with CSS is the ends. A property named
+only in the middle of an animation is not held outside those keyframes — the
+browser synthesises the missing 0% and 100% from the element's own style and
+would tween the layer's design value into the first key. A timeline holds the
+first and last key instead, so those two stops are written out. `sampleAt` says
+the same thing without a browser in the room, and the suite asserts the two
+against each other rather than trusting either.
+
+**Editing is recording.** While the timeline is open, an ordinary property edit
+— a drag on the canvas, a field in the inspector, an arrow-key nudge — writes a
+keyframe at the playhead as well as to the layer, so the two agree at the moment
+you are looking at. That works without a single motion-aware line in the canvas
+or the panels: `DocStore` takes a `recorder` the editor installs, and every edit
+already funnels through `update`. The red Record button disarms it.
+
+A keyframe drags along its lane and snaps to the ends, to the playhead and to
+every other key on the timeline — ⌥ to drop it anywhere, and a key dropped onto
+another replaces it. Double-clicking a lane adds a key holding what the track
+already read there, so adding one changes nothing until you move it.
+
+⇧ or ⌘ adds a key to the selection and a drag across empty lane space bands
+them; dragging any one of a selection moves all of them together. ⌫ removes
+them, and the last key of a track takes the track with it. ⌘C and ⌘V copy the
+selection and put it down at the playhead, keeping the spacing between the keys
+— onto the tracks they came from, so a bounce copied from one layer is a bounce
+when it lands. While the panel holds a selection the editor's own ⌫ and
+clipboard stand back, because copying a keyframe and copying the layer it sits
+on are different things and only one of them was asked for.
+
+The lanes fit the whole duration by default and zoom to sixteen times that —
+the buttons in the transport, or ⌘ with the wheel, which holds the moment under
+the pointer still while the timeline stretches under it. Zoomed in the lanes
+scroll, and the playhead pulls them along as it plays.
+
+Agents get all of it: `edit_design` carries `set_motion`, `set_keyframe` and
+`clear_motion`, and `get_motion_context` reports a frame's tracks and keyframes
+beside the CSS they compile to.
+
+
 ## Keyboard
 
 | | | | |
@@ -634,6 +731,7 @@ there is no second renderer to drift.
 | `I` Copy colors | `⌥L` Collapse layers | `⇧G` Layout guides | `⌥⇧O` Outlines |
 | `⇧'` Pixel grid | `⇧⌘'` Snap to pixel | `⇧C` Comments | `⇧Y` Annotations |
 | `⌃⇧P` Pixel preview | `⌘\` Show/hide UI | `⇧E` Measure | `⌥⌘\` Cursors |
+| `⇧M` Timeline | `Space` Play (timeline open) | | |
 
 Arrows nudge 1px, `⇧`+arrows nudge 10px. `⌘`-scroll zooms at the cursor;
 plain scroll pans.
@@ -652,6 +750,7 @@ plain scroll pans.
 | `src/document/mask.ts` | which layers a mask shapes, and how |
 | `src/document/variables.ts` | collections, modes, aliases → custom properties |
 | `src/document/selection.ts` | Figma's selection rules, in one place |
+| `src/document/motion.ts` | the timeline: its model, its sampler, and the `@keyframes` it compiles to |
 | `src/webgl/glsl.ts` | the shared prelude: value, simplex, Perlin and cellular noise |
 | `src/webgl/shaders.ts` | GLSL catalogue + typed params |
 | `src/export/tailwind.ts` | the React export, rewritten as utility classes |
@@ -667,6 +766,8 @@ plain scroll pans.
 | `src/components/Inspect.tsx` | the handoff panel |
 | `src/components/Palette.tsx` | quick actions |
 | `src/components/TextEditor.tsx` | in-place editing, styled per range |
+| `src/components/Timeline.tsx` | the motion panel: playhead, tracks, keyframes, recording |
+| `src/components/MotionStyle.tsx` | a frame's timeline as a live stylesheet |
 | `src/components/Follow.tsx` | observation mode and spotlight |
 | `src/components/FontPicker.tsx` | the searchable font menu, and its previews |
 | `src/components/TypeSettings.tsx` | Basics / Details / Variable type settings |

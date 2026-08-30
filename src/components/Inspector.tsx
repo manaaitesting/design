@@ -127,6 +127,7 @@ import {
   shortTrigger,
   triggerLabel,
 } from '../document/prototype';
+import { motionOf } from '../document/motion';
 
 type Setter = (patch: Partial<SceneNode>) => void;
 
@@ -979,6 +980,8 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
             </FigSection>
           )}
 
+          {isFrame && <MotionSection node={node} />}
+
           <FigSection
             title="Interactions"
             empty={interactions.length === 0}
@@ -1024,6 +1027,51 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Motion — that this frame has a timeline, and how to get at it.
+ *
+ * The timeline itself lives at the foot of the canvas, where a timeline
+ * belongs; this is the panel saying that the frame has one, what is on it, and
+ * ⇧M. A frame with no motion shows an empty section with a +, exactly as it
+ * does for a stroke it has not been given yet.
+ */
+function MotionSection({ node }: { node: SceneNode }) {
+  const store = useStore();
+  const present = useUI((s) => s.present);
+  const open = useUI((s) => s.motion.frame === node.id);
+  const spec = motionOf(node);
+  const keys = spec?.tracks.reduce((total, track) => total + track.keys.length, 0) ?? 0;
+  const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+  return (
+    <FigSection
+      title="Motion"
+      empty={!spec}
+      onAdd={() => {
+        store.ensureMotion(node.id);
+        useUI.getState().openMotion(node.id);
+      }}
+      onRemove={() => {
+        store.clearMotion(node.id);
+        if (open) useUI.getState().openMotion(null);
+      }}
+    >
+      <div className="fig-row">
+        <FigButton
+          style={{ flex: 1, justifyContent: 'flex-start' }}
+          title={open ? 'Close the timeline (⇧M)' : 'Open the timeline (⇧M)'}
+          onClick={() => useUI.getState().openMotion(open ? null : node.id)}
+        >
+          {spec ? `${count(spec.tracks.length, 'track')}, ${count(keys, 'keyframe')}` : 'Timeline'}
+        </FigButton>
+        <FigButton title="Play this frame" onClick={() => present(node.id)}>
+          <Icon.Play />
+        </FigButton>
+      </div>
+    </FigSection>
   );
 }
 

@@ -17,12 +17,33 @@ declare global {
         create(type: string, parent: string, props?: Partial<SceneNode>): string;
         update(id: string, patch: Partial<SceneNode>): void;
         remove(ids: string[]): void;
+        duplicate(ids: string[], offset?: number): string[];
         serialize(ids: string[]): string;
         paste(payload: string, parent: string, offset?: { x: number; y: number }): string[];
         createComponent(id: string): boolean;
         addInteraction(id: string, patch?: Record<string, unknown>): string | null;
         updateInteraction(id: string, interactionId: string, patch: Record<string, unknown>): void;
         setFlowStart(id: string, name: string | null): void;
+        ensureMotion(frame: string, patch?: Record<string, unknown>): unknown;
+        setMotion(frame: string, patch: Record<string, unknown>): void;
+        clearMotion(frame: string): void;
+        setKeyframe(
+          frame: string,
+          node: string,
+          property: string,
+          at: number,
+          value: number | string,
+          patch?: Record<string, unknown>,
+        ): string | null;
+        updateKeyframe(frame: string, trackId: string, keyId: string, patch: Record<string, unknown>): void;
+        updateKeyframes(frame: string, refs: { track: string; key: string }[], patch: Record<string, unknown>): void;
+        removeKeyframe(frame: string, trackId: string, keyId: string): void;
+        removeKeyframes(frame: string, refs: { track: string; key: string }[]): void;
+        addKeyframes(
+          frame: string,
+          entries: { node: string; property: string; at: number; key: Record<string, unknown> }[],
+        ): { track: string; key: string }[];
+        removeTrack(frame: string, trackId: string): void;
         createInstance(main: string, parent: string, at?: { x: number; y: number }): string | null;
         detachInstance(id: string): void;
         attachToPath(textId: string, sourceId: string): boolean;

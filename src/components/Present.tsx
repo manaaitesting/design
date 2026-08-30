@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NodeView, SwapContext } from './NodeView';
 import { Icon } from './ui/Icons';
+import { MotionStyle } from './MotionStyle';
 import { useCollections, useDoc, useTokenVars, useTokens, useVarNames } from './Session';
 import {
   DEFAULT_COLLECTION_ID,
@@ -650,6 +651,17 @@ export function Present() {
             spec={move?.transition}
             role="incoming"
             reverse={move?.reverse ?? false}
+          />
+
+          {/* A frame with a timeline plays it on arrival, from the top. Keyed
+              on the frame so walking back to a screen replays it rather than
+              finding it already over. */}
+          <MotionStyle
+            key={`motion-${frame.id}`}
+            frame={frame.id}
+            scope=".fig-present-screen"
+            at={0}
+            playing
           />
 
           {overlays.map((entry, index) => {

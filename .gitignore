@@ -10,3 +10,6 @@ test-results/
 playwright-report/
 .vercel
 .env*
+
+# generated design canvas bundle
+paperlike-editor.html

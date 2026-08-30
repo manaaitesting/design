@@ -1,0 +1,196 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font-family: -apple-system, system-ui, "Inter", sans-serif; font-size: 12px; color: rgba(0, 0, 0, 0.8); -webkit-font-smoothing: antialiased; }
+    a { color: #0a7ad4; } a:hover { color: #0d99ff; }
+
+    .sheet { width: 900px; height: 760px; background: #fff; padding: 32px 36px; box-sizing: border-box; display: flex; flex-direction: column; gap: 26px; }
+    .kicker { font-size: 10px; font-weight: 550; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(0, 0, 0, 0.425); }
+    .head-row { display: flex; align-items: baseline; gap: 12px; }
+    .rule { height: 1px; background: #e2e2e2; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+    .swatch { height: 44px; border-radius: 6px; border: 1px solid rgba(0, 0, 0, 0.08); }
+    .name { margin-top: 6px; font-size: 11px; font-weight: 550; }
+    .hex { font-size: 10px; color: rgba(0, 0, 0, 0.425); font-variant-numeric: tabular-nums; }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .note { font-size: 11px; color: rgba(0, 0, 0, 0.5); line-height: 1.6; }
+
+    /* the controls, at the app's own measurements */
+    .control { height: 24px; border-radius: 5px; background: #f9f9f9; box-shadow: inset 0 1px 0 rgba(255,255,255,0.533), inset 0 0 1px 1px rgba(255,255,255,0.533), 0 0.5px 1px rgba(0,0,0,0.067), 0 0 1px rgba(0,0,0,0.133), 0 0 4px -1px rgba(0,0,0,0.133); display: flex; align-items: center; padding: 0 8px; font-weight: 500; color: rgba(0,0,0,0.6); }
+    .fig-input { height: 24px; border-radius: 5px; background: #f5f5f5; display: flex; align-items: center; font-size: 11px; }
+    .fig-gutter { width: 24px; display: flex; align-items: center; justify-content: center; color: rgba(0,0,0,0.3); }
+    .fig-tab { height: 24px; padding: 0 10px; border-radius: 5px; font-size: 11px; font-weight: 550; color: rgba(0,0,0,0.5); display: inline-flex; align-items: center; }
+    .fig-tab[data-on='true'] { background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.898); }
+    .tool { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: rgba(0,0,0,0.8); }
+    .tool[data-on='true'] { background: #f9f9f9; box-shadow: inset 0 1px 0 rgba(255,255,255,0.533), inset 0 0 1px 1px rgba(255,255,255,0.533), 0 0.5px 1px rgba(0,0,0,0.067), 0 0 1px rgba(0,0,0,0.133), 0 0 4px -1px rgba(0,0,0,0.133); }
+    .layer-row { height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 12px; }
+    .layer-row[data-on='true'] { background: #e0e0e0; }
+    .dark { background: #1e1e1e; border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+    .mo-chip { height: 22px; padding: 0 8px; border-radius: 6px; background: rgb(255 255 255 / 0.08); color: rgb(255 255 255 / 0.75); font-size: 11px; display: inline-flex; align-items: center; }
+    .mo-chip[data-on='true'] { background: #0d99ff; color: #fff; }
+    .mo-key { width: 9px; height: 9px; border: 1px solid rgb(0 0 0 / 0.4); background: #fff; transform: rotate(45deg); }
+    .mo-key[data-on='true'] { background: #0d99ff; border-color: #fff; }
+  </style>
+</helmet>
+
+<div class="sheet">
+
+  <div>
+    <div class="head-row">
+      <div style="font-size: 20px; font-weight: 600; letter-spacing: -0.01em">Paperlike</div>
+      <div class="note">the vocabulary new screens extend — lifted from <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px">app/globals.css</span></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="kicker">Surfaces</div>
+    <div class="grid-4" style="margin-top: 10px">
+      <div>
+        <div class="swatch" style="background: #f5f5f5"></div>
+        <div class="name">Canvas</div><div class="hex">#F5F5F5</div>
+      </div>
+      <div>
+        <div class="swatch" style="background: #f2f2f2"></div>
+        <div class="name">Panel</div><div class="hex">#F2F2F2</div>
+      </div>
+      <div>
+        <div class="swatch" style="background: #f9f9f9"></div>
+        <div class="name">Control</div><div class="hex">#F9F9F9</div>
+      </div>
+      <div>
+        <div class="swatch" style="background: #e0e0e0"></div>
+        <div class="name">Row active</div><div class="hex">#E0E0E0</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="kicker">Ink and accent</div>
+    <div class="grid-4" style="margin-top: 10px">
+      <div>
+        <div class="swatch" style="background: rgba(0,0,0,0.8)"></div>
+        <div class="name">Ink</div><div class="hex">rgba(0 0 0 / .8)</div>
+      </div>
+      <div>
+        <div class="swatch" style="background: rgba(0,0,0,0.425)"></div>
+        <div class="name">Ink dim</div><div class="hex">rgba(0 0 0 / .425)</div>
+      </div>
+      <div>
+        <div class="swatch" style="background: #0d99ff"></div>
+        <div class="name">Select</div><div class="hex">#0D99FF</div>
+      </div>
+      <div>
+        <div class="swatch" style="background: #0a7ad4"></div>
+        <div class="name">Select line</div><div class="hex">#0A7AD4</div>
+      </div>
+    </div>
+    <div class="note" style="margin-top: 8px">Selection chrome sits on artwork, so it runs a shade darker than the accent controls use — 1.5px of #0D99FF disappears against light fills.</div>
+  </div>
+
+  <div class="grid-3">
+    <div>
+      <div class="kicker">Type</div>
+      <div class="stack" style="margin-top: 10px">
+        <div>
+          <div style="font-size: 12px; font-weight: 400">Body — 12 / 400</div>
+          <div class="hex">panels, layers, canvas chrome</div>
+        </div>
+        <div>
+          <div style="font-size: 11px; font-weight: 550">Section header — 11 / 550</div>
+          <div class="hex">dims to 50% when empty</div>
+        </div>
+        <div>
+          <div style="font-size: 9px; font-weight: 500; line-height: 16px; color: rgba(0,0,0,0.5)">SUB-LABEL — 9 / 500</div>
+          <div class="hex">above every field group</div>
+        </div>
+        <div>
+          <div style="font-size: 11px; font-variant-numeric: tabular-nums">0:01.40 — tabular</div>
+          <div class="hex">every number that changes</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="kicker">Controls · 24px</div>
+      <div class="stack" style="margin-top: 10px">
+        <div class="control" style="width: 120px">Auto layout</div>
+        <div class="fig-input" style="width: 120px"><span class="fig-gutter">W</span>200</div>
+        <div class="fig-input" style="width: 120px">
+          <span style="width: 16px; height: 16px; margin-left: 4px; border: 1px solid rgba(0,0,0,0.1); border-radius: 3px; background: #4cc3f0"></span>
+          <span style="margin-left: 8px">4CC3F0</span>
+        </div>
+        <div class="row" style="gap: 2px">
+          <span class="fig-tab" data-on="true">Design</span>
+          <span class="fig-tab">Prototype</span>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="kicker">Rows and tools · 28px</div>
+      <div class="stack" style="margin-top: 10px">
+        <div class="row" style="gap: 0">
+          <span class="tool" data-on="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.875" stroke-linejoin="round"><path d="M4.8 3.6l15.8 4.9c.9.3 1 1.4.2 1.8l-6.7 3.4c-.2.1-.3.2-.4.4l-3.4 6.7c-.4.8-1.5.7-1.8-.2L3.6 4.8c-.2-.8.4-1.4 1.2-1.2z"/></svg>
+          </span>
+          <span class="tool">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M5.5 2v12M10.5 2v12M2 5.5h12M2 10.5h12"/></svg>
+          </span>
+          <span class="tool">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/></svg>
+          </span>
+          <span class="tool">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"><path d="M3.5 4.5v-1h9v1M8 3.5v9M6 12.5h4"/></svg>
+          </span>
+        </div>
+        <div style="width: 180px; background: #f2f2f2; border-radius: 6px; overflow: hidden">
+          <div class="layer-row" data-on="true">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" style="color: rgba(0,0,0,0.425)"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/></svg>
+            Card
+          </div>
+          <div class="layer-row">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" style="color: rgba(0,0,0,0.425)"><path d="M3.5 4.5v-1h9v1M8 3.5v9M6 12.5h4"/></svg>
+            Motion
+          </div>
+        </div>
+        <div class="note">Icons: 16px box, 1.25 stroke, round caps.</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="kicker">Timeline chrome</div>
+    <div class="row" style="margin-top: 10px; gap: 16px">
+      <div class="dark">
+        <span class="mo-chip" data-on="true">X</span>
+        <span class="mo-chip">Opacity</span>
+        <span class="mo-chip">Stroke</span>
+        <span style="width: 1px; height: 18px; background: rgb(255 255 255 / 0.12)"></span>
+        <span class="mo-key" data-on="true"></span>
+        <span class="mo-key" style="margin-left: 6px"></span>
+        <span style="width: 1px; height: 18px; background: rgb(255 255 255 / 0.12)"></span>
+        <span style="width: 2px; height: 18px; background: #ff5c5c; border-radius: 1px"></span>
+        <span style="color: rgb(255 255 255 / 0.6); font-size: 11px">playhead</span>
+      </div>
+      <div class="note" style="flex: 1">A mode you are in, not a panel you always have — dark chrome, like the vector bar. <span style="font-variant-numeric: tabular-nums">#1E1E1E</span> at 12px radius, 26px buttons, 22px chips, 24px lanes.</div>
+    </div>
+  </div>
+
+  <div style="margin-top: auto">
+    <div class="rule"></div>
+    <div class="note" style="margin-top: 12px">The signature control shadow is a white top highlight over a soft ambient drop — <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px">--shadow-control</span>, five layers. It is what makes a 24px field read as a raised control rather than a filled rectangle.</div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

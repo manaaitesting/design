@@ -52,6 +52,15 @@ export const SIZE_BADGE: React.CSSProperties = {
 export function useRects(ids: string[], containerRef: RefObject<HTMLDivElement | null>): Record<string, Rect> {
   const doc = useDoc();
   const viewport = useUI((s) => s.viewport);
+  /**
+   * The timeline that is open, and where its playhead is.
+   *
+   * A scrub moves layers by animating them: no document changes and no
+   * viewport does, so chrome that measures the DOM would go on drawing itself
+   * where the layer used to be. Opening and closing the panel move them too —
+   * which is why this is the frame *and* the playhead, not the playhead alone.
+   */
+  const at = useUI((s) => (s.motion.frame ? `${s.motion.frame}:${s.motion.at}` : ''));
   const [rects, setRects] = useState<Record<string, Rect>>({});
   const key = ids.join(',');
 
@@ -67,9 +76,10 @@ export function useRects(ids: string[], containerRef: RefObject<HTMLDivElement |
       next[id] = { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height };
     }
     setRects(next);
-    // `key` stands in for `ids`; doc and viewport re-measure on any change
+    // `key` stands in for `ids`; doc, viewport and the playhead re-measure on
+    // any change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, doc, viewport, containerRef]);
+  }, [key, doc, viewport, at, containerRef]);
 
   return rects;
 }
@@ -111,6 +121,10 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const pageId = useUI((s) => s.page);
   const select = useUI((s) => s.select);
   const setGuides = useUI((s) => s.setGuides);
+  // A timeline that is running is a preview, and chrome does not belong on a
+  // preview: the handles would chase a layer they cannot keep up with, since
+  // the animation runs on the compositor and the overlay measures on render.
+  const previewing = useUI((s) => s.motion.playing);
   const presence = usePresence();
 
   const remoteIds = presence.flatMap((p) => p.selection);
@@ -512,7 +526,15 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   };
 
   return (
-    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }}>
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        pointerEvents: 'none',
+        zIndex: 10,
+        visibility: previewing ? 'hidden' : undefined,
+      }}
+    >
       {/* someone else's selection */}
       {presence.map((p) =>
         p.selection.map((id) => {
