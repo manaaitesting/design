@@ -7,6 +7,7 @@ import {
   shaderSurface,
   shapePaint,
   styleToCss,
+  withAlpha,
   type ShapeStroke,
 } from '../document/css';
 import { colourMatrix, transferFunctions } from '../document/adjust';
@@ -390,7 +391,7 @@ function booleanMarkup(
   }
 
   const border = node.border;
-  if (!border || border.width <= 0) return `${pad}  ${body}`;
+  if (!border || border.visible === false || border.width <= 0) return `${pad}  ${body}`;
 
   // the same outline the canvas strokes — computed once by the kernel, so the
   // exported edge is the edge you were looking at
@@ -400,7 +401,7 @@ function booleanMarkup(
     node.id,
     d,
     {
-      color: border.color,
+      color: withAlpha(border.color, border.opacity ?? 1),
       width: border.width,
       dash: border.dash ? `${border.dash} ${border.gap ?? border.dash}` : null,
       cap: border.cap ?? 'butt',
