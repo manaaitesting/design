@@ -300,7 +300,12 @@ test('a frame set to another variable mode publishes that mode’s values', asyn
 
   const modes = await page.evaluate((frame) => {
     const store = window.paperlike!.store;
-    const collection = store.listCollections()[0];
+    // The default collection by name, not by position. A token created without
+    // one belongs to the default, and the suite shares a document that other
+    // tests have added collections to — `[0]` was whichever of them sorted
+    // first, and the mode was then set on a collection the token is not in.
+    const collections = store.listCollections();
+    const collection = collections.find((entry) => entry.id === 'default') ?? collections[0];
     const token = store.addToken({ name: 'probe-surface', type: 'color', value: '#FFFFFF' });
     const dark = store.addMode(collection.id, 'Dark')!;
     store.setTokenValue(token, dark, '#101010');

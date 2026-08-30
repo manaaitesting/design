@@ -55,34 +55,45 @@ test('the pages magnifier filters the list, and Escape puts it back', async ({ p
 });
 
 test('a page can be dragged to another place in the list', async ({ page }) => {
-  // The list is a fixed-height scroller, so the two rows a drag is tested with
-  // have to be the two at the top — the ones that are always in view.
-  const rows = page.locator('[data-page-id]');
-  const before = await pageOrder(page);
-  expect(before.length).toBeGreaterThan(1);
+  // Two pages of its own: the suite shares a document, and how many pages are
+  // in it depends on what ran before — this test has to make its own subject
+  // rather than borrow whatever is at the top of the list.
+  const first = await addPage(page, 'PanelOne');
+  const second = await addPage(page, 'PanelTwo');
+  const order = () => pageOrder(page).then((names) => names.filter((n) => n.startsWith('Panel')));
+  expect(await order()).toEqual(['PanelOne', 'PanelTwo']);
 
-  const first = (await rows.nth(0).boundingBox())!;
-  const second = (await rows.nth(1).boundingBox())!;
+  const rowOne = page.locator(`[data-page-id="${first}"]`);
+  const rowTwo = page.locator(`[data-page-id="${second}"]`);
+  const from = (await rowOne.boundingBox())!;
+  const to = (await rowTwo.boundingBox())!;
 
-  await page.mouse.move(first.x + 40, first.y + first.height / 2);
+  await page.mouse.move(from.x + 40, from.y + from.height / 2);
   await page.mouse.down();
-  await page.mouse.move(second.x + 40, second.y + second.height - 2, { steps: 10 });
+  await page.mouse.move(to.x + 40, to.y + to.height - 2, { steps: 10 });
   // the line says where it will land before the release does it
-  await expect(rows.nth(1)).toHaveAttribute('data-drop', 'below');
+  await expect(rowTwo).toHaveAttribute('data-drop', 'below');
   await page.mouse.up();
+  expect(await order()).toEqual(['PanelTwo', 'PanelOne']);
 
-  const after = await pageOrder(page);
-  expect(after[0]).toBe(before[1]);
-  expect(after[1]).toBe(before[0]);
-
-  // and back, so the shared document is left as it was found
-  const back = (await rows.nth(1).boundingBox())!;
-  const top = (await rows.nth(0).boundingBox())!;
+  // and back the other way, which is the move the arithmetic gets wrong if the
+  // removal is not taken into account
+  const back = (await rowOne.boundingBox())!;
+  const above = (await rowTwo.boundingBox())!;
   await page.mouse.move(back.x + 40, back.y + back.height / 2);
   await page.mouse.down();
-  await page.mouse.move(top.x + 40, top.y + 2, { steps: 10 });
+  await page.mouse.move(above.x + 40, above.y + 2, { steps: 10 });
   await page.mouse.up();
-  expect(await pageOrder(page)).toEqual(before);
+  expect(await order()).toEqual(['PanelOne', 'PanelTwo']);
+
+  await page.evaluate(
+    ([a, b]) => {
+      window.paperlike!.store.removePage(a);
+      window.paperlike!.store.removePage(b);
+      window.paperlike!.store.commit();
+    },
+    [first, second] as const,
+  );
 });
 
 test('a layer dragged to the edge scrolls the list under it', async ({ page }) => {
