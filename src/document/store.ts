@@ -2877,11 +2877,36 @@ export class DocStore {
     return true;
   }
 
+  /**
+   * Whether placing an instance of `mainId` under `parentId` would make a
+   * component hold itself. Propagation clones a main's structure onto its
+   * instances, so a loop here does not merely look odd — it grows the document
+   * by a level on every pass.
+   */
+  private wouldNest(mainId: string, parentId: string): boolean {
+    let host: SceneNode | undefined = this.snap[parentId];
+    while (host && !host.isComponent) host = host.parent ? this.snap[host.parent] : undefined;
+    if (!host) return false;
+    const target = host.id;
+    const seen = new Set<string>();
+    const reaches = (id: string): boolean => {
+      if (id === target) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return [id, ...descendants(id, this.snap)].some((child) => {
+        const inner = this.snap[child]?.instanceOf;
+        return !!inner && reaches(inner);
+      });
+    };
+    return reaches(mainId);
+  }
+
   /** Places a copy of a main component that keeps following it. */
   createInstance(mainId: string, parentId: string, at?: { x: number; y: number }): string | null {
     const main = this.snap[mainId];
     if (!main?.isComponent) return null;
     if (!this.nodes.has(parentId)) return null;
+    if (this.wouldNest(mainId, parentId)) return null;
 
     let rootId = '';
     this.transact(() => {
@@ -2899,7 +2924,11 @@ export class DocStore {
               parent,
               children: [],
               isComponent: false,
-              instanceOf: isRoot ? mainId : undefined,
+              // a nested instance stays an instance. Composition is the whole
+              // point of a component library — a Card holding a Button — and
+              // flattening the inner one on placement would leave a layer that
+              // looks like an instance and has no panel behind it
+              instanceOf: isRoot ? mainId : source.instanceOf,
               overridden: [],
               // an instance is not itself an import from the library; only the
               // main it follows carries that provenance
@@ -3234,7 +3263,9 @@ export class DocStore {
               parent,
               children: [],
               isComponent: isRoot,
-              instanceOf: undefined,
+              // only the layer being rebuilt stops being an instance; anything
+              // nested inside it still follows a main of its own
+              instanceOf: isRoot ? undefined : source.instanceOf,
               overridden: [],
               // the main is being rebuilt here, not re-imported: it no longer
               // has a library revision to answer to
@@ -3293,7 +3324,12 @@ export class DocStore {
     this.syncVariables();
     this.syncStyles();
     const doc = this.snap;
-    const instances = Object.values(doc).filter((n) => n.instanceOf && doc[n.instanceOf]);
+    // only the outermost instances are walked: a nested one is reached through
+    // its parent's walk, which is what keeps the main's own overrides on it —
+    // syncing it here as well would have the two mains fight over its values
+    const instances = Object.values(doc).filter(
+      (n) => n.instanceOf && doc[n.instanceOf] && !instanceRoot(n.parent ?? '', doc),
+    );
     if (!instances.length) return;
 
     this.propagating = true;
@@ -3338,7 +3374,14 @@ export class DocStore {
 
     const kids = this.childrenOf(instanceId)?.toArray() ?? [];
     main.children.forEach((child, index) => {
-      if (kids[index]) this.applyProps(child, kids[index], values);
+      const kid = kids[index];
+      if (!kid) return;
+      // a nested instance answers to its own component's properties, not the
+      // outer one's: below it the layers are the inner main's, and the values
+      // that mean anything there are the ones the nested instance itself holds
+      const inner = this.snap[kid]?.instanceOf;
+      if (inner && this.snap[inner]) this.applyProps(inner, kid, this.snap[kid]?.propValues ?? {});
+      else this.applyProps(child, kid, values);
     });
   }
 
@@ -3382,7 +3425,14 @@ export class DocStore {
 
     const now = kids.toArray();
     for (let i = 0; i < main.children.length && i < now.length; i++) {
-      this.sync(main.children[i], now[i]);
+      const swapped = this.snap[now[i]]?.instanceOf;
+      // a nested instance the user has swapped no longer stands for what the
+      // main holds in that slot, so it follows the component it was swapped to
+      if (swapped && swapped !== this.snap[main.children[i]]?.instanceOf && this.snap[swapped]) {
+        this.sync(swapped, now[i]);
+      } else {
+        this.sync(main.children[i], now[i]);
+      }
     }
   }
 
