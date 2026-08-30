@@ -290,6 +290,10 @@ export interface UIState {
   exportOpen: boolean;
   setExportOpen: (open: boolean) => void;
 
+  /** ⌘R — one name across the selection */
+  renameOpen: boolean;
+  setRenameOpen: (open: boolean) => void;
+
   /** the version-history panel, read from the sync server's snapshots */
   historyOpen: boolean;
   setHistoryOpen: (open: boolean) => void;
@@ -677,6 +681,7 @@ export const useUI = create<UIState>((set) => ({
       paletteOpen: false,
       historyOpen: false,
       exportOpen: false,
+      renameOpen: false,
       shadersOpen: false,
       prompt: null,
       following: null,
@@ -701,6 +706,9 @@ export const useUI = create<UIState>((set) => ({
 
   exportOpen: false,
   setExportOpen: (exportOpen) => set({ exportOpen }),
+
+  renameOpen: false,
+  setRenameOpen: (renameOpen) => set({ renameOpen }),
 
   historyOpen: false,
   setHistoryOpen: (historyOpen) => set({ historyOpen }),

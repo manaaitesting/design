@@ -175,3 +175,24 @@ export function rangeBetween(rows: LayerRow[], from: string, to: string): string
   const [lo, hi] = a < b ? [a, b] : [b, a];
   return rows.slice(lo, hi + 1).map((row) => row.id);
 }
+
+/**
+ * Every layer under a page in panel order, front-most first.
+ *
+ * `flattenLayers` answers what the panel is *showing*, which depends on what is
+ * open. This answers where a layer sits in the whole list, which is what a
+ * rename numbering down from the top has to count with — a closed container
+ * does not change the order of the layers inside it.
+ */
+export function panelOrder(doc: Doc, pageId: string): string[] {
+  const order: string[] = [];
+  const walk = (id: string): void => {
+    const node = doc[id];
+    if (!node) return;
+    order.push(id);
+    for (let i = node.children.length - 1; i >= 0; i--) walk(node.children[i]);
+  };
+  const page = doc[pageId];
+  if (page) for (let i = page.children.length - 1; i >= 0; i--) walk(page.children[i]);
+  return order;
+}

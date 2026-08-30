@@ -2648,6 +2648,60 @@ test.describe('effects', () => {
  * text layer selected and with the caret inside it, so both paths run the same
  * two functions.
  */
+/**
+ * ⌘R renames the selection. Renaming one layer has always been a double-click in
+ * the panel; what this is for is twenty layers called "Vector" that should be
+ * "icon-01" upwards, so the name is a pattern and the tokens make it one.
+ */
+test.describe('rename', () => {
+  const three = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const made = [0, 1, 2].map((i) =>
+        store.create('rect', 'root', { name: 'Vector', x: 40 + i * 120, y: 900, w: 80, h: 40, fill: '#4CC3F0' }),
+      );
+      store.commit();
+      return made;
+    });
+
+  test('\u2318R names the whole selection, numbering down the panel', async ({ page }) => {
+    const ids = await three(page);
+    await select(page, ids);
+    await page.keyboard.press('Meta+r');
+
+    const field = page.getByRole('dialog', { name: 'Rename layers' }).getByLabel('New name');
+    await expect(field).toBeVisible();
+    await field.fill('icon-$nn');
+    await expect(page.getByLabel('Rename preview')).toContainText('icon-01');
+    await field.press('Enter');
+
+    const nodes = await doc(page);
+    // the panel lists the front-most first, and the last one made is in front
+    expect(ids.map((id) => nodes[id].name)).toEqual(['icon-03', 'icon-02', 'icon-01']);
+    await removeNodes(page, ids);
+  });
+
+  test('$& keeps the name it had, and Escape changes nothing', async ({ page }) => {
+    const ids = await three(page);
+    await select(page, ids);
+    await page.keyboard.press('Meta+r');
+    const field = page.getByRole('dialog', { name: 'Rename layers' }).getByLabel('New name');
+    await field.fill('$& $N');
+    await field.press('Escape');
+
+    let nodes = await doc(page);
+    expect(nodes[ids[0]].name).toBe('Vector');
+
+    await page.keyboard.press('Meta+r');
+    await expect(field).toBeVisible();
+    await field.fill('$& $N');
+    await field.press('Enter');
+    nodes = await doc(page);
+    expect(ids.map((id) => nodes[id].name)).toEqual(['Vector 1', 'Vector 2', 'Vector 3']);
+    await removeNodes(page, ids);
+  });
+});
+
 test.describe('text shortcuts', () => {
   const seedText = (page: import('@playwright/test').Page) =>
     page.evaluate(() => {

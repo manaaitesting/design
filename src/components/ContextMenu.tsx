@@ -394,6 +394,12 @@ function Menu({ menu }: { menu: OpenMenu }) {
       disabled: !has,
       run: () => select(store.duplicate(selection)),
     },
+    {
+      label: 'Rename',
+      shortcut: '⌘R',
+      disabled: !has,
+      run: () => useUI.getState().setRenameOpen(true),
+    },
 
     { label: 'Bring to front', shortcut: ']', divider: true, disabled: !has, run: () => store.reorder(selection, 'front') },
     { label: 'Bring forward', shortcut: '⌘]', disabled: !has, run: () => store.reorder(selection, 'forward') },

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Canvas } from './Canvas';
 import { ContextMenu } from './ContextMenu';
 import { ExportDialog } from './ExportDialog';
+import { RenameDialog } from './RenameDialog';
 import { FontFaces } from './FontFaces';
 import { Thumbnail } from './Thumbnail';
 import { History } from './History';
@@ -508,6 +509,12 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
           return;
         }
       }
+      // ⌘R — one name across the selection, Figma's Rename
+      if (mod && !event.shiftKey && !event.altKey && event.code === 'KeyR' && selection.length) {
+        event.preventDefault();
+        ui.setRenameOpen(true);
+        return;
+      }
       if (!mod && event.shiftKey && event.code === 'KeyR') {
         event.preventDefault();
         ui.toggleRulers();
@@ -893,6 +900,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       <ContextMenu />
       <ShadersModal />
       <ExportDialog />
+      <RenameDialog />
       <History />
       <Palette />
       <Present />

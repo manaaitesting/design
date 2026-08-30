@@ -123,11 +123,18 @@ test('⌥⌘→ walks the strip instead of nudging a layer', async ({ page }) =>
   if (before) {
     await page.goto(`/f/${DEMO}`);
     await ready(page, DEMO);
-    const after = await page.evaluate(
-      (id) => window.paperlike!.doc()[id]?.x ?? null,
-      before.id,
-    );
-    expect(after, 'switching tabs must not have moved the selected layer').toBe(before.x);
+    // Polled rather than read once. `ready` says the handle belongs to this
+    // file, which is not the same as the file having arrived: the document is
+    // filled in over the socket, so a single read here can land on an empty one
+    // and report the layer missing rather than unmoved. The assertion is the
+    // same — if the nudge had gone through, the value would settle on the wrong
+    // number and this would still fail.
+    await expect
+      .poll(
+        () => page.evaluate((id) => window.paperlike!.doc()[id]?.x ?? null, before.id),
+        { message: 'switching tabs must not have moved the selected layer' },
+      )
+      .toBe(before.x);
   }
 
   // and it wraps, as ⌃⇥ does everywhere else
