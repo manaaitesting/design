@@ -258,6 +258,10 @@ export interface UIState {
   leftPanel: boolean;
   toggleLeftPanel: () => void;
 
+  aiChatOpen: boolean;
+  toggleAiChat: () => void;
+  setAiChatOpen: (open: boolean) => void;
+
   /**
    * Panel widths, in px. Both sides are drag-resizable and persist per
    * browser; the setters clamp so the canvas between them never disappears.
@@ -349,6 +353,10 @@ export interface UIState {
 
   exportOpen: boolean;
   setExportOpen: (open: boolean) => void;
+
+  /** the file menu's "Show version history" */
+  versionsOpen: boolean;
+  setVersionsOpen: (open: boolean) => void;
 
   /** ⌘R — one name across the selection */
   renameOpen: boolean;
@@ -655,6 +663,10 @@ export const useUI = create<UIState>((set) => ({
   leftPanel: true,
   toggleLeftPanel: () => set((state) => ({ leftPanel: !state.leftPanel })),
 
+  aiChatOpen: false,
+  toggleAiChat: () => set((state) => ({ aiChatOpen: !state.aiChatOpen })),
+  setAiChatOpen: (open: boolean) => set({ aiChatOpen: open }),
+
   leftWidth: PANEL.left.base,
   rightWidth: PANEL.right.base,
   pagesHeight: PANEL.pages.base,
@@ -759,6 +771,7 @@ export const useUI = create<UIState>((set) => ({
       motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
       paletteOpen: false,
       exportOpen: false,
+      versionsOpen: false,
       renameOpen: false,
       shadersOpen: false,
       prompt: null,
@@ -784,6 +797,9 @@ export const useUI = create<UIState>((set) => ({
 
   exportOpen: false,
   setExportOpen: (exportOpen) => set({ exportOpen }),
+
+  versionsOpen: false,
+  setVersionsOpen: (versionsOpen) => set({ versionsOpen }),
 
   renameOpen: false,
   setRenameOpen: (renameOpen) => set({ renameOpen }),

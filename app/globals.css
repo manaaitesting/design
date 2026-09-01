@@ -45,7 +45,7 @@ body {
   margin: 0;
   font-family: -apple-system, system-ui, "Inter", sans-serif;
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 500;
   color: var(--color-ink);
   background: var(--color-canvas);
   -webkit-font-smoothing: antialiased;
@@ -57,6 +57,12 @@ button,
 select {
   font: inherit;
   color: inherit;
+}
+/* That rule is outside every layer, so it beats a layered colour on any
+   button however specific. The dark menus' dim rows have to be dimmed out
+   here beside it, or a disabled command reads as a live one. */
+.ctx-row:disabled {
+  color: rgba(255, 255, 255, 0.32);
 }
 
 @layer components {
@@ -85,7 +91,7 @@ select {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-weight: 500;
+    font-weight: 600;
     user-select: none;
   }
   .section-head[data-empty="true"] {
@@ -109,7 +115,7 @@ select {
     border-radius: 5px;
     border: 0;
     background: transparent;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--color-ink-muted);
     display: inline-flex;
     align-items: center;
@@ -196,7 +202,7 @@ select {
     border: 0;
     border-radius: 5px;
     background: transparent;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--color-ink-muted);
     cursor: default;
     display: inline-flex;
@@ -290,21 +296,22 @@ select {
     --fig-hover: rgba(0, 0, 0, 0.06);
     --fig-icon-3: rgba(0, 0, 0, 0.3);
 
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
     width: 355px;
-    flex: none;
     background: #fff;
-    border: 1px solid var(--fig-line);
+    border: 1px solid #ececec;
     border-radius: 12px;
-    margin: 8px 8px 8px 0;
+    box-shadow: none;
     overflow: hidden;
     font-size: 11px;
     color: var(--fig-ink);
     display: flex;
     flex-direction: column;
     min-height: 0;
-    /* in a flex row the cross-axis stretch minus the 8+8 outer margin is the height */
-    align-self: stretch;
-    max-height: calc(100% - 16px);
+    z-index: 15;
   }
 
   .fig-tabs {
@@ -327,7 +334,7 @@ select {
     background: transparent;
     color: var(--fig-dim);
     font-size: 11px;
-    font-weight: 550;
+    font-weight: 650;
     cursor: default;
     padding: 0 10px;
     border-radius: 5px;
@@ -354,7 +361,7 @@ select {
     display: flex;
     align-items: center;
     gap: 2px;
-    font-weight: 550;
+    font-weight: 650;
     color: var(--fig-ink);
   }
   .fig-head[data-empty='true'] {
@@ -363,7 +370,7 @@ select {
   .fig-title {
     flex: 1;
     font: inherit;
-    font-weight: 550;
+    font-weight: 650;
     margin: 0;
   }
 
@@ -379,7 +386,7 @@ select {
   /* the small grey caption Figma puts above each group of fields */
   .fig-label {
     font-size: 9px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 16px;
     color: var(--fig-dim);
     margin-top: 4px;
@@ -610,7 +617,7 @@ select {
     color: var(--color-ink);
     font: inherit;
     font-size: 13px;
-    font-weight: 550;
+    font-weight: 650;
     white-space: nowrap;
     cursor: default;
   }
@@ -649,7 +656,7 @@ select {
   .fig-size-label {
     position: absolute;
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--color-select-line);
     white-space: nowrap;
     pointer-events: none;
@@ -668,7 +675,7 @@ select {
     color: #fff;
     font: inherit;
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 700;
     line-height: 16px;
     text-align: center;
     pointer-events: auto;
@@ -708,7 +715,7 @@ select {
     color: var(--fig-ink);
     font: inherit;
     font-size: 12px;
-    font-weight: 400;
+    font-weight: 500;
     text-align: left;
     white-space: nowrap;
     cursor: default;
@@ -794,7 +801,7 @@ select {
     gap: 6px;
     height: 28px;
     margin: -4px 0 8px;
-    font-weight: 550;
+    font-weight: 650;
   }
   .fig-card-title {
     flex: 1;
@@ -807,7 +814,7 @@ select {
     background: transparent;
     color: inherit;
     font: inherit;
-    font-weight: 550;
+    font-weight: 650;
     cursor: default;
     overflow: hidden;
     white-space: nowrap;
@@ -855,7 +862,7 @@ select {
   .fig-pills > button[data-on='true'] {
     background: #fff;
     color: var(--fig-ink);
-    font-weight: 550;
+    font-weight: 650;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
   }
 
@@ -992,8 +999,10 @@ select {
     --fig-selected: #e5f4ff;
     --fig-hover: rgba(0, 0, 0, 0.06);
     --fig-icon-3: rgba(0, 0, 0, 0.3);
+    position: relative;
     font-size: 11px;
     color: var(--fig-ink);
+    background: var(--color-canvas);
   }
 
   .fig-rail {
@@ -1256,7 +1265,7 @@ select {
   /* someone named in a comment, and a pin that names you */
   .fig-mention {
     color: var(--fig-blue);
-    font-weight: 500;
+    font-weight: 600;
   }
   .fig-pin[data-mine] {
     box-shadow:
@@ -1357,7 +1366,7 @@ select {
     background: var(--fig-hover);
   }
   .fig-scope-head {
-    font-weight: 500;
+    font-weight: 600;
     margin-bottom: 6px;
   }
   .fig-scope-grid {
@@ -1408,7 +1417,7 @@ select {
     color: #fff;
     font: inherit;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 700;
     cursor: default;
   }
   .fig-range-bar button:hover {
@@ -1470,7 +1479,7 @@ select {
     padding: 0 6px;
     border-radius: 8px;
     font-size: 9px;
-    font-weight: 500;
+    font-weight: 600;
     pointer-events: none;
   }
   .fig-status[data-status='ready'] {
@@ -1534,7 +1543,7 @@ select {
     border-radius: 3px;
     background: #fdf0d5;
     color: #8a5a00;
-    font-weight: 400;
+    font-weight: 500;
   }
   .fig-hint {
     margin: 0;
@@ -1641,7 +1650,7 @@ select {
     color: #fff;
     font: inherit;
     font-size: 12px;
-    font-weight: 400;
+    font-weight: 500;
     text-align: left;
     cursor: default;
     white-space: nowrap;
@@ -1682,6 +1691,13 @@ select {
     height: 1px;
     margin: 5px 6px;
     background: rgba(255, 255, 255, 0.12);
+  }
+  .ctx-check {
+    width: 12px;
+    flex: none;
+    margin-left: -4px;
+    font-size: 11px;
+    text-align: center;
   }
 
   /* Drag handle between a panel and the canvas.
@@ -1745,6 +1761,68 @@ select {
     align-items: center;
     gap: 6px;
     padding: 0 8px 0 16px;
+  }
+  /* ─── File name, and the menu on it ──────────────────────────────────
+     Figma's header: the name with a caret beside it that opens the file menu,
+     the project it lives in underneath, and the sidebar toggle at the far
+     right. The caret is a control of its own so the name can still be a
+     rename field. */
+  .fig-file-head {
+    height: auto;
+    align-items: flex-start;
+    padding: 10px 8px 6px 16px;
+  }
+  .fig-file-title {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    height: 24px;
+  }
+  .fig-file-name {
+    font-size: 13px;
+    font-weight: 550;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .fig-file-rename {
+    flex: 1;
+    min-width: 0;
+    height: 22px;
+    margin-left: -5px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px var(--fig-blue);
+    background: #fff;
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    outline: none;
+  }
+  .fig-file-caret {
+    flex: none;
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 4px;
+    color: var(--fig-dim);
+  }
+  .fig-file-caret[data-on='true'] {
+    background: var(--fig-selected);
+    color: var(--fig-blue);
+  }
+  .fig-file-project {
+    margin-top: -1px;
+    font-size: 11px;
+    color: var(--fig-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* ─── Pages ──────────────────────────────────────────────────────────
      The list is its own scroll region with a height the handle under it sets,
@@ -1820,7 +1898,7 @@ select {
     align-items: center;
     gap: 2px;
     padding: 0 8px 0 16px;
-    font-weight: 550;
+    font-weight: 650;
   }
 
   /* A layer row behaves like a button: it sits in its own rounded slot, greys
@@ -1893,7 +1971,7 @@ select {
     background: var(--fig-blue);
     color: #fff;
     font: inherit;
-    font-weight: 550;
+    font-weight: 650;
     white-space: nowrap;
     cursor: default;
   }
@@ -1950,7 +2028,7 @@ select {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-weight: 550;
+    font-weight: 650;
     padding-left: 4px;
   }
   .fig-present-btn {
@@ -2211,7 +2289,7 @@ select {
   background: transparent;
   color: var(--fig-dim);
   font: inherit;
-  font-weight: 550;
+  font-weight: 650;
   cursor: default;
 }
 .fig-picker-tab[aria-selected='true'] {
@@ -2514,7 +2592,7 @@ select {
   place-items: center;
   border-radius: 4px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
 }
 .fig-picker-contrast-grades {
@@ -2527,7 +2605,7 @@ select {
   border-radius: 4px;
   text-align: center;
   font-size: 9px;
-  font-weight: 600;
+  font-weight: 700;
   background: var(--fig-field);
   color: var(--fig-dim);
 }
@@ -2564,7 +2642,7 @@ select {
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
   font-size: 9px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 /* A section's name, drawn on the canvas above its board. Always visible —
@@ -2576,7 +2654,7 @@ select {
   background: transparent;
   color: var(--color-ink-dim, #7a7a7a);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   cursor: default;
   pointer-events: auto;
@@ -2589,7 +2667,7 @@ select {
    which titles a whole region of the page. */
 .section-label[data-kind='frame'] {
   font-size: 11px;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 /* The name of the style a layer is wearing — Figma shows it where the raw
@@ -2602,7 +2680,7 @@ select {
   border-radius: 5px;
   background: var(--fig-selected);
   color: var(--fig-blue);
-  font-weight: 500;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2643,7 +2721,7 @@ select {
   background: transparent;
   color: #fff;
   font-size: 11px;
-  font-weight: 450;
+  font-weight: 550;
   letter-spacing: 0.1px;
   white-space: nowrap;
   cursor: pointer;
@@ -2763,7 +2841,7 @@ select {
   }
   .fig-fonts-title {
     flex: 1;
-    font-weight: 550;
+    font-weight: 650;
   }
 
   /* Figma's search field: a magnifier, the query, and a ⊗ once there is one */
@@ -2906,7 +2984,7 @@ select {
   .fig-type-tabs > button[data-on='true'] {
     background: var(--fig-field);
     color: var(--fig-ink);
-    font-weight: 550;
+    font-weight: 650;
   }
   .fig-type-tabs > .fig-btn {
     margin-left: auto;
@@ -2947,7 +3025,7 @@ select {
   }
   .fig-type-legend {
     margin-top: 10px;
-    font-weight: 550;
+    font-weight: 650;
   }
 
   /* the — / ✓ pair: narrower than a full segmented control, and right-aligned
@@ -3096,7 +3174,7 @@ select {
     text-decoration: none;
     color: var(--color-ink-dim);
     font-size: 11px;
-    font-weight: 550;
+    font-weight: 650;
     cursor: default;
     transition: background-color 80ms ease-out, color 80ms ease-out;
   }
@@ -3239,7 +3317,7 @@ select {
     background: var(--color-select-line);
     color: #fff;
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
     white-space: nowrap;
     pointer-events: none;
   }
@@ -3262,7 +3340,7 @@ select {
     border-radius: 5px;
     background: transparent;
     text-align: left;
-    font-weight: 450;
+    font-weight: 550;
     color: var(--color-ink);
     cursor: default;
   }
@@ -3352,7 +3430,7 @@ select {
   margin-right: 6px;
   overflow: hidden;
   font-size: 11px;
-  font-weight: 550;
+  font-weight: 650;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -3573,7 +3651,7 @@ select {
 }
 
 .mo-name {
-  font-weight: 550;
+  font-weight: 650;
 }
 
 .mo-name[data-on='true'] {
@@ -3866,7 +3944,7 @@ select {
   color: #fff;
   font: inherit;
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 650;
   white-space: nowrap;
   cursor: default;
   min-width: 0;
@@ -3895,7 +3973,7 @@ select {
   color: #fff;
   font: inherit;
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 650;
   padding: 0 4px;
   min-width: 0;
   max-width: 300px;
@@ -3938,4 +4016,167 @@ select {
   background: rgba(255,255,255,0.14);
   margin: 0 4px;
   flex: none;
+}
+
+/* ─── Frame dropdown — taller + thin inner scrollbar, no outer vertical lines ─ */
+.fig-popover--thin {
+  border: 1px solid #ececec !important;
+  /* remove the 1px outline from POPOVER_LOOK shadow, keep only soft drop */
+  box-shadow: 0 12px 32px -8px rgba(0,0,0,0.22), 0 4px 12px rgba(0,0,0,0.08) !important;
+}
+.fig-popover--thin::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.fig-popover--thin::-webkit-scrollbar-track {
+  background: transparent;
+  border: 0;
+}
+.fig-popover--thin::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.18);
+  border-radius: 999px;
+}
+.fig-popover--thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.28);
+}
+/* Firefox already uses scrollbar-width:thin + scrollbar-color above */
+/* hide outer vertical hairlines that the panel border would otherwise double */
+.fig-popover--thin {
+  border-left: 1px solid #ececec;
+  border-right: 1px solid #ececec;
+  /* no extra vertical rule inside — only the thin inner thumb */
+}
+
+/* ─── Export panel — reference HTML (propertiesPanel inline, not pop) ─── */
+.propertiesPanel {
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+.raw_components--singleRow--iiiXl,
+.raw_components--_singleRow--GVyF0,
+.draggable_list--panelHeaderRow--6-T64 {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  border-bottom: 0;
+  background: #fff;
+}
+.draggable_list--headerRow--ic-45 {
+  height: 32px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 16px;
+}
+.panel_title--panelTitle--zUhAR,
+.draggable_list--panelTitle---OyBo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 550;
+  font-size: 11px;
+  color: var(--fig-ink);
+}
+.draggable_list--panelTitleText--fwbvB {
+  font-size: 11px;
+  font-weight: 550;
+  margin: 0;
+}
+.collapsible_panel--icon--0ni01 {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--fig-dim);
+}
+.draggable_list--addPropertyButtonsContainer--VxvHx {
+  display: flex;
+  align-items: center;
+}
+.base-icon-button__baseIconButton__TXKzr {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--fig-ink);
+}
+.base-icon-button__baseIconButton__TXKzr:hover {
+  background: var(--fig-hover);
+}
+.ui3_grid_rows--twoInputTwoIconRow--fNAVM {
+  display: grid;
+  grid-template-columns: 1fr 1fr 28px 28px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+}
+.ui3_grid_rows--row--lI8oS {
+  min-height: 32px;
+}
+._1kmy3qh0 {
+  min-width: 0;
+}
+.export_panel--splitInputContainer--QhqnU {
+  display: flex;
+  align-items: center;
+}
+.export_panel--splitInputContainer--QhqnU .fig-input {
+  flex: 1;
+}
+.button_row--fplButtonRow--CqWjl {
+  padding: 8px 16px;
+}
+.button__button__-U-QJ {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--fig-line);
+  border-radius: 6px;
+  background: #fff;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+.button__button__-U-QJ:hover {
+  background: var(--fig-field);
+}
+.export_panel--previewCaretLabelRow--PbgE8 {
+  height: 32px;
+  border-top: 0;
+  border-bottom: 0;
+}
+.export_panel--previewCaretLabelRow--PbgE8 button {
+  width: 100%;
+  height: 32px;
+}
+.export_panel--label--KwI4r {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fig-ink);
+}
+.export_panel--previewThumbnailContainer--76lTU {
+  padding: 8px 16px 16px;
+  display: grid;
+  place-items: center;
+  background: var(--fig-checker, url("data:image/svg+xml;utf8,%3Csvg width='8' height='8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h4v4H0zM4 4h4v4H4z' fill='%23e1e1e1'/%3E%3C/svg%3E") 0 0 / 8px 8px, #fff);
+  border-top: 0;
+}
+.export_panel--previewThumbnailContainer--76lTU img {
+  max-width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
+  border-radius: 4px;
+  background: #fff;
+}
+.fig-export-preview {
+  width: 100%;
+  display: grid;
+  place-items: center;
 }

@@ -34,7 +34,7 @@ import { canEditPoints } from '../document/geometry';
 import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
 import { boardsOf } from '../document/layers';
 
-interface Item {
+export interface Item {
   label: string;
   shortcut?: string;
   /** return value is ignored — commands report success to themselves */
@@ -44,7 +44,15 @@ interface Item {
   divider?: boolean;
   items?: Item[];
   onHover?: (id: string | null) => void;
+  /**
+   * A tick before the label, for rows that are a choice among several — the
+   * file's colour profile, say. `false` leaves the tick's space so the labels
+   * in one submenu line up; leave it undefined for a plain command.
+   */
+  checked?: boolean;
 }
+
+export type { Item as MenuItem };
 
 /** A rendered blob as an inline data URL, which is how this document stores images. */
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -78,7 +86,7 @@ function hasOverrides(id: string, doc: Doc): boolean {
  * it never fires the row's `pointerleave` — the reason a naive implementation
  * closes the moment you reach for it.
  */
-function Panel({
+export function Panel({
   items,
   x,
   y,
@@ -148,7 +156,12 @@ function Panel({
               onClose();
             }}
           >
-            <span className="ctx-label">{item.label}</span>
+            {item.checked !== undefined && (
+              <span className="ctx-check" aria-hidden>
+                {item.checked ? '✓' : ''}
+              </span>
+            )}
+            <span className="ctx-label" style={{ flex: 1 }}>{item.label}</span>
             {item.items ? (
               <span className="ctx-arrow">›</span>
             ) : (

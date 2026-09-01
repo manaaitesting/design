@@ -4,6 +4,8 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Canvas } from './Canvas';
 import { ContextMenu } from './ContextMenu';
 import { ExportDialog } from './ExportDialog';
+import { VersionHistory } from './VersionHistory';
+import { COLOR_PROFILE_KEY, type ColorProfile, type FileMeta } from './FileMenu';
 import { RenameDialog } from './RenameDialog';
 import { FontFaces } from './FontFaces';
 import { Thumbnail } from './Thumbnail';
@@ -17,6 +19,9 @@ import { ShadersModal } from './ShadersModal';
 import { Timeline } from './Timeline';
 import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
+import { TooltipProvider } from './ui/tooltip';
+import { GlobalIconTooltips } from './ui/GlobalIconTooltips';
+import { AiChatSidebar } from './AiChatSidebar';
 import { PANEL, ZOOM, loadFileView, saveFileView, useUI, type Tool, type Viewport } from '../state/ui';
 import { fitBounds, fitView, selectionBounds } from '../lib/view';
 import { boardsOf } from '../document/layers';
@@ -97,14 +102,38 @@ function isTyping(target: EventTarget | null): boolean {
  */
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
-export function Editor({ fileName, room }: { fileName: string; room: string }) {
+export function Editor({
+  fileName,
+  room,
+  file,
+}: {
+  fileName: string;
+  room: string;
+  /** the row around the document, for the file menu; a bare name stands in when the route has none */
+  file?: FileMeta;
+}) {
   const store = useStore();
   const doc = useDoc();
+  const meta: FileMeta = file ?? {
+    id: room,
+    name: fileName,
+    owned: false,
+    signedIn: false,
+    folderId: null,
+    folderName: null,
+    starred: false,
+    folders: [],
+  };
+  // the document re-renders this on every revision, and the profile is one of
+  // its settings — so a fresh read here is always the current one
+  void doc;
+  const colorProfile = store.getMeta<ColorProfile>(COLOR_PROFILE_KEY) ?? 'srgb';
   const tokenVars = useTokenVars();
   const tokens = useTokens();
   const collections = useCollections();
   const fonts = useCustomFonts();
   const leftPanel = useUI((s) => s.leftPanel);
+  const aiChatOpen = useUI((s) => s.aiChatOpen);
   const outlines = useUI((s) => s.view.outlines);
   const chrome = useUI((s) => s.chrome);
   const leftWidth = useUI((s) => s.leftWidth);
@@ -299,6 +328,7 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         if (ui.paletteOpen) ui.setPaletteOpen(false);
         else if (ui.vectorEdit) ui.setVectorEdit(null);
         else if (ui.exportOpen) ui.setExportOpen(false);
+        else if (ui.versionsOpen) ui.setVersionsOpen(false);
         else if (ui.shadersOpen) ui.setShadersOpen(false);
         else if (ui.editing) ui.setEditing(null);
         else if (ui.contextMenu) ui.setContextMenu(null);
@@ -887,18 +917,16 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
   }, [store, doc, leftPanel, tokenVars, tokens, collections, fonts]);
 
   return (
-    <div
-      className="fig-shell"
-      // Figma's Outlines view: the design as its geometry, with the paint taken
-      // away. It is a way of looking, not a change to the document, so it is a
-      // class on the shell rather than anything the canvas has to re-render.
-      data-outlines={outlines ? 'true' : undefined}
-      // the tab strip above owns the rest of the viewport
-      style={{ display: 'flex', height: '100%', overflow: 'hidden' }}
-    >
+    <TooltipProvider delayDuration={200}>
+      <div
+        className="fig-shell"
+        data-outlines={outlines ? 'true' : undefined}
+        data-color-profile={colorProfile}
+        style={{ display: 'flex', height: '100%', overflow: 'hidden', position: 'relative', background: 'var(--color-canvas)' }}
+      >
       <FontFaces />
       <Thumbnail />
-      {chrome && leftPanel && <LeftPanel fileName={fileName} />}
+      {chrome && leftPanel && <LeftPanel file={meta} />}
       {chrome && leftPanel && (
         <Resizer
           side="left"
@@ -911,31 +939,48 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         />
       )}
       {chrome && leftPanel && <ToolRail />}
-      <div style={{ position: 'relative', flex: 1, display: 'flex', minWidth: 0 }}>
+      <div style={{ position: 'relative', flex: 1, display: 'flex', minWidth: 0, background: 'var(--color-canvas)' }}>
         <Canvas />
         <PromptBar />
-        {chrome && !leftPanel && <CollapsedLeftPanelIsland fileName={fileName} />}
+        {chrome && !leftPanel && <CollapsedLeftPanelIsland file={meta} />}
         {chrome && <Timeline />}
+        {/* Right inspector overlays the artboard — artboard shows through the 8px gaps */}
+        {chrome && !aiChatOpen && <Inspector />}
+        {chrome && !aiChatOpen && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 8,
+              bottom: 8,
+              right: 8 + rightWidth,
+              width: 0,
+              zIndex: 16,
+              display: 'flex',
+            }}
+          >
+            <Resizer
+              side="right"
+              label="Resize design panel"
+              width={rightWidth}
+              min={PANEL.right.min}
+              max={PANEL.right.max}
+              onResize={useUI.getState().setRightWidth}
+              onReset={useUI.getState().resetRightWidth}
+            />
+          </div>
+        )}
+        {chrome && aiChatOpen && <AiChatSidebar />}
       </div>
-      {chrome && (
-      <Resizer
-        side="right"
-        label="Resize design panel"
-        width={rightWidth}
-        min={PANEL.right.min}
-        max={PANEL.right.max}
-        onResize={useUI.getState().setRightWidth}
-        onReset={useUI.getState().resetRightWidth}
-      />
-      )}
-      {chrome && <Inspector />}
 
       <ContextMenu />
       <ShadersModal />
       <ExportDialog />
+      <VersionHistory />
       <RenameDialog />
       <Palette />
       <Present />
-    </div>
+      <GlobalIconTooltips />
+      </div>
+    </TooltipProvider>
   );
 }

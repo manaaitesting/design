@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './ui/Icons';
 import { FigIcon } from './ui/FigIcon';
 import { FigButton } from './ui/Figma';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
+import { FileHead, FileMenu, requestRename, type FileMeta } from './FileMenu';
 import { useCollections, useDoc, usePages, useReadOnly, useSession, useStore, useTokens } from './Session';
 import {
   fetchLibraryComponentAction,
@@ -203,71 +205,74 @@ type Drag = ReturnType<typeof useLayerDrag>;
  * pill shows the main-menu + the project/file name + the sidebar toggle.
  * Clicking the pill's right half expands the panel again.
  */
-export function CollapsedLeftPanelIsland({ fileName }: { fileName: string }) {
+export function CollapsedLeftPanelIsland({ file }: { file: FileMeta }) {
+  const fileName = file.name;
   const toggleLeftPanel = useUI((s) => s.toggleLeftPanel);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   return (
     <div
       className="left_panel_island_container--islandContainer--Dn6cB left_panel_island_container--collapsed--qikIv"
       data-fullscreen-prevent-event-capture="true"
       style={{ maxWidth: 500 }}
     >
-      <button
-        data-fpl-component="primitive"
-        aria-label="Main menu"
-        data-onboarding-key="FULLSCREEN_TOGGLE_MENU"
-        data-tooltip="main-menu"
-        data-tooltip-type="lookup"
-        data-tooltip-offset-x="0"
-        aria-haspopup="menu"
-        aria-expanded="false"
-        type="button"
-        tabIndex={0}
-        data-show-focus="true"
-        className="_19xx72g0 toolbar_view--menuButtonNew--7p2v4"
-        title="Main menu"
-      >
-        {/* Figma logo mark */}
-        <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24L" aria-hidden="true">
-          <path
-            fill="currentColor"
-            fillRule="evenodd"
-            d="M7 7c0 1.043.533 1.963 1.341 2.5A3 3 0 0 0 7 12c0 1.043.533 1.963 1.341 2.5A3 3 0 1 0 13 17v-2.764A3 3 0 1 0 16.659 9.5 3 3 0 0 0 15 4h-5a3 3 0 0 0-3 3m8 2a2 2 0 1 0 0-4h-2v4zm-2 3a2 2 0 1 0 4 0 2 2 0 0 0-4 0m-1 2h-2a2 2 0 1 1 0-4h2zm-2 1h2v2a2 2 0 1 1-2-2m2-6h-2a2 2 0 1 1 0-4h2z"
-            clipRule="evenodd"
-          />
-        </svg>
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            data-fpl-component="primitive"
+            aria-label="Main menu"
+            data-onboarding-key="FULLSCREEN_TOGGLE_MENU"
+            data-tooltip="main-menu"
+            data-tooltip-type="lookup"
+            data-tooltip-offset-x="0"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            type="button"
+            tabIndex={0}
+            data-show-focus="true"
+            className="_19xx72g0 toolbar_view--menuButtonNew--7p2v4"
+            title="Main menu"
+          >
+            <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24L" aria-hidden="true">
+              <path
+                fill="currentColor"
+                fillRule="evenodd"
+                d="M7 7c0 1.043.533 1.963 1.341 2.5A3 3 0 0 0 7 12c0 1.043.533 1.963 1.341 2.5A3 3 0 1 0 13 17v-2.764A3 3 0 1 0 16.659 9.5 3 3 0 0 0 15 4h-5a3 3 0 0 0-3 3m8 2a2 2 0 1 0 0-4h-2v4zm-2 3a2 2 0 1 0 4 0 2 2 0 0 0-4 0m-1 2h-2a2 2 0 1 1 0-4h2zm-2 1h2v2a2 2 0 1 1-2-2m2-6h-2a2 2 0 1 1 0-4h2z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>
+          <p>Main menu</p>
+        </TooltipContent>
+      </Tooltip>
       <span className="left-panel-island-sep" aria-hidden="true" />
-      <button
-        data-fpl-component="primitive"
-        aria-label={`Expand UI for file named ${fileName}`}
-        data-tooltip="Expand UI"
-        data-tooltip-type="text"
-        data-tooltip-shortcut-key="toggle-sidebar"
-        type="button"
-        tabIndex={0}
-        data-show-focus="true"
-        className="_19xx72g0 toggle_expanded_sidebar_button--button--0-Uff"
-        onClick={() => toggleLeftPanel()}
-        title="Expand sidebar"
-      >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            data-fpl-component="primitive"
+            aria-label={`Expand UI for file named ${fileName}`}
+            data-tooltip="Expand UI"
+            data-tooltip-type="text"
+            data-tooltip-shortcut-key="toggle-sidebar"
+            type="button"
+            tabIndex={0}
+            data-show-focus="true"
+            className="_19xx72g0 toggle_expanded_sidebar_button--button--0-Uff"
+            onClick={() => toggleLeftPanel()}
+            title="Expand sidebar"
+          >
         <div className="design_dev_handoff_collapsed_left_panel_toggle--fileName--ckduo">
           <div className="filename_view--filenameView--aoEuf">
             <span className="filename_view--filenameText--ecORB filename_view--enableSecondaryHover--A2zCP filename_view--shouldShowFileMenu--oj9jF">
-              <button
+              <span
                 data-fpl-component="primitive"
                 data-testid="filename"
                 aria-label={`${fileName}, file name`}
-                type="button"
-                tabIndex={-1}
-                data-show-focus="true"
                 className="_19xx72g0 filename_view--title--EqcWj ellipsis--ellipsis--IdJAr"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleLeftPanel();
-                }}
               >
                 {fileName}
-              </button>
+              </span>
               <label htmlFor="filename" className="visually_hidden--visuallyHidden--jaEy6">
                 File name
               </label>
@@ -296,12 +301,51 @@ export function CollapsedLeftPanelIsland({ fileName }: { fileName: string }) {
             />
           </svg>
         </div>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>
+          <p>Expand sidebar</p>
+        </TooltipContent>
+      </Tooltip>
+      {/* the same file menu the expanded header has, off a caret of its own —
+          the island's name sits inside the Expand button, and a button cannot
+          hold another */}
+      <button
+        type="button"
+        className="fig-btn fig-file-caret"
+        title={menu ? undefined : 'File menu'}
+        aria-label="File menu"
+        aria-haspopup="menu"
+        aria-expanded={!!menu}
+        data-on={menu ? 'true' : undefined}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          if (menu) return setMenu(null);
+          const box = event.currentTarget.getBoundingClientRect();
+          setMenu({ x: box.left - 6, y: box.bottom + 6 });
+        }}
+      >
+        <Icon.Caret />
       </button>
+      {menu && (
+        <FileMenu
+          file={file}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          onRename={() => {
+            // no field to type into here: expand the panel, whose header picks
+            // the request up as it mounts
+            requestRename();
+            toggleLeftPanel();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-export function LeftPanel({ fileName }: { fileName: string }) {
+export function LeftPanel({ file }: { file: FileMeta }) {
   const tab = useUI((s) => s.tab);
   const setTab = useUI((s) => s.setTab);
   /** the layer search: closed by default, as Figma keeps it */
@@ -311,23 +355,9 @@ export function LeftPanel({ fileName }: { fileName: string }) {
 
   return (
     <div className="fig-left" style={{ width }}>
-      <div className="fig-left-head">
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 550,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {fileName}
-          </div>
-        </div>
-      </div>
+      <FileHead file={file} />
 
-      <div className="fig-tabs" style={{ height: 32, borderTop: '1px solid var(--fig-line)' }}>
+      <div className="fig-tabs" style={{ borderTop: '1px solid var(--fig-line)' }}>
         <button type="button" className="fig-tab" data-on={tab === 'design'} onClick={() => setTab('design')}>
           Design
         </button>
@@ -429,7 +459,7 @@ function PagesSection() {
   };
 
   return (
-    <div style={{ paddingTop: 8 }}>
+    <div>
       <div className="fig-left-section">
         <button
           type="button"
@@ -443,7 +473,14 @@ function PagesSection() {
           </span>
           <span>Pages</span>
         </button>
-        <button type="button" className="fig-btn" title="Search pages">
+        <button
+          type="button"
+          className="fig-btn"
+          title="Find"
+          aria-label="Find"
+          id="canvas-search-icon-button"
+          data-testid="canvas-search-icon-button"
+        >
           <Icon.Search />
         </button>
         <button
@@ -476,7 +513,10 @@ function PagesSection() {
                     data-page-id={id}
                     data-on={id === active}
                     aria-current={id === active ? 'page' : undefined}
-                    style={{ paddingLeft: 10 }}
+                    style={{
+                      paddingLeft: 28,
+                      ...(id === active ? { background: '#e9e9e9', borderRadius: 6 } : {}),
+                    }}
                     onClick={() => setPage(id)}
                     onDoubleClick={() => setRenaming(id)}
                     onContextMenu={(event) => {

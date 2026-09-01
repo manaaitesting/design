@@ -196,9 +196,11 @@ class Room {
       fs.writeFileSync(path.join(this.snapshotDir, `${prefix}${stamp}${suffix}.bin`), update);
 
       const pinned = kind === 'keep';
+      // Named versions — saved by a person from the file menu — are theirs to
+      // keep, so rotation never counts them among the automatic ones.
       const mine = fs
         .readdirSync(this.snapshotDir)
-        .filter((f) => f.startsWith(prefix) && f.endsWith('__keep.bin') === pinned)
+        .filter((f) => f.startsWith(prefix) && !f.includes('__named__') && f.endsWith('__keep.bin') === pinned)
         .sort();
       const limit = pinned ? SNAPSHOT_KEEP_PINNED : SNAPSHOT_KEEP;
       for (const stale of mine.slice(0, Math.max(0, mine.length - limit))) {

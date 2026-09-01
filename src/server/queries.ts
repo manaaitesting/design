@@ -40,6 +40,9 @@ export interface FilesPage {
    */
   folderOptions: { id: string; name: string }[];
   current?: Folder & { count: number };
+  /** how many files are pinned to the sidebar, and how many sit in the trash */
+  starred: number;
+  trashed: number;
 }
 
 export function filesPage(userId: string, query: FileQuery): FilesPage {
@@ -51,13 +54,22 @@ export function filesPage(userId: string, query: FileQuery): FilesPage {
     total: listFiles(userId).length,
     folderOptions: folders.map((entry) => ({ id: entry.id, name: entry.name })),
     current: folders.find((entry) => entry.id === query.folder),
+    starred: listFiles(userId, { starred: true }).length,
+    trashed: listFiles(userId, { trash: true }).length,
   };
 }
 
 // ── Opening a file ───────────────────────────────────────────────────────
 
 export type RoomAccess =
-  | { ok: true; file: FileRow; role: Role; tabs: { id: string; name: string; owned: boolean }[] }
+  | {
+      ok: true;
+      file: FileRow;
+      role: Role;
+      tabs: { id: string; name: string; owned: boolean }[];
+      /** the viewer's own folders, for the file menu's "Move file…" — empty for a guest */
+      folders: { id: string; name: string }[];
+    }
   /** no way in, but signing in might make one */
   | { ok: false; reason: 'sign-in' }
   /** no way in, and no account would change that */
@@ -95,6 +107,7 @@ export function openRoom(room: string, userId: string | null): RoomAccess {
         owned: row.owner_id === userId,
       }))
     : [];
+  const folders = userId ? listFolders(userId).map((row) => ({ id: row.id, name: row.name })) : [];
 
-  return { ok: true, file, role, tabs };
+  return { ok: true, file, role, tabs, folders };
 }

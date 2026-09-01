@@ -118,8 +118,21 @@ export function db(): DatabaseSync {
   if (!columns.some((column) => column.name === 'folder_id')) {
     instance.exec('ALTER TABLE files ADD COLUMN folder_id TEXT');
   }
+  // "Add to sidebar" in the file menu: a starred file is listed under its own
+  // chip on the dashboard. One flag per file — starring is the owner's call.
+  if (!columns.some((column) => column.name === 'starred')) {
+    instance.exec('ALTER TABLE files ADD COLUMN starred INTEGER NOT NULL DEFAULT 0');
+  }
+  // "Move to trash" has to mean trash: the row stays, hidden from every list
+  // but the Trash view, until it is restored or deleted for good.
+  if (!columns.some((column) => column.name === 'trashed_at')) {
+    instance.exec('ALTER TABLE files ADD COLUMN trashed_at INTEGER');
+  }
   return instance;
 }
+
+/** Where the sync server writes its rolling snapshots — the file menu's version history. */
+export const SNAPSHOT_DIR = path.join(DATA_DIR, 'snapshots');
 
 export interface User {
   id: string;
@@ -142,6 +155,10 @@ export interface FileRow {
   link_role?: string | null;
   /** the owner's folder, or null for the top level */
   folder_id?: string | null;
+  /** 1 when the owner pinned it to the dashboard sidebar */
+  starred?: number;
+  /** when it was moved to the trash, or null while it is live */
+  trashed_at?: number | null;
 }
 
 export interface Folder {
@@ -191,6 +208,10 @@ export interface FileQuery {
   /** a folder id, or 'none' for the files in no folder at all */
   folder?: string;
   sort?: 'recent' | 'name' | 'created';
+  /** only the files pinned to the sidebar */
+  starred?: boolean;
+  /** the trash instead of the live files — the two never mix in one list */
+  trash?: boolean;
 }
 
 /**
@@ -215,6 +236,9 @@ export function listFiles(userId: string, query: FileQuery = {}): FileRow[] {
     where.push('f.folder_id = ?');
     params.push(query.folder);
   }
+  if (query.starred) where.push('f.starred = 1');
+  // a trashed file is out of every list but the trash itself
+  where.push(query.trash ? 'f.trashed_at IS NOT NULL' : 'f.trashed_at IS NULL');
 
   const order =
     query.sort === 'name'
@@ -226,11 +250,11 @@ export function listFiles(userId: string, query: FileQuery = {}): FileRow[] {
   return db()
     .prepare(
       `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.thumbnail, f.link_role,
-              f.folder_id, m.role, u.name AS owner_name
+              f.folder_id, f.starred, f.trashed_at, m.role, u.name AS owner_name
          FROM files f
          JOIN file_members m ON m.file_id = f.id AND m.user_id = ?
          JOIN users u ON u.id = f.owner_id
-        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        WHERE ${where.join(' AND ')}
         ORDER BY ${order}`,
     )
     .all(...params) as unknown as FileRow[];
@@ -244,7 +268,7 @@ export function listFolders(userId: string): (Folder & { count: number })[] {
       `SELECT d.id, d.name, d.owner_id, d.created_at,
               (SELECT COUNT(*) FROM files f
                  JOIN file_members m ON m.file_id = f.id AND m.user_id = d.owner_id
-                WHERE f.folder_id = d.id) AS count
+                WHERE f.folder_id = d.id AND f.trashed_at IS NULL) AS count
          FROM folders d
         WHERE d.owner_id = ?
         ORDER BY d.name COLLATE NOCASE ASC`,
@@ -298,7 +322,8 @@ export function listAllFiles(): FileRow[] {
 export function getFileFor(fileId: string, userId: string): FileRow | undefined {
   return db()
     .prepare(
-      `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.link_role, m.role, u.name AS owner_name
+      `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.link_role,
+              f.folder_id, f.starred, f.trashed_at, m.role, u.name AS owner_name
          FROM files f
          JOIN file_members m ON m.file_id = f.id AND m.user_id = ?
          JOIN users u ON u.id = f.owner_id
@@ -319,7 +344,7 @@ export function getFileByLink(fileId: string): FileRow | undefined {
   const row = db()
     .prepare(
       `SELECT f.id, f.name, f.owner_id, f.created_at, f.updated_at, f.link_role,
-              f.link_role AS role, u.name AS owner_name
+              f.folder_id, f.starred, f.trashed_at, f.link_role AS role, u.name AS owner_name
          FROM files f JOIN users u ON u.id = f.owner_id
         WHERE f.id = ? AND f.link_role IS NOT NULL`,
     )
@@ -378,6 +403,28 @@ export function touchFile(fileId: string): void {
   db().prepare('UPDATE files SET updated_at = ? WHERE id = ?').run(Date.now(), fileId);
 }
 
+/** Pins the file to the dashboard sidebar, or takes it down. The owner's call. */
+export function setStarred(fileId: string, ownerId: string, on: boolean): void {
+  db().prepare('UPDATE files SET starred = ? WHERE id = ? AND owner_id = ?')
+    .run(on ? 1 : 0, fileId, ownerId);
+}
+
+/** Moves a file to the trash. Nothing is lost: `restoreFile` brings it back as it was. */
+export function trashFile(fileId: string, ownerId: string): boolean {
+  const result = db()
+    .prepare('UPDATE files SET trashed_at = ? WHERE id = ? AND owner_id = ? AND trashed_at IS NULL')
+    .run(Date.now(), fileId, ownerId);
+  return result.changes > 0;
+}
+
+export function restoreFile(fileId: string, ownerId: string): boolean {
+  const result = db()
+    .prepare('UPDATE files SET trashed_at = NULL WHERE id = ? AND owner_id = ?')
+    .run(fileId, ownerId);
+  return result.changes > 0;
+}
+
+/** Deletes for good — the row and the document behind it. */
 export function deleteFile(fileId: string, ownerId: string): boolean {
   const result = db().prepare('DELETE FROM files WHERE id = ? AND owner_id = ?').run(fileId, ownerId);
   if (result.changes > 0) {

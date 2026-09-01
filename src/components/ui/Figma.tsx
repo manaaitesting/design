@@ -18,6 +18,7 @@ import { FigIcon } from './FigIcon';
 import { PaintPicker, type PaintType } from './PaintPicker';
 import { paintIsTypable, paintLabel } from './color';
 import { BLEND_MODES, blendLabel } from './blend';
+import { Tooltip, TooltipContent, TooltipTrigger } from './tooltip';
 
 /**
  * A menu anchored to a button but rendered at the document root.
@@ -146,16 +147,18 @@ export function FigPopover({
         left: box.left,
         top: box.top,
         width,
-        // the 8px matches the gap `place()` leaves below a popover it has had
-        // to lift; any more and a dialog that exactly fits grows its own
-        // scrollbar, which is what put two of them in the font picker
-        maxHeight: `min(${maxHeight ?? 480}px, calc(100vh - ${box.top + 8}px))`,
+        // taller frame dropdown — was 480, now 560 gives more rows without shrinking canvas
+        maxHeight: `min(${maxHeight ?? 560}px, calc(100vh - ${box.top + 8}px))`,
         overflowY: 'auto',
+        overflowX: 'hidden',
+        scrollbarWidth: 'thin',
+        scrollbarColor: 'rgba(0,0,0,0.18) transparent',
+        scrollbarGutter: 'stable',
         ...POPOVER_LOOK[variant],
         zIndex: 90,
       }}
       // portalled to the body, so it has to bring the panel's variables with it
-      className="fig-shell"
+      className="fig-shell fig-popover fig-popover--thin"
     >
       {children}
     </div>,
@@ -364,7 +367,7 @@ export function FigButton({
   disabled?: boolean;
   style?: React.CSSProperties;
 }) {
-  return (
+  const btn = (
     <button
       type="button"
       className="fig-btn"
@@ -381,6 +384,15 @@ export function FigButton({
     >
       {children}
     </button>
+  );
+  if (!title) return btn;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{btn}</TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        <p>{title}</p>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -523,6 +535,7 @@ export function FigSelect<T extends string>({
         <div
           ref={list}
           role="listbox"
+          className="fig-popover fig-popover--thin"
           style={{
             position: 'fixed',
             left: pos.x,
@@ -531,12 +544,17 @@ export function FigSelect<T extends string>({
             // the wrong spot on every open
             visibility: pos.ready ? 'visible' : 'hidden',
             minWidth: Math.max(pos.w, 120),
-            maxHeight: '58vh',
+            maxHeight: '72vh',
             overflowY: 'auto',
+            overflowX: 'hidden',
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(0,0,0,0.18) transparent',
+            scrollbarGutter: 'stable',
             background: '#fff',
             borderRadius: 12,
+            border: '1px solid #ececec',
             padding: 6,
-            boxShadow: '0 0 0 1px rgba(0,0,0,0.06), 0 12px 32px -8px rgba(0,0,0,0.28)',
+            boxShadow: '0 12px 32px -8px rgba(0,0,0,0.28)',
             zIndex: 240,
             fontSize: 11,
           }}

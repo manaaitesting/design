@@ -20,8 +20,19 @@ export default async function FilePage({ params }: { params: Promise<{ room: str
     notFound();
   }
 
-  const { file, role, tabs } = access;
+  const { file, role, tabs, folders } = access;
   const identity = user ?? (await guestIdentity());
+  // what the file menu needs to know about the file that the document does not
+  const meta = {
+    id: room,
+    name: file.name,
+    owned: Boolean(user && file.owner_id === user.id),
+    signedIn: Boolean(user),
+    folderId: file.folder_id ?? null,
+    folderName: folders.find((folder) => folder.id === file.folder_id)?.name ?? null,
+    starred: Boolean(file.starred),
+    folders,
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -38,7 +49,7 @@ export default async function FilePage({ params }: { params: Promise<{ room: str
           token={issueSyncToken(identity.id, room, role)}
           readOnly={!canEdit(role)}
         >
-          <Editor fileName={file.name} room={room} />
+          <Editor fileName={file.name} room={room} file={meta} />
         </SessionProvider>
       </div>
     </div>

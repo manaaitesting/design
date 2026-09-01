@@ -339,6 +339,8 @@ export class DocStore {
   readonly fonts: Y.Map<CustomFont>;
   readonly styles: Y.Map<Style>;
   readonly comments: Y.Map<Comment>;
+  /** settings that belong to the file rather than to a layer — its colour profile, for one */
+  readonly meta: Y.Map<unknown>;
   readonly undoManager: Y.UndoManager;
 
   /**
@@ -368,6 +370,7 @@ export class DocStore {
     this.fonts = ydoc.getMap<CustomFont>('fonts');
     this.styles = ydoc.getMap<Style>('styles');
     this.comments = ydoc.getMap<Comment>('comments');
+    this.meta = ydoc.getMap<unknown>('meta');
     // comments are conversation, not document history — undo must not eat them
     this.undoManager = new Y.UndoManager([this.nodes, this.pages, this.tokens, this.styles, this.collections], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
@@ -386,6 +389,59 @@ export class DocStore {
     this.fonts.observe(notify);
     this.styles.observe(notify);
     this.comments.observe(notify);
+    this.meta.observe(notify);
+  }
+
+  // ── File settings ──────────────────────────────────────────────────────
+
+  /** A file-level setting, or undefined when it was never set. */
+  getMeta<T>(key: string): T | undefined {
+    return this.meta.get(key) as T | undefined;
+  }
+
+  /**
+   * Sets one. Outside the undo scope on purpose: switching the colour profile
+   * is a decision about the file, not an edit to it, and ⌘Z should not flip it.
+   */
+  setMeta(key: string, value: unknown): void {
+    this.transact(() => {
+      if (value === undefined) this.meta.delete(key);
+      else this.meta.set(key, value);
+    });
+  }
+
+  /**
+   * Version history's Restore.
+   *
+   * Not a file swap: a CRDT remembers deletions, so putting the old bytes back
+   * would be undone by the first peer to reconnect with the delete still in
+   * hand. Instead the version's layers are inserted as new ones — the path a
+   * paste takes — page by page, in one undo step, so ⌘Z is the way back if it
+   * was the wrong version. Layers only: tokens, styles and comments stay as
+   * they are. Returns how many top-level layers came back.
+   */
+  restoreFrom(other: DocStore): number {
+    const theirs = other.getSnapshot();
+    let restored = 0;
+    this.transact(() => {
+      for (const pageId of other.listPages()) {
+        const page = theirs[pageId];
+        if (!page) continue;
+        // a page the version has and this document has since lost comes back
+        // as a new one; a page added since the version is left alone
+        const target = this.nodes.has(pageId) ? pageId : this.addPage(page.name);
+        const mine = this.childrenOf(target)?.toArray() ?? [];
+        if (mine.length) this.remove(mine);
+        const roots = [...page.children].filter((id) => theirs[id]);
+        if (!roots.length) continue;
+        // `serialize` pulls its roots to the origin so a paste lands under the
+        // pointer; the offset puts them back where the version had them
+        const originX = Math.min(...roots.map((id) => theirs[id].x));
+        const originY = Math.min(...roots.map((id) => theirs[id].y));
+        restored += this.paste(other.serialize(roots), target, { x: originX, y: originY }).length;
+      }
+    });
+    return restored;
   }
 
   // ── React binding ──────────────────────────────────────────────────────

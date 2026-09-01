@@ -11,17 +11,22 @@ import {
   startSession,
   verifyPassword,
 } from './auth';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   createFile,
   createUser,
   deleteFile,
   duplicateFile,
   findUserByEmail,
+  getFileByLink,
   getFileFor,
   getLibraryComponent,
   listLibrary,
   publishComponent,
   renameFile,
+  restoreFile,
+  setStarred,
   setThumbnail,
   createFolder,
   deleteFolder,
@@ -29,6 +34,8 @@ import {
   renameFolder,
   setLinkRole,
   shareFile,
+  SNAPSHOT_DIR,
+  trashFile,
   unpublishComponent,
 } from './db';
 import { newId } from '../lib/id';
@@ -98,10 +105,25 @@ export async function renameFileAction(form: FormData): Promise<void> {
   revalidatePath('/files');
 }
 
+/** Deletes for good. Only the Trash view offers this; the file menu goes through `trashFileAction`. */
 export async function deleteFileAction(form: FormData): Promise<void> {
   const user = await currentUser();
   if (!user) redirect('/signin');
   deleteFile(String(form.get('id') ?? ''), user.id);
+  revalidatePath('/files');
+}
+
+export async function trashFileAction(form: FormData): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  trashFile(String(form.get('id') ?? ''), user.id);
+  revalidatePath('/files');
+}
+
+export async function restoreFileAction(form: FormData): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  restoreFile(String(form.get('id') ?? ''), user.id);
   revalidatePath('/files');
 }
 
@@ -111,6 +133,140 @@ export async function duplicateFileAction(form: FormData): Promise<void> {
   if (!user) redirect('/signin');
   duplicateFile(String(form.get('id') ?? ''), user.id, newId());
   revalidatePath('/files');
+}
+
+/**
+ * The file menu's Duplicate: the same copy, but the caller gets the new id so
+ * it can open the copy rather than send you back to the dashboard for it.
+ */
+export async function duplicateAndOpenAction(fileId: string): Promise<string | null> {
+  const user = await currentUser();
+  if (!user) return null;
+  const id = duplicateFile(fileId, user.id, newId());
+  revalidatePath('/files');
+  return id;
+}
+
+/** "Add to sidebar" / "Remove from sidebar" in the file menu. */
+export async function setStarredAction(fileId: string, on: boolean): Promise<void> {
+  const user = await currentUser();
+  if (!user) redirect('/signin');
+  setStarred(fileId, user.id, on);
+  revalidatePath('/files');
+}
+
+// ── Version history ──────────────────────────────────────────────────────
+//
+// The sync server keeps a rolling set of document snapshots on disk — one a
+// minute while a file is being edited, plus the state before any wipe. That is
+// already a version history; these actions are how the editor reads it, and
+// how a person adds a named entry of their own.
+
+export interface FileVersion {
+  /** the on-disk stamp, which is also the handle for reading it back */
+  stamp: string;
+  /** when it was written, in ms */
+  at: number;
+  /** a name the person who saved it gave it, or null for an automatic one */
+  name: string | null;
+  /** an automatic snapshot the server pinned because the next save wiped the document */
+  kept: boolean;
+  bytes: number;
+}
+
+/** A snapshot file's stamp is an ISO time with the punctuation made path-safe. */
+function stampToTime(stamp: string): number {
+  const iso = stamp.replace(/T(\d\d)-(\d\d)-(\d\d)-(\d\d\d)Z$/, 'T$1:$2:$3.$4Z');
+  const time = Date.parse(iso);
+  return Number.isNaN(time) ? 0 : time;
+}
+
+/** The suffix a named snapshot carries after its stamp. */
+const NAMED = '__named__';
+
+/** Anyone who can open the file may look at its history; a link visitor included. */
+async function canSeeFile(fileId: string): Promise<boolean> {
+  const user = await currentUser();
+  const file = user ? getFileFor(fileId, user.id) : undefined;
+  return Boolean(file ?? getFileByLink(fileId));
+}
+
+export async function listVersionsAction(fileId: string): Promise<FileVersion[]> {
+  if (!fileId || !(await canSeeFile(fileId))) return [];
+  const prefix = `${encodeURIComponent(fileId)}__`;
+  let names: string[];
+  try {
+    names = fs.readdirSync(SNAPSHOT_DIR).filter((f) => f.startsWith(prefix) && f.endsWith('.bin'));
+  } catch {
+    return [];
+  }
+  const versions: FileVersion[] = [];
+  for (const file of names) {
+    const rest = file.slice(prefix.length, -4);
+    const named = rest.indexOf(NAMED);
+    const kept = rest.endsWith('__keep');
+    const stamp = named >= 0 ? rest.slice(0, named) : kept ? rest.slice(0, -'__keep'.length) : rest;
+    let bytes = 0;
+    try {
+      bytes = fs.statSync(path.join(SNAPSHOT_DIR, file)).size;
+    } catch {
+      continue;
+    }
+    versions.push({
+      stamp,
+      at: stampToTime(stamp),
+      name: named >= 0 ? decodeURIComponent(rest.slice(named + NAMED.length)) : null,
+      kept,
+      bytes,
+    });
+  }
+  return versions.sort((a, b) => b.at - a.at);
+}
+
+/** The snapshot's bytes, base64-encoded — the client turns them into a document. */
+export async function readVersionAction(fileId: string, stamp: string): Promise<string | null> {
+  if (!fileId || !stamp || !(await canSeeFile(fileId))) return null;
+  // the stamp is a path segment written by us; anything else is not one
+  if (!/^[0-9TZ-]+$/.test(stamp)) return null;
+  const prefix = `${encodeURIComponent(fileId)}__${stamp}`;
+  try {
+    const match = fs
+      .readdirSync(SNAPSHOT_DIR)
+      .find((f) => f.startsWith(prefix) && f.endsWith('.bin') && f.slice(prefix.length).match(/^(__keep|__named__.*)?\.bin$/));
+    if (!match) return null;
+    return fs.readFileSync(path.join(SNAPSHOT_DIR, match)).toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A named version, written by the person editing rather than the timer.
+ *
+ * The Next.js process holds no live document — the sync server does — so the
+ * client sends the encoded state it already has. Named snapshots carry their
+ * name in the filename and are never rotated: the point of naming one is that
+ * it is still there next month.
+ */
+export async function saveVersionAction(fileId: string, name: string, base64: string): Promise<FileVersion | null> {
+  const user = await currentUser();
+  if (!user) return null;
+  const file = getFileFor(fileId, user.id);
+  if (!file || !canEdit(roleOf(file.role))) return null;
+  const label = name.trim().slice(0, 80);
+  if (!label || !base64 || base64.length > 40_000_000) return null;
+  const bytes = Buffer.from(base64, 'base64');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  try {
+    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(SNAPSHOT_DIR, `${encodeURIComponent(fileId)}__${stamp}${NAMED}${encodeURIComponent(label)}.bin`),
+      bytes,
+    );
+  } catch {
+    return null;
+  }
+  return { stamp, at: stampToTime(stamp), name: label, kept: false, bytes: bytes.length };
 }
 
 /**
