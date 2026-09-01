@@ -227,7 +227,7 @@ function Basics({
           </FigButton>
         </span>
         {moreDecoration && (
-          <FigPopover anchor={anchor} width={170} variant="dark" onClose={() => setMoreDecoration(false)}>
+          <FigPopover anchor={anchor} width={170} onClose={() => setMoreDecoration(false)}>
             <ul role="listbox" aria-label="Underline style" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
               {(['solid', 'double', 'dashed', 'dotted', 'wavy'] as const).map((style) => (
                 <li key={style}>

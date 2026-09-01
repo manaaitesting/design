@@ -119,10 +119,18 @@ export const Icon = {
       <path d="M4 9.5V9C4 7.34315 5.34315 6 7 6H17M17 6L14.5 3.5M17 6L14.5 8.5M20 14.5V15C20 16.6569 18.6569 18 17 18H7M7 18L9.5 20.5M7 18L9.5 15.5" />
     </Svg24>
   ),
-  /** coolicons — Edit / Move */
+  /**
+   * The pan tool, and every design tool draws it as a hand.
+   *
+   * This borrowed coolicons' four-way move cross, which is the wrong mark
+   * twice over: a cross of arrows means "drag what is selected" — the Move
+   * tool one row up in the same flyout — and it left the rail with two cursors
+   * and no hand. Drawn on the same 24 grid, with the set's caps and joins, so
+   * it sits with the rest of the tools.
+   */
   Hand: () => (
     <Svg24>
-      <path d="M12 21V12M9 18L12 21L15 18M12 12V3M12 12H3M12 12H21M15 6L12 3L9 6M6 9L3 12L6 15M18 15L21 12L18 9" />
+      <path d="M17.5 10.5V6.5a1.75 1.75 0 0 0-3.5 0V10M14 9.5V5a1.75 1.75 0 0 0-3.5 0v5M10.5 10V6a1.75 1.75 0 0 0-3.5 0v8.5M17.5 8.75a1.75 1.75 0 1 1 3.5 0V14a7 7 0 0 1-7 7h-1.6c-2.2 0-3.6-.7-4.9-2L4.2 15.7a1.75 1.75 0 0 1 2.5-2.5l1.8 1.8" />
     </Svg24>
   ),
   /** coolicons — Edit / Table */
@@ -277,11 +285,20 @@ export const Icon = {
       <path d="M13 3.00087C12.9045 3 12.7973 3 12.6747 3H8.2002C7.08009 3 6.51962 3 6.0918 3.21799C5.71547 3.40973 5.40973 3.71547 5.21799 4.0918C5 4.51962 5 5.08009 5 6.2002V17.8002C5 18.9203 5 19.4801 5.21799 19.9079C5.40973 20.2842 5.71547 20.5905 6.0918 20.7822C6.51921 21 7.079 21 8.19694 21L15.8031 21C16.921 21 17.48 21 17.9074 20.7822C18.2837 20.5905 18.5905 20.2842 18.7822 19.9079C19 19.4805 19 18.9215 19 17.8036V9.32568C19 9.20296 19 9.09561 18.9991 9M13 3.00087C13.2856 3.00347 13.4663 3.01385 13.6388 3.05526C13.8429 3.10425 14.0379 3.18526 14.2168 3.29492C14.4186 3.41857 14.5918 3.59182 14.9375 3.9375L18.063 7.06298C18.4089 7.40889 18.5809 7.58136 18.7046 7.78319C18.8142 7.96214 18.8953 8.15726 18.9443 8.36133C18.9857 8.53376 18.9963 8.71451 18.9991 9M13 3.00087V5.8C13 6.9201 13 7.47977 13.218 7.90759C13.4097 8.28392 13.7155 8.59048 14.0918 8.78223C14.5192 9 15.079 9 16.1969 9H18.9991M18.9991 9H19.0002" />
     </Svg24>
   ),
-  /** coolicons — Interface / Slider_01 */
+  /**
+   * The settings glyph: two sliders, each with its knob at its own height.
+   *
+   * coolicons' Slider_01 puts both tracks and both knobs on a 24 grid built
+   * for 24px, and at 16 the two knobs and four track stubs collapse into a
+   * smudge. Figma draws the same idea upright with far less in it, which is
+   * what this is: two tracks, two knobs, nothing else.
+   */
   Sliders: () => (
-    <Svg24>
-      <path d="M14 15H21M3 15H5M5 15C5 16.3807 6.11929 17.5 7.5 17.5C8.88071 17.5 10 16.3807 10 15C10 13.6193 8.88071 12.5 7.5 12.5C6.11929 12.5 5 13.6193 5 15ZM20 9H21M3 9H10M16.5 11.5C15.1193 11.5 14 10.3807 14 9C14 7.61929 15.1193 6.5 16.5 6.5C17.8807 6.5 19 7.61929 19 9C19 10.3807 17.8807 11.5 16.5 11.5Z" />
-    </Svg24>
+    <Svg size={14}>
+      <path d="M5.5 2.6v3.1M5.5 8.9v4.5M10.5 2.6v6.6M10.5 12.4v1" />
+      <circle cx={5.5} cy={7.3} r={1.6} />
+      <circle cx={10.5} cy={10.8} r={1.6} />
+    </Svg>
   ),
   Corners: () => (
     <Svg size={14}>
@@ -302,11 +319,19 @@ export const Icon = {
       <path d="M5.4 12.5a3 3 0 0 0-1-2.3" strokeWidth={1} />
     </Svg>
   ),
+  /**
+   * Lock aspect ratio — a link, which is what Figma puts between W and H.
+   *
+   * Two nested boxes is the mark this drew, and two nested boxes is also
+   * StrokeStyle, StrokeInLayout and the stacking glyph; nothing about it said
+   * "these two fields move together".
+   */
   AspectLock: () => (
-    <Svg size={14}>
-      <rect x={3} y={3} width={7} height={7} rx={1.2} />
-      <path d="M6 12.9h4.8a1.2 1.2 0 0 0 1.2-1.2V6.9" />
-    </Svg>
+    // the same link the text panel uses, one size down: two drawings of a
+    // chain in one panel would only look like two different marks
+    <Svg24 size={14}>
+      <path d="M9.1718 14.8288L14.8287 9.17192M7.05086 11.293L5.63664 12.7072C4.07455 14.2693 4.07409 16.8022 5.63619 18.3643C7.19829 19.9264 9.7317 19.9259 11.2938 18.3638L12.7065 16.9498M11.2929 7.05L12.7071 5.63579C14.2692 4.07369 16.8016 4.07397 18.3637 5.63607C19.9258 7.19816 19.9257 9.73085 18.3636 11.2929L16.9501 12.7071" />
+    </Svg24>
   ),
   FlipH: () => (
     <Svg size={14}>
@@ -458,9 +483,18 @@ export const Icon = {
       <path d="M9 2.5V6a3 3 0 0 1-3 3H2.5" />
     </Svg>
   ),
+  /**
+   * Stroke weight, drawn the way Figma draws it: three rules that get heavier.
+   *
+   * Three rules of the *same* weight is a list glyph, and that is what this
+   * read as beside the alignment row — the one thing the field it labels is
+   * about was the one thing the mark did not show.
+   */
   StrokeWeight: () => (
     <Svg size={13}>
-      <path d="M2.6 4h10.8M2.6 8h10.8M2.6 12h10.8" strokeWidth={1} />
+      <path d="M2.6 3.7h10.8" strokeWidth={0.75} />
+      <path d="M2.6 7.6h10.8" strokeWidth={1.7} />
+      <path d="M2.6 12h10.8" strokeWidth={2.9} />
     </Svg>
   ),
   StrokeStyle: () => (
@@ -561,11 +595,18 @@ export const Icon = {
       <rect x={7.4} y={7.4} width={4.6} height={4.6} rx={1} fill="currentColor" strokeWidth={0} />
     </Svg>
   ),
-  /** Text baseline alignment — glyphs sitting on a shared rule. */
+  /**
+   * Text baseline alignment — two glyphs sitting on one rule.
+   *
+   * The second glyph was a bare vertical stroke, so beside the A the mark read
+   * as the letters "AI" rather than as two letters sharing a baseline. A round
+   * letter is unmistakably a letter and sits on the rule the same way.
+   */
   Baseline: () => (
     <Svg size={14}>
-      <path d="M2.4 12.2h11.2" strokeWidth={1.4} />
-      <path d="M4 9.6 5.8 4.4h.4l1.8 5.2M4.6 8.2h3M10.2 9.6V5" strokeWidth={1.1} />
+      <path d="M1.6 10.5h10.8" strokeWidth={1.5} />
+      <path d="M2.6 9.2 4.9 3.4h.3l2.3 5.8M3.4 7.7h3.3" strokeWidth={1.1} />
+      <circle cx={9.9} cy={7.5} r={1.7} strokeWidth={1.1} />
     </Svg>
   ),
   /** Canvas stacking — which of two overlapping siblings paints in front. */
@@ -606,7 +647,20 @@ export const Icon = {
       <path d="M5.2 13.6h6.6a2 2 0 0 0 2-2V5.2" strokeWidth={2} opacity={0.45} />
     </Svg>
   ),
-  LayerBlur: () => <Svg>{grid(3, 1.05)}</Svg>,
+  /**
+   * Layer blur: the layer's own edge going soft.
+   *
+   * This was `grid(3)` and Texture is `grid(4)` — the same dot field at two
+   * steps — so the add-effect menu offered two entries that looked alike and
+   * neither of them looked like blur. A disc whose edge dissolves does.
+   */
+  LayerBlur: () => (
+    <Svg>
+      <path d="M8 2.6a5.4 5.4 0 0 0 0 10.8" />
+      <path d="M8 2.6a5.4 5.4 0 0 1 0 10.8" strokeDasharray="1.5 1.6" />
+      <path d="M8 5.2a2.8 2.8 0 0 1 0 5.6" strokeDasharray="1.2 1.5" opacity={0.55} />
+    </Svg>
+  ),
   BackgroundBlur: () => (
     <Svg>
       <rect x={2.6} y={2.6} width={10.8} height={10.8} rx={1.6} />
@@ -615,10 +669,11 @@ export const Icon = {
   ),
   Noise: () => <Svg>{scatter()}</Svg>,
   Texture: () => <Svg>{grid(4, 0.7)}</Svg>,
+  /** Glass: a pane with the two highlight bands that read as glossy. */
   Glass: () => (
     <Svg>
-      <circle cx={8} cy={8} r={5.4} />
-      <path d="M5.2 10.8a4 4 0 0 0 5.6-5.6" opacity={0.55} />
+      <rect x={2.6} y={2.6} width={10.8} height={10.8} rx={2.6} />
+      <path d="M4.5 10.5 10.5 4.5M8 13.1l5.1-5.1" strokeWidth={1.5} opacity={0.5} />
     </Svg>
   ),
   Waves: () => (
@@ -639,6 +694,33 @@ export const Icon = {
     <Svg>
       <path d="M8 2.4 4.9 6.6a3.9 3.9 0 1 0 6.2 0L8 2.4Z" />
     </Svg>
+  ),
+  /**
+   * Copy colors — the eyedropper at the foot of the tool rail.
+   *
+   * Figma's own pipette is a filled 24px mark, and dropped into a rail of
+   * outlined coolicons at 16 it read as a solid diagonal smear — a pencil,
+   * most people said. Drawn on the rail's grid instead: a bulb, a ferrule, a
+   * barrel and the drip at its tip.
+   */
+  Eyedropper: () => (
+    <Svg24>
+      <path d="M18.5 5.5a2.1 2.1 0 0 0-3 0l-2.6 2.6-.9-.9a1 1 0 0 0-1.4 1.4l4.8 4.8a1 1 0 0 0 1.4-1.4l-.9-.9 2.6-2.6a2.1 2.1 0 0 0 0-3Z" />
+      <path d="M12.4 10.9 5 18.3l-.7 2.4 2.4-.7 7.4-7.4Z" />
+    </Svg24>
+  ),
+  /**
+   * Actions — the command menu, whose shortcut is ⌘/.
+   *
+   * Figma marks it with a diamond, a circle, a square and a plus, which at
+   * 16px is four small unrelated shapes and no idea. The loop is the mark on
+   * the key the shortcut names.
+   */
+  /** coolicons — Interface / Command */
+  Command: () => (
+    <Svg24>
+      <path d="M9 15V18C9 19.6569 7.65685 21 6 21C4.34315 21 3 19.6569 3 18C3 16.3431 4.34315 15 6 15H9ZM9 15H15M9 15V9M15 15V18C15 19.6569 16.3431 21 18 21C19.6569 21 21 19.6569 21 18C21 16.3431 19.6569 15 18 15H15ZM15 15V9M15 9H9M15 9V6C15 4.34315 16.3431 3 18 3C19.6569 3 21 4.34315 21 6C21 7.65685 19.6569 9 18 9H15ZM9 9V6C9 4.34315 7.65685 3 6 3C4.34315 3 3 4.34315 3 6C3 7.65685 4.34315 9 6 9H9Z" />
+    </Svg24>
   ),
   /** coolicons — Menu / More_Horizontal */
   Dots: () => (
@@ -771,36 +853,49 @@ export const Icon = {
       <rect x={11} y={3} width={3} height={3} fill="#fff" strokeWidth={1.2} />
     </Svg>
   ),
-  /** Boolean operations, drawn the way Figma draws them: two overlapping discs. */
-  Boolean: ({ op }: { op: 'union' | 'subtract' | 'intersect' | 'exclude' }) => (
-    <Svg>
-      {op === 'union' && (
-        <path
-          d="M6.2 3.4a2.8 2.8 0 0 0-2.8 2.8v3.6a2.8 2.8 0 0 0 2.8 2.8h3.6a2.8 2.8 0 0 0 2.8-2.8V6.2a2.8 2.8 0 0 0-2.8-2.8H6.2Z"
-          fill="currentColor"
-          fillOpacity={0.25}
-        />
-      )}
-      {op !== 'union' && (
-        <>
-          <rect x={2.6} y={2.6} width={7.2} height={7.2} rx={1.4} />
-          <rect x={6.2} y={6.2} width={7.2} height={7.2} rx={1.4} />
-        </>
-      )}
-      {op === 'intersect' && (
-        <rect x={6.2} y={6.2} width={3.6} height={3.6} fill="currentColor" strokeWidth={0} />
-      )}
-      {op === 'subtract' && (
-        <path d="M2.6 4a1.4 1.4 0 0 1 1.4-1.4h4.4A1.4 1.4 0 0 1 9.8 4v2.2H6.2v3.6H4A1.4 1.4 0 0 1 2.6 8.4V4Z" fill="currentColor" fillOpacity={0.3} strokeWidth={0} />
-      )}
-      {op === 'exclude' && (
-        <>
-          <path d="M2.6 4a1.4 1.4 0 0 1 1.4-1.4h4.4A1.4 1.4 0 0 1 9.8 4v2.2H6.2v3.6H4A1.4 1.4 0 0 1 2.6 8.4V4Z" fill="currentColor" fillOpacity={0.3} strokeWidth={0} />
-          <path d="M9.8 6.2h2.2a1.4 1.4 0 0 1 1.4 1.4V12a1.4 1.4 0 0 1-1.4 1.4H7.6A1.4 1.4 0 0 1 6.2 12V9.8h3.6V6.2Z" fill="currentColor" fillOpacity={0.3} strokeWidth={0} />
-        </>
-      )}
-    </Svg>
-  ),
+  /**
+   * Boolean operations, drawn the way Figma draws them: two overlapping
+   * squares with the *result* filled solid.
+   *
+   * Union used to be a single rounded square at 25% — one shape, so the one
+   * thing the mark had to say (two shapes became one) was the thing it lost —
+   * and the other three were washed-out outlines that were hard to tell apart
+   * in a four-button group. Both squares are always outlined now, and the
+   * region the operation keeps is filled at full strength.
+   */
+  Boolean: ({ op }: { op: 'union' | 'subtract' | 'intersect' | 'exclude' }) => {
+    /* A alone, minus the overlap: the L the subtract and exclude marks keep */
+    const cutA = 'M4 2.6h4.4A1.4 1.4 0 0 1 9.8 4v2.2H6.2v3.6H4A1.4 1.4 0 0 1 2.6 8.4V4A1.4 1.4 0 0 1 4 2.6Z';
+    /* and B alone, its mirror */
+    const cutB = 'M9.8 6.2H12a1.4 1.4 0 0 1 1.4 1.4V12a1.4 1.4 0 0 1-1.4 1.4H7.6A1.4 1.4 0 0 1 6.2 12V9.8h3.6V6.2Z';
+    const solid = { fill: 'currentColor', strokeWidth: 0 } as const;
+    return (
+      <Svg>
+        {op === 'union' ? (
+          // the merged silhouette, as one filled outline
+          <path
+            d="M4 2.6h4.4A1.4 1.4 0 0 1 9.8 4v2.2H12a1.4 1.4 0 0 1 1.4 1.4V12a1.4 1.4 0 0 1-1.4 1.4H7.6A1.4 1.4 0 0 1 6.2 12V9.8H4A1.4 1.4 0 0 1 2.6 8.4V4A1.4 1.4 0 0 1 4 2.6Z"
+            {...solid}
+          />
+        ) : (
+          <>
+            <rect x={2.6} y={2.6} width={7.2} height={7.2} rx={1.4} />
+            <rect x={6.2} y={6.2} width={7.2} height={7.2} rx={1.4} />
+            {op === 'subtract' && <path d={cutA} {...solid} />}
+            {op === 'intersect' && (
+              <path d="M7.6 6.2h2.2v2.2A1.4 1.4 0 0 1 8.4 9.8H6.2V7.6a1.4 1.4 0 0 1 1.4-1.4Z" {...solid} />
+            )}
+            {op === 'exclude' && (
+              <>
+                <path d={cutA} {...solid} />
+                <path d={cutB} {...solid} />
+              </>
+            )}
+          </>
+        )}
+      </Svg>
+    );
+  },
   /** A mask: the shape below deciding what of the layer above shows. */
   Mask: () => (
     <Svg>

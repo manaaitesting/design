@@ -32,13 +32,6 @@ import {
   unpublishComponent,
 } from './db';
 import { newId } from '../lib/id';
-import {
-  compareVersion,
-  listVersions,
-  restoreVersion,
-  type Version,
-  type VersionDiff,
-} from './history';
 
 const COLORS = ['#BDEE63', '#5B8DEF', '#F2637F', '#F5A623', '#9B7BF0', '#27C4A6', '#EF6C3E', '#4CC3F0'];
 const ADJECTIVES = ['Refined', 'Quiet', 'Amber', 'Northern', 'Folded', 'Bright', 'Soft', 'Open'];
@@ -198,46 +191,6 @@ export async function moveFileAction(fileId: string, folderId: string): Promise<
   if (!user) redirect('/signin');
   moveFileToFolder(fileId, user.id, folderId || null);
   revalidatePath('/files');
-}
-
-// ── Version history ──────────────────────────────────────────────────────
-//
-// The sync server keeps snapshots on disk; these put them behind the editor.
-// Both check membership first — a room id is not authorisation.
-
-export async function listVersionsAction(fileId: string): Promise<Version[]> {
-  const user = await currentUser();
-  if (!user) return [];
-  if (!getFileFor(fileId, user.id)) return [];
-  return listVersions(fileId);
-}
-
-export async function compareVersionAction(
-  fileId: string,
-  stamp: string,
-): Promise<VersionDiff | null> {
-  const user = await currentUser();
-  if (!user) return null;
-  if (!getFileFor(fileId, user.id)) return null;
-  return compareVersion(fileId, stamp);
-}
-
-export async function restoreVersionAction(
-  fileId: string,
-  stamp: string,
-): Promise<{ restored?: number; error?: string }> {
-  const user = await currentUser();
-  if (!user) return { error: 'Sign in first.' };
-  const file = getFileFor(fileId, user.id);
-  if (!file) return { error: 'You do not have access to that file.' };
-  // restoring writes to the document, so it is an editor's move
-  if (!canEdit(roleOf(file.role))) return { error: 'You have view-only access to this file.' };
-
-  try {
-    return { restored: await restoreVersion(fileId, stamp) };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Could not restore that version.' };
-  }
 }
 
 // ── The shared library ───────────────────────────────────────────────────

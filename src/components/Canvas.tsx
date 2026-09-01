@@ -1107,6 +1107,11 @@ export function Canvas() {
             ? 'transparent'
             : withAlpha(page?.fill ?? '#EEEEEE', page?.fillOpacity ?? 1),
         cursor,
+        // the canvas takes focus on every click, and the browser's default ring
+        // would then draw a blue halo around the whole artboard area. Nothing is
+        // lost by dropping it: `tabIndex={-1}` keeps the canvas out of the tab
+        // order, so the ring only ever appeared for the pointer.
+        outline: 'none',
       }}
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick as unknown as React.MouseEventHandler}

@@ -230,7 +230,6 @@ function commands(doc: Doc, store: ReturnType<typeof useStore>): Entry[] {
     make('prototype', 'Prototype tab', () => ui().setInspectorTab('prototype'), undefined, false),
     make('assets', 'Assets panel', () => ui().setTab('assets'), undefined, false),
     make('variables', 'Variables panel', () => ui().setTab('theme'), undefined, false),
-    make('history', 'Version history', () => ui().setHistoryOpen(true), '⌥⌘H', false),
     make('export', 'Export…', () => ui().setExportOpen(true), '⇧⌘E', false),
     make('present', 'Present', () => {
       const state = ui();

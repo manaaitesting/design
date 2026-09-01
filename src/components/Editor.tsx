@@ -7,10 +7,9 @@ import { ExportDialog } from './ExportDialog';
 import { RenameDialog } from './RenameDialog';
 import { FontFaces } from './FontFaces';
 import { Thumbnail } from './Thumbnail';
-import { History } from './History';
 import { Palette } from './Palette';
 import { Inspector } from './Inspector';
-import { LeftPanel } from './LeftPanel';
+import { CollapsedLeftPanelIsland, LeftPanel } from './LeftPanel';
 import { Present } from './Present';
 import { PromptBar } from './PromptBar';
 import { Resizer } from './Resizer';
@@ -299,7 +298,6 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       if (event.key === 'Escape') {
         if (ui.paletteOpen) ui.setPaletteOpen(false);
         else if (ui.vectorEdit) ui.setVectorEdit(null);
-        else if (ui.historyOpen) ui.setHistoryOpen(false);
         else if (ui.exportOpen) ui.setExportOpen(false);
         else if (ui.shadersOpen) ui.setShadersOpen(false);
         else if (ui.editing) ui.setEditing(null);
@@ -711,12 +709,6 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
         ui.setExportOpen(true);
         return;
       }
-      // ⌥⌘H — the snapshots the sync server has been keeping all along
-      if (mod && event.altKey && event.code === 'KeyH') {
-        event.preventDefault();
-        ui.setHistoryOpen(true);
-        return;
-      }
       // ⇧M — the timeline for the board the selection is on. Figma Motion
       // publishes no shortcut for it, so this follows the panel toggles rather
       // than inventing a modifier: bare, one letter, on the mode's initial.
@@ -918,10 +910,11 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
           onReset={useUI.getState().resetLeftWidth}
         />
       )}
-      {chrome && <ToolRail />}
+      {chrome && leftPanel && <ToolRail />}
       <div style={{ position: 'relative', flex: 1, display: 'flex', minWidth: 0 }}>
         <Canvas />
         <PromptBar />
+        {chrome && !leftPanel && <CollapsedLeftPanelIsland fileName={fileName} />}
         {chrome && <Timeline />}
       </div>
       {chrome && (
@@ -941,7 +934,6 @@ export function Editor({ fileName, room }: { fileName: string; room: string }) {
       <ShadersModal />
       <ExportDialog />
       <RenameDialog />
-      <History />
       <Palette />
       <Present />
     </div>

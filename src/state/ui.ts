@@ -354,10 +354,6 @@ export interface UIState {
   renameOpen: boolean;
   setRenameOpen: (open: boolean) => void;
 
-  /** the version-history panel, read from the sync server's snapshots */
-  historyOpen: boolean;
-  setHistoryOpen: (open: boolean) => void;
-
   /** ⌘/ — every command by name, and every layer by name */
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
@@ -762,7 +758,6 @@ export const useUI = create<UIState>((set) => ({
       presenting: null,
       motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
       paletteOpen: false,
-      historyOpen: false,
       exportOpen: false,
       renameOpen: false,
       shadersOpen: false,
@@ -792,9 +787,6 @@ export const useUI = create<UIState>((set) => ({
 
   renameOpen: false,
   setRenameOpen: (renameOpen) => set({ renameOpen }),
-
-  historyOpen: false,
-  setHistoryOpen: (historyOpen) => set({ historyOpen }),
 
   paletteOpen: false,
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),

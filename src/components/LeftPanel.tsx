@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './ui/Icons';
 import { FigIcon } from './ui/FigIcon';
@@ -197,13 +196,117 @@ function useLayerDrag(rows: Row[], reorderable = true) {
 
 type Drag = ReturnType<typeof useLayerDrag>;
 
+/**
+ * Figma's collapsed left-panel island.
+ *
+ * When the sidebar is hidden there is no mini sidebar — instead a floating
+ * pill shows the main-menu + the project/file name + the sidebar toggle.
+ * Clicking the pill's right half expands the panel again.
+ */
+export function CollapsedLeftPanelIsland({ fileName }: { fileName: string }) {
+  const toggleLeftPanel = useUI((s) => s.toggleLeftPanel);
+  return (
+    <div
+      className="left_panel_island_container--islandContainer--Dn6cB left_panel_island_container--collapsed--qikIv"
+      data-fullscreen-prevent-event-capture="true"
+      style={{ maxWidth: 500 }}
+    >
+      <button
+        data-fpl-component="primitive"
+        aria-label="Main menu"
+        data-onboarding-key="FULLSCREEN_TOGGLE_MENU"
+        data-tooltip="main-menu"
+        data-tooltip-type="lookup"
+        data-tooltip-offset-x="0"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        type="button"
+        tabIndex={0}
+        data-show-focus="true"
+        className="_19xx72g0 toolbar_view--menuButtonNew--7p2v4"
+        title="Main menu"
+      >
+        {/* Figma logo mark */}
+        <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24L" aria-hidden="true">
+          <path
+            fill="currentColor"
+            fillRule="evenodd"
+            d="M7 7c0 1.043.533 1.963 1.341 2.5A3 3 0 0 0 7 12c0 1.043.533 1.963 1.341 2.5A3 3 0 1 0 13 17v-2.764A3 3 0 1 0 16.659 9.5 3 3 0 0 0 15 4h-5a3 3 0 0 0-3 3m8 2a2 2 0 1 0 0-4h-2v4zm-2 3a2 2 0 1 0 4 0 2 2 0 0 0-4 0m-1 2h-2a2 2 0 1 1 0-4h2zm-2 1h2v2a2 2 0 1 1-2-2m2-6h-2a2 2 0 1 1 0-4h2z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+      <span className="left-panel-island-sep" aria-hidden="true" />
+      <button
+        data-fpl-component="primitive"
+        aria-label={`Expand UI for file named ${fileName}`}
+        data-tooltip="Expand UI"
+        data-tooltip-type="text"
+        data-tooltip-shortcut-key="toggle-sidebar"
+        type="button"
+        tabIndex={0}
+        data-show-focus="true"
+        className="_19xx72g0 toggle_expanded_sidebar_button--button--0-Uff"
+        onClick={() => toggleLeftPanel()}
+        title="Expand sidebar"
+      >
+        <div className="design_dev_handoff_collapsed_left_panel_toggle--fileName--ckduo">
+          <div className="filename_view--filenameView--aoEuf">
+            <span className="filename_view--filenameText--ecORB filename_view--enableSecondaryHover--A2zCP filename_view--shouldShowFileMenu--oj9jF">
+              <button
+                data-fpl-component="primitive"
+                data-testid="filename"
+                aria-label={`${fileName}, file name`}
+                type="button"
+                tabIndex={-1}
+                data-show-focus="true"
+                className="_19xx72g0 filename_view--title--EqcWj ellipsis--ellipsis--IdJAr"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleLeftPanel();
+                }}
+              >
+                {fileName}
+              </button>
+              <label htmlFor="filename" className="visually_hidden--visuallyHidden--jaEy6">
+                File name
+              </label>
+              <input
+                className="input--input--lrmjn filename_view--pageTitleInput--IuwUC ellipsis--ellipsis--IdJAr filename_view--hidden--Ssdwc"
+                dir="auto"
+                id="filename"
+                maxLength={100}
+                readOnly
+                tabIndex={-1}
+                aria-hidden="true"
+              />
+            </span>
+          </div>
+        </div>
+        <div>
+          <div className="_14wijgr0" data-fpl-sr-only="true">
+            <div data-fpl-component="primitive" aria-relevant="all" role="status" />
+          </div>
+        </div>
+        <div className="toggle_sidebars_icon_button--nonInteractiveContainer--cJGmd" aria-hidden="true">
+          <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M17.653 7.008A1.5 1.5 0 0 1 19 8.5v7a1.5 1.5 0 0 1-1.347 1.492L17.5 17h-11a1.5 1.5 0 0 1-1.492-1.347L5 15.5v-7A1.5 1.5 0 0 1 6.5 7h11zM6.5 8a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .5.5H9V8zm3.5 8h7.5a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.5-.5H10z"
+            />
+          </svg>
+        </div>
+      </button>
+    </div>
+  );
+}
+
 export function LeftPanel({ fileName }: { fileName: string }) {
   const tab = useUI((s) => s.tab);
   const setTab = useUI((s) => s.setTab);
   /** the layer search: closed by default, as Figma keeps it */
   const [searching, setSearching] = useState(false);
   const [layerQuery, setLayerQuery] = useState('');
-  const toggleLeftPanel = useUI((s) => s.toggleLeftPanel);
   const width = useUI((s) => s.leftWidth);
 
   return (
@@ -221,13 +324,7 @@ export function LeftPanel({ fileName }: { fileName: string }) {
           >
             {fileName}
           </div>
-          <Link href="/files" style={{ color: 'var(--fig-dim)', textDecoration: 'none' }}>
-            All files
-          </Link>
         </div>
-        <button type="button" className="fig-btn" title="Hide panel" onClick={toggleLeftPanel}>
-          <Icon.PanelToggle />
-        </button>
       </div>
 
       <div className="fig-tabs" style={{ height: 32, borderTop: '1px solid var(--fig-line)' }}>

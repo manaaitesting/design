@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 import { Icon } from './Icons';
 import { FigIcon } from './FigIcon';
 import { PaintPicker, type PaintType } from './PaintPicker';
+import { paintIsTypable, paintLabel } from './color';
 import { BLEND_MODES, blendLabel } from './blend';
 
 /**
@@ -25,20 +26,22 @@ import { BLEND_MODES, blendLabel } from './blend';
  * scroll container — the menu appears cut off against the panel edge instead of
  * floating over the canvas. Figma's dialogs live outside the panel; these do too.
  */
-const POPOVER_LOOK: Record<'menu' | 'dark' | 'card', CSSProperties> = {
+/**
+ * Every floating thing the panel opens is one white card.
+ *
+ * Figma has a second, dark menu for the choices that belong to the canvas —
+ * blend modes, the effect list — and carrying that over left the inspector
+ * opening two different-looking surfaces from adjacent buttons, one of them
+ * over the rows it was about to be checked against. There is one surface now:
+ * white, rounded, shadowed, opened beside the panel. `card` is the same
+ * surface with its own header and padding, so it drops the list's inset.
+ */
+const POPOVER_LOOK: Record<'menu' | 'card', CSSProperties> = {
   menu: {
     background: '#fff',
-    borderRadius: 6,
-    padding: 4,
-    boxShadow: '0 0 0 1px rgba(0,0,0,0.08), 0 8px 24px -6px rgba(0,0,0,0.24)',
-  },
-  dark: {
-    background: '#1e1e1e',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 6,
-    color: '#fff',
-    boxShadow:
-      '0 0 0 0.5px rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.25), 0 10px 34px rgba(0,0,0,0.4)',
+    boxShadow: '0 0 0 1px rgba(0,0,0,0.06), 0 12px 32px -8px rgba(0,0,0,0.28)',
   },
   card: {
     background: '#fff',
@@ -53,7 +56,7 @@ export function FigPopover({
   onClose,
   width = 190,
   align = 'right',
-  placement = 'below',
+  placement = 'beside',
   variant = 'menu',
   maxHeight,
   children,
@@ -71,18 +74,15 @@ export function FigPopover({
    */
   maxHeight?: number;
   /**
-   * 'below' hangs the menu off the button. 'beside' puts it outside the
-   * inspector entirely, to the panel's left — which is where Figma opens its
-   * styles-and-variables dialog, so it never covers the rows you are editing.
+   * 'beside' — the default — puts the popover outside the inspector entirely,
+   * to the panel's left, so it never covers the rows you opened it to change.
+   * Only a popover anchored inside the panel has a panel to sit beside; one
+   * opened anywhere else falls back to hanging off its button, which is what
+   * 'below' asks for explicitly.
    */
   placement?: 'below' | 'beside';
-  /**
-   * 'menu' is the white list Figma hangs off a panel button. 'dark' is the
-   * floating menu it uses for choices that belong to the canvas rather than the
-   * panel — blend modes, the effect types. 'card' is a settings dialog, which
-   * brings its own header and padding.
-   */
-  variant?: 'menu' | 'dark' | 'card';
+  /** 'menu' is a list; 'card' is a dialog that brings its own header and padding. */
+  variant?: 'menu' | 'card';
   children: ReactNode;
 }) {
   const [box, setBox] = useState<{ left: number; top: number } | null>(null);
@@ -149,13 +149,13 @@ export function FigPopover({
         // the 8px matches the gap `place()` leaves below a popover it has had
         // to lift; any more and a dialog that exactly fits grows its own
         // scrollbar, which is what put two of them in the font picker
-        maxHeight: `min(${maxHeight ?? (variant === 'dark' ? 600 : 420)}px, calc(100vh - ${box.top + 8}px))`,
+        maxHeight: `min(${maxHeight ?? 480}px, calc(100vh - ${box.top + 8}px))`,
         overflowY: 'auto',
         ...POPOVER_LOOK[variant],
         zIndex: 90,
       }}
       // portalled to the body, so it has to bring the panel's variables with it
-      className={`fig-shell${variant === 'dark' ? ' fig-menu-dark' : ''}`}
+      className="fig-shell"
     >
       {children}
     </div>,
@@ -444,10 +444,10 @@ export function FigSelect<T extends string>({
   /**
    * Open to the left of the panel rather than under the field.
    *
-   * A long menu hanging off a row halfway down the inspector covers the rows
-   * you are about to check it against, and near the foot of the panel it has
-   * nowhere to hang at all. Anything with more than a handful of entries goes
-   * beside the panel by default, the way the font picker and the style menu do.
+   * A menu hanging off a row halfway down the inspector covers the rows you
+   * are about to check it against, and near the foot of the panel it has
+   * nowhere to hang at all. Every select in the panel opens beside it; pass
+   * false for one that should hang off its field instead.
    */
   beside?: boolean;
 }) {
@@ -464,7 +464,7 @@ export function FigSelect<T extends string>({
    * nothing — the menu is measured first, then placed above the field if that
    * is where it fits, and nudged up if neither side has room.
    */
-  const aside = beside ?? options.length > 8;
+  const aside = beside ?? true;
 
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
@@ -534,9 +534,9 @@ export function FigSelect<T extends string>({
             maxHeight: '58vh',
             overflowY: 'auto',
             background: '#fff',
-            borderRadius: 6,
-            padding: 4,
-            boxShadow: '0 0 0 1px rgba(0,0,0,0.08), 0 8px 24px -6px rgba(0,0,0,0.24)',
+            borderRadius: 12,
+            padding: 6,
+            boxShadow: '0 0 0 1px rgba(0,0,0,0.06), 0 12px 32px -8px rgba(0,0,0,0.28)',
             zIndex: 240,
             fontSize: 11,
           }}
@@ -684,7 +684,11 @@ export function FigPaintRow({
   const swatch = useRef<HTMLButtonElement>(null);
   const checkbox = useId();
   const isHex = !mixed && /^#[0-9a-fA-F]{6}$/.test(color);
-  const hex = mixed ? 'Mixed' : isHex ? color.slice(1).toUpperCase() : color;
+  // the field names the paint — a hex, a variable, or Linear / Radial / Image
+  const label = mixed ? 'Mixed' : paintLabel(color);
+  // a Mixed row still takes a typed hex — that is how one colour is made to
+  // settle every selected layer — so only a gradient or an image locks the field
+  const typable = mixed || paintIsTypable(color);
 
   // Fill keeps swatch, hex and opacity in one box; Selection colors gives the
   // opacity a box of its own, which is what `alphaField` switches on.
@@ -743,7 +747,7 @@ export function FigPaintRow({
           ref={swatch}
           type="button"
           className="fig-swatch"
-          aria-label={mixed ? 'Mixed paint' : isHex ? `Solid color hex: ${hex}` : 'Paint'}
+          aria-label={mixed ? 'Mixed paint' : isHex ? `Solid color hex: ${label}` : `Paint: ${label}`}
           title="Open the color picker"
           style={{ background: mixed ? 'var(--fig-checker)' : color || '#DDDDDD' }}
           onClick={() => setPicking((v) => !v)}
@@ -772,11 +776,19 @@ export function FigPaintRow({
         )}
         <input
           aria-label="Color"
-          value={draft ?? hex}
+          value={draft ?? label}
           spellCheck={false}
+          // a gradient's label is a name, not a value: typing over it and
+          // blurring would read "Radial" as a colour keyword and flatten the fill
+          readOnly={!typable}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={(e) => {
+            // only what was actually typed is applied: blurring an untouched
+            // row would otherwise read its own label back as a value, and
+            // "Mixed" normalises to the CSS keyword `mixed`
+            const edited = draft !== null;
             setDraft(null);
+            if (!edited || !typable) return;
             const next = normalizeColor(e.target.value);
             if (next) onColor(next);
           }}
@@ -818,7 +830,7 @@ export function FigPaintRow({
   );
 }
 
-/** One row of a dark floating menu — the blend modes, the effect types. */
+/** One row of a floating list — the blend modes, the effect types. */
 export function FigMenuItem({
   label,
   icon,
@@ -858,9 +870,10 @@ export function FigMenuItem({
 /**
  * Blend mode.
  *
- * Figma puts it behind a header icon rather than an inline dropdown, and opens
- * a dark menu over the canvas — the same menu whether it is the layer's blend
- * mode or one effect's, which is why it lives here rather than in the panel.
+ * Figma puts it behind a header icon rather than an inline dropdown, and it is
+ * the same menu whether it is the layer's blend mode or one effect's, which is
+ * why it lives here rather than in the panel. It opens beside the inspector as
+ * a white list, like everything else the panel opens.
  */
 export function FigBlendMenu({
   value,
@@ -886,7 +899,7 @@ export function FigBlendMenu({
         {icon ?? <FigIcon name="Apply blend mode" />}
       </FigButton>
       {open && (
-        <FigPopover anchor={anchor.current} width={190} variant="dark" onClose={() => setOpen(false)}>
+        <FigPopover anchor={anchor.current} width={190} onClose={() => setOpen(false)}>
           <ul role="listbox" aria-label="Blend mode" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
             {BLEND_MODES.map((mode) => (
               <li key={mode.value}>

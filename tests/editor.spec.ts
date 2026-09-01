@@ -4573,8 +4573,9 @@ test.describe('space to pan', () => {
   test('holding space arms the hand tool and pans, and releasing gives it back', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'PanProbe', x: 60, y: 560, w: 120, h: 90 });
     const before = await page.evaluate(() => window.paperlike!.ui.getState().viewport);
+    // the cursor button is a group: the hand appears on it only while armed
     const hand = page.getByRole('button', { name: 'Hand tool' });
-    await expect(hand).not.toHaveAttribute('data-on', 'true');
+    await expect(hand).toHaveCount(0);
 
     await page.mouse.move(700, 500);
     await page.keyboard.down('Space');
@@ -4590,7 +4591,7 @@ test.describe('space to pan', () => {
     expect((await doc(page))[id].x).toBe(60);
 
     await page.keyboard.up('Space');
-    await expect(hand).not.toHaveAttribute('data-on', 'true');
+    await expect(hand).toHaveCount(0);
     // the tool it borrowed from is the tool it hands back
     expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
 
@@ -4618,8 +4619,9 @@ test.describe('space to pan', () => {
 
     await page.keyboard.down('Space');
     await expect(hand).toHaveAttribute('data-on', 'true');
-    // two lit buttons would say two tools are armed
-    await expect(move).not.toHaveAttribute('data-on', 'true');
+    // the hand takes the cursor group's button over rather than lighting a
+    // second one: two lit buttons would say two tools are armed
+    await expect(move).toHaveCount(0);
     await page.keyboard.up('Space');
     await expect(move).toHaveAttribute('data-on', 'true');
   });
@@ -4633,7 +4635,11 @@ test.describe('space to pan', () => {
     await page.keyboard.press('Space');
     // the checkbox toggled, and the canvas did not quietly arm the hand tool
     await expect(checkbox).not.toBeChecked();
-    await expect(page.getByRole('button', { name: 'Hand tool' })).not.toHaveAttribute('data-on', 'true');
+    await expect(page.getByRole('button', { name: 'Hand tool' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Move', exact: true })).toHaveAttribute(
+      'data-on',
+      'true',
+    );
 
     await checkbox.check();
   });

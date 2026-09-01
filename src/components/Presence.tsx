@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { initials } from '../collab/identity';
 import { readableOn } from '../lib/color';
 import { Icon } from './ui/Icons';
-import { useConnected, useDoc, usePresence, useReadOnly, useSession } from './Session';
+import { useDoc, usePresence, useReadOnly, useSession } from './Session';
 import { openingFrame } from '../document/prototype';
 import { ZOOM, useUI, type BooleanView } from '../state/ui';
 import { FigMenuItem, FigPopover } from './ui/Figma';
@@ -219,7 +219,6 @@ export function Presence() {
   const { identity } = useSession();
   const readOnly = useReadOnly();
   const others = usePresence();
-  const connected = useConnected();
   const doc = useDoc();
   const viewport = useUI((s) => s.viewport);
   const [copied, setCopied] = useState(false);
@@ -294,29 +293,7 @@ export function Presence() {
             View only
           </span>
         )}
-
-        <span
-          title={connected ? 'Synced' : 'Offline — edits will sync on reconnect'}
-          style={{
-            marginLeft: 8,
-            width: 6,
-            height: 6,
-            borderRadius: 999,
-            background: connected ? '#34C759' : '#D0D0D0',
-            flex: 'none',
-          }}
-        />
       </div>
-
-      <button
-        type="button"
-        className="fig-btn"
-        title="Version history  ⌥⌘H"
-        aria-label="Version history"
-        onClick={() => useUI.getState().setHistoryOpen(true)}
-      >
-        <Icon.Reset />
-      </button>
 
       <button
         type="button"

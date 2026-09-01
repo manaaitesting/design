@@ -16,9 +16,15 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('the shape flyout arms the tool it names', async ({ page }) => {
-  await page.getByRole('button', { name: 'More shapes' }).click();
+  // the group opens under the pointer — there is no caret to click
+  await page.getByRole('button', { name: 'Rectangle' }).hover();
   await page.getByRole('menuitem', { name: 'Star' }).click();
   expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('star');
+
+  // and the button it opened from is now the star: what you picked is what the
+  // rail shows, and clicking it again arms it without opening anything
+  await expect(page.getByRole('button', { name: 'Star' })).toHaveAttribute('data-on', 'true');
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('move'));
 });
 
 test('drawing with the polygon tool creates a polygon that paints through a path', async ({ page }) => {
@@ -1707,6 +1713,8 @@ test('additional labels write a size under every frame', async ({ page }) => {
 
 test('the Annotate tool pins a note to the layer you click', async ({ page }) => {
   const cover = (await nodeNamed(page, 'Cover'))!;
+  // annotating is handoff, so the rail offers it in Inspect and nowhere else
+  await page.locator('.fig-tab', { hasText: 'Inspect' }).last().click();
   await page.getByRole('button', { name: 'Annotate' }).click();
 
   const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
@@ -1725,11 +1733,14 @@ test('the Annotate tool pins a note to the layer you click', async ({ page }) =>
 });
 
 test('the Measure tool latches the readout that ⌥ gives you', async ({ page }) => {
+  await page.locator('.fig-tab', { hasText: 'Inspect' }).last().click();
   await page.getByRole('button', { name: 'Measure' }).click();
   expect(await page.evaluate(() => window.paperlike!.ui.getState().measuring)).toBe(true);
 
   await page.getByRole('button', { name: 'Move', exact: true }).click();
   expect(await page.evaluate(() => window.paperlike!.ui.getState().measuring)).toBe(false);
+
+  await page.locator('.fig-tab', { hasText: 'Design' }).last().click();
 });
 
 /**

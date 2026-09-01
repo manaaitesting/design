@@ -340,3 +340,60 @@ export function contrastGrades(ratio: number): { label: string; passes: boolean 
     { label: 'AAA Large', passes: ratio >= 4.5 },
   ];
 }
+
+/**
+ * What a paint field says it is.
+ *
+ * Figma *names* a paint rather than printing it: a solid shows its hex, a
+ * gradient shows Linear / Radial / Angular, an image shows Image, and a paint
+ * bound to a variable shows the variable's name. This field printed the CSS
+ * instead, so a gradient fill reported itself as
+ * `radial-gradient(circle at 50% 50%, #DDDDDD 0%, …` — a string that overflows
+ * the box, cannot be read at a glance, and is not something you could edit
+ * there anyway.
+ */
+export function paintLabel(value: string | null | undefined): string {
+  const raw = (value ?? '').trim();
+  if (!raw) return '';
+
+  const reference = /^var\(\s*--([a-zA-Z0-9_-]+)/.exec(raw);
+  if (reference) return reference[1];
+
+  const hex = /^#([0-9a-fA-F]{3,8})$/.exec(raw);
+  if (hex) {
+    const digits = hex[1];
+    const six =
+      digits.length === 3 || digits.length === 4
+        ? digits.slice(0, 3).split('').map((c) => c + c).join('')
+        : digits.slice(0, 6);
+    return six.toUpperCase();
+  }
+
+  const channels = /^rgba?\(([^)]*)\)$/i.exec(raw);
+  if (channels) {
+    const parts = channels[1].match(/-?\d*\.?\d+/g);
+    if (parts && parts.length >= 3) {
+      const [r, g, b] = parts.slice(0, 3).map((part) => Math.round(Number(part)));
+      return rgbToHex(r, g, b).slice(1).toUpperCase();
+    }
+  }
+
+  if (/^repeating-(linear|radial|conic)-gradient\(/i.test(raw)) return 'Pattern';
+  if (/^linear-gradient\(/i.test(raw)) return 'Linear';
+  if (/^radial-gradient\(/i.test(raw)) return 'Radial';
+  if (/^conic-gradient\(/i.test(raw)) return 'Angular';
+  if (/^url\(/i.test(raw)) return 'Image';
+  return raw;
+}
+
+/**
+ * Whether the paint field can be typed into.
+ *
+ * A hex is editable in place; a gradient or an image is not — its label is a
+ * name, and `normalizeColor` would read "Radial" as a CSS colour keyword and
+ * flatten the gradient the moment the field lost focus.
+ */
+export function paintIsTypable(value: string | null | undefined): boolean {
+  const raw = (value ?? '').trim();
+  return !!raw && !/gradient\(/i.test(raw) && !/^url\(/i.test(raw);
+}

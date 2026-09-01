@@ -53,7 +53,7 @@ import {
   type Anchor,
   type HandleMirror,
 } from '../document/geometry';
-import { resolveColor } from './ui/color';
+import { gradientStops, replaceGradientStop, resolveColor } from './ui/color';
 import { measureChildren } from '../lib/measure';
 import {
   customFamilies,
@@ -439,7 +439,6 @@ function TypeMenu({ node }: { node: SceneNode }) {
           anchor={anchor}
           width={262}
           align="left"
-          variant="dark"
           maxHeight={440}
           onClose={() => setOpen(false)}
         >
@@ -525,7 +524,7 @@ function BooleanMenu({ selection, node }: { selection: string[]; node: SceneNode
         </FigButton>
       </span>
       {open && (
-        <FigPopover anchor={anchor} width={210} variant="dark" onClose={() => setOpen(false)}>
+        <FigPopover anchor={anchor} width={210} onClose={() => setOpen(false)}>
           <ul role="listbox" aria-label="Boolean operations" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
             {BOOLEAN_OPS.map((op) => (
               <li key={op.value}>
@@ -3941,7 +3940,6 @@ function FontStyleMenu({
         <FigPopover
           anchor={anchor.current}
           width={210}
-          variant="dark"
           placement="beside"
           onClose={() => setOpen(false)}
         >
@@ -4046,7 +4044,6 @@ function FontSizeField({
         <FigPopover
           anchor={anchor}
           width={110}
-          variant="dark"
           placement="beside"
           onClose={() => setOpen(false)}
         >
@@ -4539,9 +4536,23 @@ function FillSection({
                     }
                   />
                 </div>
-                <div className="fig-row">
-                  <FigText value={paint.value} onChange={(value) => patch(paint.id, { value })} />
-                </div>
+                {/* Figma lists the stops, each with its own swatch and hex.
+                    A single field holding the whole `radial-gradient(circle at
+                    50% 50%, #DDDDDD 0%, …)` string is what this was, and it
+                    reported a fill as a line of CSS nobody can read. */}
+                {gradientStops(paint.value).map((stop, index) => (
+                  <FigPaintRow
+                    key={index}
+                    color={stop.raw}
+                    alpha={1}
+                    pageColors={swatches}
+                    backdrop={backdrop}
+                    tokens={tokens}
+                    onColor={(value) =>
+                      patch(paint.id, { value: replaceGradientStop(paint.value, index, value) })
+                    }
+                  />
+                ))}
               </>
             )}
 

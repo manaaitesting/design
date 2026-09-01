@@ -293,12 +293,18 @@ select {
     width: 355px;
     flex: none;
     background: #fff;
-    border-left: 1px solid var(--fig-line);
+    border: 1px solid var(--fig-line);
+    border-radius: 12px;
+    margin: 8px 8px 8px 0;
+    overflow: hidden;
     font-size: 11px;
     color: var(--fig-ink);
     display: flex;
     flex-direction: column;
     min-height: 0;
+    /* in a flex row the cross-axis stretch minus the 8+8 outer margin is the height */
+    align-self: stretch;
+    max-height: calc(100% - 16px);
   }
 
   .fig-tabs {
@@ -684,9 +690,11 @@ select {
     outline: none;
   }
 
-  /* ─── Dark floating menus ─────────────────────────────────────────────
-     Blend modes and the add-effect list belong to the canvas rather than the
-     panel, so they take the right-click menu's colours, not the panel's. */
+  /* ─── Floating menus ──────────────────────────────────────────────────
+     Blend modes, the add-effect list, the type menus: one white surface,
+     opened beside the panel. These rows were white-on-dark while the popover
+     they sit in was dark; the popover is light now, so they are too, and the
+     selected row still inverts to white on blue. */
   .fig-menu-item {
     display: flex;
     align-items: center;
@@ -695,9 +703,9 @@ select {
     height: 26px;
     padding: 0 10px 0 6px;
     border: 0;
-    border-radius: 5px;
+    border-radius: 6px;
     background: transparent;
-    color: #fff;
+    color: var(--fig-ink);
     font: inherit;
     font-size: 12px;
     font-weight: 400;
@@ -707,6 +715,7 @@ select {
   }
   .fig-menu-item:hover {
     background: var(--fig-blue);
+    color: #fff;
   }
   /* The tick column. It takes the row's own colour: these menus come in both
      a dark and a light variant, and a mark hard-coded to white is invisible in
@@ -724,16 +733,19 @@ select {
     margin: 5px 6px;
     background: var(--fig-line);
   }
-  .fig-menu-dark .fig-menu-sep {
-    background: rgba(255, 255, 255, 0.12);
-  }
   .fig-menu-tag {
     margin-left: 2px;
     padding: 1px 5px;
     border-radius: 4px;
-    background: rgba(255, 255, 255, 0.16);
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--fig-dim);
     font-size: 10px;
     line-height: 14px;
+  }
+  .fig-menu-item:hover .fig-menu-tag,
+  .fig-menu-item[data-current='true'] .fig-menu-tag {
+    background: rgba(255, 255, 255, 0.22);
+    color: #fff;
   }
 
   /* ─── Effects ─────────────────────────────────────────────────────────
@@ -994,11 +1006,6 @@ select {
     align-items: center;
     padding-top: 8px;
   }
-  .fig-rail-divider {
-    height: 1px;
-    margin: 7px 10px;
-    background: var(--fig-line);
-  }
   /* 28px button plus 7px either side is the rail's full 42px width */
   .fig-tool {
     width: 28px;
@@ -1021,25 +1028,14 @@ select {
     color: var(--fig-blue);
   }
 
-  /* the shape flyout's caret, tucked into the corner of its button */
-  .fig-tool-caret {
-    position: absolute;
-    right: 4px;
-    bottom: 1px;
-    width: 10px;
-    height: 10px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--fig-icon-3);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: default;
+  /* a group of tools, and the menu that the pointer opens over it */
+  .fig-rail-group {
+    position: relative;
+    width: 100%;
   }
-  .fig-tool-caret:hover {
-    color: var(--fig-ink);
-  }
+  /* The rail's menus are dark, the way Figma's own menus are: they sit over
+     the canvas rather than in the chrome, and a black card says so at a glance.
+     A hairline of white keeps the corner off a dark artboard. */
   .fig-flyout {
     position: absolute;
     left: 38px;
@@ -1047,10 +1043,11 @@ select {
     z-index: 60;
     min-width: 168px;
     padding: 5px;
-    background: #fff;
-    border: 1px solid var(--fig-line);
+    background: #1e1e1e;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   }
   .fig-flyout-row {
     width: 100%;
@@ -1062,7 +1059,7 @@ select {
     border: 0;
     border-radius: 5px;
     background: transparent;
-    color: var(--fig-ink);
+    color: #fff;
     font-size: 11px;
     cursor: default;
   }
@@ -1070,6 +1067,7 @@ select {
     background: var(--fig-blue);
     color: #fff;
   }
+  /* the tool the button is showing: blue names it without dimming the rest */
   .fig-flyout-row[data-on='true'] {
     color: var(--fig-blue);
   }
@@ -2750,6 +2748,7 @@ select {
   /* the current size, pinned above the presets and already chosen */
   .fig-menu-item[data-current='true'] {
     background: var(--fig-blue);
+    color: #fff;
   }
 
   .fig-fonts {
@@ -3805,4 +3804,138 @@ select {
 
 .mo-field-row .mo-num {
   width: 62px;
+}
+
+/* ─── Collapsed left-panel island (Figma-style) ──────────────────────────
+   When the left panel is collapsed there is no mini sidebar — instead a
+   floating pill sits over the canvas showing the main-menu + file name +
+   the sidebar toggle, exactly as Figma's collapsed UI does.               */
+.left_panel_island_container--islandContainer--Dn6cB {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: 40px;
+  padding: 4px;
+  background: #2c2c2c;
+  border-radius: 8px;
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.08),
+    0 4px 12px rgba(0, 0, 0, 0.32),
+    0 1px 3px rgba(0, 0, 0, 0.24);
+  color: #fff;
+  user-select: none;
+  pointer-events: auto;
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  max-width: 500px;
+}
+.left_panel_island_container--collapsed--qikIv {
+  /* same visual, collapsed state leaves room for the canvas */
+}
+
+.toolbar_view--menuButtonNew--7p2v4 {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  cursor: default;
+}
+.toolbar_view--menuButtonNew--7p2v4:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.toolbar_view--menuButtonNew--7p2v4 svg {
+  display: block;
+}
+
+.toggle_expanded_sidebar_button--button--0-Uff {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 4px 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: default;
+  min-width: 0;
+}
+.toggle_expanded_sidebar_button--button--0-Uff:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.design_dev_handoff_collapsed_left_panel_toggle--fileName--ckduo {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.filename_view--filenameView--aoEuf {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.filename_view--filenameText--ecORB {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.filename_view--title--EqcWj {
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 0 4px;
+  min-width: 0;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+.ellipsis--ellipsis--IdJAr {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.visually_hidden--visuallyHidden--jaEy6 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.input--input--lrmjn {
+  display: none;
+}
+.toggle_sidebars_icon_button--nonInteractiveContainer--cJGmd {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.7);
+}
+.toggle_sidebars_icon_button--nonInteractiveContainer--cJGmd svg {
+  display: block;
+}
+.left-panel-island-sep {
+  width: 1px;
+  height: 20px;
+  background: rgba(255,255,255,0.14);
+  margin: 0 4px;
+  flex: none;
 }

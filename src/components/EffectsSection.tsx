@@ -92,7 +92,6 @@ export function EffectsSection({
             <FigPopover
               anchor={styleAnchor}
               width={196}
-              variant="dark"
               onClose={() => setStyling(false)}
             >
               <ul role="listbox" aria-label="Effect styles" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
@@ -122,7 +121,6 @@ export function EffectsSection({
             <FigPopover
               anchor={addAnchor}
               width={196}
-              variant="dark"
               onClose={() => setAdding(false)}
             >
               <ul role="listbox" aria-label="Add effect" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
@@ -246,7 +244,7 @@ function EffectDialog({
           <Icon.Caret />
         </button>
         {retyping && (
-          <FigPopover anchor={title} width={196} variant="dark" align="left" onClose={() => setRetyping(false)}>
+          <FigPopover anchor={title} width={196} align="left" onClose={() => setRetyping(false)}>
             <ul role="listbox" aria-label="Effect type" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
               {EFFECT_MENU.map((entry) => (
                 <li key={entry.type}>

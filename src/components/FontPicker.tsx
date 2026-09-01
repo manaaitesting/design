@@ -277,7 +277,6 @@ function FontList({
           <FigPopover
             anchor={gearAnchor.current}
             width={190}
-            variant="dark"
             onClose={() => setGearOpen(false)}
           >
             <ul role="listbox" aria-label="Preview" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
@@ -371,7 +370,6 @@ function FontList({
           anchor={sourceAnchor.current}
           width={200}
           align="left"
-          variant="dark"
           onClose={() => setSourceOpen(false)}
         >
           <ul role="listbox" aria-label="Font source" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
