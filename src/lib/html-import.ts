@@ -43,6 +43,10 @@ export function importDocument(html: string, options: ReadOptions = {}): string 
             Node, which the page has no sight of, so it is defined here as the
             identity it effectively is. -->
        <script>window.__name = window.__name || function (fn) { return fn; };</script>
+       <!-- the canvas sets type in Inter, so the markup is measured in Inter
+            too: a fallback face a few percent narrower would hand every text
+            layer a width it then wraps inside -->
+       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=block">
        <style>
          *, *::before, *::after { box-sizing: border-box; }
          html, body { margin: 0; padding: 0; }
@@ -265,7 +269,9 @@ export function readInPage(doc?: Document): unknown {
 
     const props: Record<string, unknown> = {
       name: named(el, type),
-      w: round(rect.width),
+      // a text box is rounded up: a width a hair short of the glyphs wraps
+      // the last word onto a line of its own
+      w: type === 'text' ? Math.ceil(rect.width) + 1 : round(rect.width),
       h: round(rect.height),
     };
 
