@@ -14,6 +14,10 @@ pnpm seed                         # optional: two demo accounts + a shared file
 pnpm dev                          # Next.js on :3000 + sync server on :1234
 ```
 
+The AI assistant (the ✦ button on the toolbar) designs screens from a
+description or an attached screenshot when `ANTHROPIC_API_KEY` is set in
+`.env.local`; without it, it falls back to a few built-in templates.
+
 Open <http://localhost:3000>. Sign up, or use the seeded accounts
 (`ada@example.com` / `grace@example.com`). Sign in as each in two browser
 profiles to see multiplayer.

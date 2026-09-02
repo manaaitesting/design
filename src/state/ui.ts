@@ -413,7 +413,8 @@ export const PANEL = {
   left: { min: 180, max: 480, base: 241 },
   right: { min: 280, max: 640, base: 355 },
   /** the icon rail, which is not resizable */
-  toolRail: 42,
+  /** the toolbar floats over the canvas now, so it takes no width from it */
+  toolRail: 0,
   /** however hard you drag, this much canvas survives between the panels */
   canvasMin: 240,
   /** each panel is separated from the canvas by a 1px border */

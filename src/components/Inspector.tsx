@@ -76,6 +76,7 @@ import { defaultParams, SHADER_BY_ID, SHADERS } from '../webgl/shaders';
 import {
   descendants,
   isCanvasRoot,
+  isInFlow,
   ROOT_ID,
   type ConditionBranch,
   type Easing,
@@ -414,20 +415,22 @@ function TypeMenu({ node }: { node: SceneNode }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
   const sizeable = node.type === 'frame' || node.type === 'section';
+  // Figma names the selection for what it is to the design system first: a
+  // main component is a "Component" and a copy of one an "Instance", whatever
+  // shape of layer either happens to be
+  const kind = node.isComponent ? 'Component' : node.instanceOf ? 'Instance' : (TYPE_LABEL[node.type] ?? node.type);
 
   return (
     <span ref={setAnchor} style={{ display: 'inline-flex' }}>
       <button
         type="button"
         className="fig-node-type"
-        title={sizeable ? 'Frame dimension presets' : TYPE_LABEL[node.type] ?? node.type}
-        aria-label={
-          sizeable ? `${TYPE_LABEL[node.type] ?? node.type}, frame dimension presets` : undefined
-        }
+        title={sizeable ? 'Frame dimension presets' : kind}
+        aria-label={sizeable ? `${kind}, frame dimension presets` : undefined}
         disabled={!sizeable}
         onClick={() => sizeable && setOpen((v) => !v)}
       >
-        <span>{TYPE_LABEL[node.type] ?? node.type}</span>
+        <span>{kind}</span>
         {sizeable && (
           <span className="fig-caret">
             <Icon.Caret />
@@ -439,7 +442,7 @@ function TypeMenu({ node }: { node: SceneNode }) {
           anchor={anchor}
           width={262}
           align="left"
-          maxHeight={440}
+          maxHeight={560}
           onClose={() => setOpen(false)}
         >
           <ul
@@ -470,7 +473,7 @@ function TypeMenu({ node }: { node: SceneNode }) {
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {preset.name}
                   </span>
-                  <span style={{ color: 'rgba(255,255,255,0.45)', flex: 'none' }}>
+                  <span style={{ flex: 'none', opacity: 0.62, fontVariantNumeric: 'tabular-nums' }}>
                     {preset.w} × {preset.h}
                   </span>
                 </button>
@@ -531,13 +534,13 @@ function BooleanMenu({ selection, node }: { selection: string[]; node: SceneNode
                 <button type="button" className="fig-menu-item" onClick={() => apply(op.value)}>
                   <span className="fig-menu-mark">{isBoolean && node.op === op.value ? '✓' : ''}</span>
                   <span style={{ flex: 1 }}>{op.label}</span>
-                  <span style={{ color: 'rgba(255,255,255,0.45)' }}>{op.shortcut}</span>
+                  <span style={{ flex: 'none', opacity: 0.55 }}>{op.shortcut}</span>
                 </button>
               </li>
             ))}
             {/* Figma keeps Flatten at the foot of this menu: it is the same
                 gesture, applied once and for all rather than kept live. */}
-            <li>
+              <li>
               <button
                 type="button"
                 className="fig-menu-item"
@@ -549,7 +552,7 @@ function BooleanMenu({ selection, node }: { selection: string[]; node: SceneNode
               >
                 <span className="fig-menu-mark" />
                 <span style={{ flex: 1 }}>Flatten</span>
-                <span style={{ color: 'rgba(255,255,255,0.45)' }}>⌘E</span>
+                <span style={{ flex: 'none', opacity: 0.55 }}>⌘E</span>
               </button>
             </li>
           </ul>
@@ -573,13 +576,34 @@ function LayerHeader({ node }: { node: SceneNode }) {
   const select = useUI((s) => s.select);
   const page = useUI((s) => s.page);
   const setVectorEdit = useUI((s) => s.setVectorEdit);
-  const setContextMenu = useUI((s) => s.setContextMenu);
   const many = selection.length > 1;
 
   return (
     <div className="fig-section" style={{ paddingBottom: 8 }}>
       <div className="fig-row" style={{ marginTop: 8 }}>
         {!many && <TypeMenu node={node} />}
+        {!many && (
+          <>
+            <FigButton
+              title="Add layer  ⌘D"
+              onClick={() => {
+                const next = store.duplicate([node.id]);
+                if (next.length) select(next);
+              }}
+            >
+              <Icon.Plus />
+            </FigButton>
+            <FigButton
+              title="Remove layer  ⌫"
+              onClick={() => {
+                store.remove([node.id]);
+                select([]);
+              }}
+            >
+              <Icon.Minus />
+            </FigButton>
+          </>
+        )}
         {/* the layer name lives in the layers panel — the header keeps only
             the actions, so the spacer holds them at the right edge */}
         <div style={{ flex: 1, minWidth: 0 }} />
@@ -620,15 +644,6 @@ function LayerHeader({ node }: { node: SceneNode }) {
           <FigIcon name="Select matching layers" />
         </FigButton>
         <BooleanMenu selection={selection} node={node} />
-        <FigButton
-          title="More actions"
-          onClick={() => {
-            const rect = document.querySelector('.fig')?.getBoundingClientRect();
-            setContextMenu({ x: (rect?.left ?? 0) - 160, y: 120, stack: selection });
-          }}
-        >
-          <Icon.Dots />
-        </FigButton>
       </div>
     </div>
   );
@@ -2298,6 +2313,29 @@ function VectorSection({ node }: { node: SceneNode }) {
   );
 }
 
+/**
+ * Where the browser actually put a layer, in world units and relative to its
+ * parent — what Figma's X/Y/W/H read for a layer whose position or size the
+ * parent decides. A child of an auto layout has no position of its own, and
+ * a layer that hugs or fills has no size of its own: the stored numbers are
+ * stale the moment the parent changes, and only the DOM knows the truth.
+ * A turned layer is left alone: its bounding box is not its box.
+ */
+function measuredBox(node: SceneNode, zoom: number): { x: number; y: number; w: number; h: number } | null {
+  if (typeof document === 'undefined' || node.rotation) return null;
+  const el = document.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`);
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  const parent = node.parent ? document.querySelector<HTMLElement>(`[data-node-id="${node.parent}"]`) : null;
+  const origin = parent?.getBoundingClientRect();
+  return {
+    x: origin ? (rect.left - origin.left) / zoom : node.x,
+    y: origin ? (rect.top - origin.top) / zoom : node.y,
+    w: rect.width / zoom,
+    h: rect.height / zoom,
+  };
+}
+
 function PositionSection({
   node,
   nodes,
@@ -2308,9 +2346,15 @@ function PositionSection({
   set: Setter;
 }) {
   const store = useStore();
+  const doc = useDoc();
+  const zoom = useUI((s) => s.viewport.zoom);
   const selection = useUI((s) => s.selection);
   const [menu, setMenu] = useState(false);
   const menuAnchor = useRef<HTMLSpanElement>(null);
+  // an auto layout places its children, so their X/Y are read back rather
+  // than typed — Figma greys the pair out for the same reason
+  const flowed = nodes.length === 1 && isInFlow(node, doc);
+  const placed = flowed ? measuredBox(node, zoom) : null;
 
   const EDGES = [
     { edge: 'left', title: 'Align left', figma: 'Align left' },
@@ -2406,17 +2450,19 @@ function PositionSection({
         <VarField
           node={node}
           field="x"
-          value={shared(nodes, (n) => n.x)}
+          value={placed ? Math.round(placed.x) : shared(nodes, (n) => n.x)}
           glyph="X"
-          title="X-position"
+          title={flowed ? 'X-position — set by the auto layout' : 'X-position'}
+          disabled={flowed}
           onChange={(x) => set({ x })}
         />
         <VarField
           node={node}
           field="y"
-          value={shared(nodes, (n) => n.y)}
+          value={placed ? Math.round(placed.y) : shared(nodes, (n) => n.y)}
           glyph="Y"
-          title="Y-position"
+          title={flowed ? 'Y-position — set by the auto layout' : 'Y-position'}
+          disabled={flowed}
           onChange={(y) => set({ y })}
         />
         <span style={{ width: 24, flex: 'none' }} />
@@ -2516,6 +2562,7 @@ function VarField({
   max?: number;
   step?: number;
   title?: string;
+  disabled?: boolean;
   /** a control at the field's trailing edge — the size field's preset caret */
   trailing?: React.ReactNode;
   onChange: (value: number) => void;
@@ -2530,7 +2577,7 @@ function VarField({
         {...rest}
         value={value}
         placeholder={label ?? undefined}
-        disabled={!!label}
+        disabled={!!label || rest.disabled}
         onApplyVariable={() => setOpen((v) => !v)}
       />
       {open && <VariableMenu node={node} field={field} onClose={() => setOpen(false)} />}
@@ -2577,6 +2624,9 @@ function LayoutSection({
   const store = useStore();
   const doc = useDoc();
   const zoom = useUI((s) => s.viewport.zoom);
+  // a layer that hugs or fills is sized by its content or its parent; the
+  // field shows what that came to, and typing into it pins the size
+  const sized = nodes.length === 1 && (node.wMode !== 'fixed' || node.hMode !== 'fixed') ? measuredBox(node, zoom) : null;
 
   // only a container can be given a layout of its own
   const sizable = node.type === 'frame' || node.type === 'text';
@@ -2642,7 +2692,38 @@ function LayoutSection({
         )}
       </div>
 
-      {sizable && (
+      {node.type === 'text' && (
+        <FigGroupSet legend="Resizing">
+          {/* Figma's three text boxes: grows with the line, grows down as it
+              wraps, or stays the size you drew — one control instead of two
+              size-mode menus that only make sense together */}
+          <div className="fig-row">
+            <div className="fig-seg" style={{ flex: 1 }}>
+              {(
+                [
+                  ['auto-width', 'Auto width', 'fit', 'fit', <Icon.ArrowRight key="w" />],
+                  ['auto-height', 'Auto height', 'fixed', 'fit', <Icon.ArrowDown key="h" />],
+                  ['fixed', 'Fixed size', 'fixed', 'fixed', <Icon.Square key="f" />],
+                ] as const
+              ).map(([key, label, wMode, hMode, icon]) => (
+                <button
+                  key={key}
+                  type="button"
+                  title={label}
+                  aria-label={label}
+                  data-on={node.wMode === wMode && node.hMode === hMode ? 'true' : undefined}
+                  onClick={() => set({ wMode, hMode })}
+                  style={{ flex: 1 }}
+                >
+                  {icon}
+                </button>
+              ))}
+            </div>
+          </div>
+        </FigGroupSet>
+      )}
+
+      {node.type === 'frame' && (
         <>
           <FigGroupSet legend="Flow">
             <div className="fig-row">
@@ -2712,7 +2793,7 @@ function LayoutSection({
         <VarField
           node={node}
           field="w"
-          value={shared(nodes, (n) => n.w)}
+          value={sized && node.wMode !== 'fixed' ? Math.round(sized.w) : shared(nodes, (n) => n.w)}
           glyph="W"
           min={1}
           title="Width"
@@ -2721,7 +2802,7 @@ function LayoutSection({
         <VarField
           node={node}
           field="h"
-          value={shared(nodes, (n) => n.h)}
+          value={sized && node.hMode !== 'fixed' ? Math.round(sized.h) : shared(nodes, (n) => n.h)}
           glyph="H"
           min={1}
           title="Height"
@@ -4919,7 +5000,7 @@ function GuidesSection({ node, set }: { node: SceneNode; set: Setter }) {
   const guides = node.guides;
   return (
     <FigSection
-      title="Layout grid"
+      title="Layout guide"
       empty={!guides}
       onAdd={() => set({ guides: { ...DEFAULT_GUIDES } })}
       onRemove={() => set({ guides: null })}
@@ -5232,109 +5313,383 @@ function ExportSection({
   const [preview, setPreview] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
-  // the settings live on the layer, so a design carries how it ships
   const rows = node.exports ?? [];
   const write = (next: ExportSetting[]) => set({ exports: next });
   const target = selection.length > 1 ? `${selection.length} layers` : TYPE_LABEL[node.type];
+  const addRow = () =>
+    write([...rows, { id: Math.random().toString(36).slice(2, 8), scale: rows.length ? 1 : 2, format: 'png' }]);
+
+  const handleExport = async () => {
+    if (!rows.length) {
+      onExport();
+      return;
+    }
+    setStatus('Saving…');
+    const result = await runExports(selection.length ? selection : [node.id], {
+      doc,
+      tokens,
+      collections,
+      tokenVars,
+      zoom,
+    });
+    setStatus(result.error ?? `Saved ${result.saved} file${result.saved === 1 ? '' : 's'} to your downloads.`);
+    window.setTimeout(() => setStatus(null), 4000);
+  };
 
   return (
-    <FigSection
-      title="Export"
-      actions={
-        <FigButton
-          title="Add export settings"
-          onClick={() =>
-            write([
-              ...rows,
-              { id: Math.random().toString(36).slice(2, 8), scale: rows.length ? 1 : 2, format: 'png' },
-            ])
-          }
+    <div data-testid="fullscreen-export-panel" className="propertiesPanel" data-non-interactive="true">
+      <div data-keyboard-receiver="49" data-non-interactive="true">
+        <div
+          className="raw_components--singleRow--iiiXl raw_components--_singleRow--GVyF0 raw_components--singleRowHeight--qGJa- raw_components--_row--xMgUA raw_components--row--Oh-jv draggable_list--panelHeaderRow--6-T64 draggable_list--hover---oTHT"
+          data-non-interactive="true"
         >
-          <FigIcon name="Add fill" />
-        </FigButton>
-      }
-    >
-      {rows.map((row) => (
-        <div className="fig-row" key={row.id}>
-          <FigSelect
-            value={String(row.scale)}
-            options={[0.5, 1, 2, 3, 4].map((n) => ({ value: String(n), label: `${n}x` }))}
-            title="Scale"
-            onChange={(value) =>
-              write(rows.map((r) => (r.id === row.id ? { ...r, scale: Number(value) } : r)))
-            }
-          />
-          <FigSelect
-            value={row.format}
-            options={[
-              { value: 'png', label: 'PNG' },
-              { value: 'jpg', label: 'JPG' },
-              { value: 'pdf', label: 'PDF' },
-              { value: 'svg', label: 'SVG' },
-              { value: 'react', label: 'React', divider: true },
-              { value: 'html', label: 'HTML' },
-              { value: 'json', label: 'JSON' },
-            ]}
-            title="Format"
-            onChange={(format) =>
-              write(rows.map((r) => (r.id === row.id ? { ...r, format } : r)))
-            }
-          />
-          <ExportOptions
-            row={row}
-            onChange={(patch) => write(rows.map((r) => (r.id === row.id ? { ...r, ...patch } : r)))}
-          />
-          <FigButton title="Remove" onClick={() => write(rows.filter((r) => r.id !== row.id))}>
-            <FigIcon name="Remove" />
-          </FigButton>
+          <div className="draggable_list--headerRow--ic-45">
+            <div className="panel_title--panelTitle--zUhAR draggable_list--panelTitle---OyBo" tabIndex={-1}>
+              <div className="collapsible_panel--icon--0ni01 collapsible_panel--hiddenIcon--hkSlx" aria-hidden="true">
+                <svg width="16" height="16" fill="none" viewBox="0 0 16 16" data-fpl-icon-size="16">
+                  <path
+                    fill="var(--fpl-icon-color, var(--color-icon))"
+                    d="M6.768 5.525a.5.5 0 0 1 .707 0l2.121 2.121a.5.5 0 0 1 0 .707l-2.121 2.122a.5.5 0 0 1-.707-.708L8.535 8 6.768 6.232a.5.5 0 0 1 0-.707"
+                  />
+                </svg>
+              </div>
+              <h2 className="draggable_list--panelTitleText--fwbvB">Export</h2>
+            </div>
+            <div className="draggable_list--headerControls--qfJ-q">
+              <div className="draggable_list--addPropertyButtonsContainer--VxvHx">
+                <span className="draggable_list--addButton--Vmvbc">
+                  <button
+                    data-fpl-component=""
+                    aria-label="Add export settings"
+                    data-tooltip="Add export settings"
+                    data-tooltip-type="text"
+                    type="button"
+                    tabIndex={0}
+                    className="_19xx72g0 base-icon-button__baseIconButton__TXKzr icon-button__iconButton__CTj-- icon-button__ghost__1ok6j"
+                    onClick={addRow}
+                  >
+                    <span aria-hidden="true" className="base-icon-button__icon__FIIFq">
+                      <svg width="24" height="24" fill="none" viewBox="0 0 24 24" className="draggable_list--addButton--Vmvbc" data-fpl-icon-size="24L">
+                        <path
+                          fill="var(--fpl-icon-color, var(--color-icon))"
+                          fillRule="evenodd"
+                          d="M11.5 6a.5.5 0 0 1 .5.5V11h4.5a.5.5 0 0 1 0 1H12v4.5a.5.5 0 0 1-1 0V12H6.5a.5.5 0 0 1 0-1H11V6.5a.5.5 0 0 1 .5-.5"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                    </span>
+                  </button>
+                </span>
+                <div className="draggable_list--entrypointMenuContainer--XvB-- draggable_list--strong--VDSLw" />
+              </div>
+            </div>
+          </div>
         </div>
-      ))}
+      </div>
 
-      <div className="fig-row">
+      <div style={{ display: 'contents' }}>
+        <div data-fpl-component="primitive" data-fpl-grid-root="true" role="grid">
+          <div className="cachedSubtree">
+            {rows.length === 0 ? (
+              <div
+                role="row"
+                aria-selected="false"
+                data-fpl-grid-row="true"
+                className="ui3_grid_rows--twoInputTwoIconRow--fNAVM ui3_grid_rows--row--lI8oS"
+              >
+                <div
+                  data-fpl-component="primitive"
+                  data-fpl-grid-cell="true"
+                  role="gridcell"
+                  tabIndex={0}
+                  className="_1kmy3qh0 ui3_grid_rows--leftInput--KGWph"
+                >
+                  <div className="displayContents">
+                    <div className="export_panel--splitInputContainer--QhqnU">
+                      <FigSelect
+                        value="1"
+                        options={[0.5, 1, 2, 3, 4].map((n) => ({ value: String(n), label: `${n}x` }))}
+                        title="Scale"
+                        onChange={(value) => write([{ id: Math.random().toString(36).slice(2, 8), scale: Number(value), format: 'png' }])}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div
+                  data-fpl-component="primitive"
+                  data-fpl-grid-cell="true"
+                  role="gridcell"
+                  tabIndex={0}
+                  className="_1kmy3qh0 ui3_grid_rows--rightInput--qlg1j"
+                >
+                  <div className="displayContents">
+                    <FigSelect
+                      value="png"
+                      options={[
+                        { value: 'png', label: 'PNG' },
+                        { value: 'jpg', label: 'JPG' },
+                        { value: 'pdf', label: 'PDF' },
+                        { value: 'svg', label: 'SVG' },
+                        { value: 'react', label: 'React', divider: true },
+                        { value: 'html', label: 'HTML' },
+                        { value: 'json', label: 'JSON' },
+                      ]}
+                      title="Export file type"
+                      onChange={(format) => write([{ id: Math.random().toString(36).slice(2, 8), scale: 1, format }])}
+                    />
+                  </div>
+                </div>
+                <div
+                  data-fpl-component="primitive"
+                  data-fpl-grid-cell="true"
+                  role="gridcell"
+                  tabIndex={0}
+                  className="_1kmy3qh0 ui3_grid_rows--firstRightIcon---me6B"
+                >
+                  <div className="displayContents">
+                    <span className="export_panel--exportSettings--2pbNu">
+                      <button
+                        data-fpl-component=""
+                        aria-label="Advanced export settings"
+                        data-tooltip="Advanced export settings"
+                        data-tooltip-type="text"
+                        type="button"
+                        tabIndex={0}
+                        data-show-focus="true"
+                        className="_19xx72g0 base-icon-button__baseIconButton__TXKzr dialog-trigger-button__dialogTriggerButton__bjzvt dialog-trigger-button__ghost__OrMww"
+                        onClick={() => write([{ id: Math.random().toString(36).slice(2, 8), scale: 1, format: 'png' }])}
+                      >
+                        <span className="base-icon-button__icon__FIIFq" aria-hidden="true">
+                          <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24">
+                            <path
+                              fill="var(--fpl-icon-color, var(--color-icon))"
+                              fillRule="evenodd"
+                              d="M7 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m6 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m4.5 1.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </span>
+                      </button>
+                    </span>
+                  </div>
+                </div>
+                <div
+                  data-fpl-component="primitive"
+                  data-fpl-grid-cell="true"
+                  role="gridcell"
+                  tabIndex={0}
+                  className="_1kmy3qh0 ui3_grid_rows--secondRightIcon--RXHhM"
+                >
+                  <div className="displayContents">
+                    <button
+                      data-fpl-component=""
+                      aria-label="Remove"
+                      data-tooltip="Remove"
+                      data-tooltip-type="text"
+                      type="button"
+                      tabIndex={0}
+                      data-show-focus="true"
+                      className="_19xx72g0 base-icon-button__baseIconButton__TXKzr icon-button__iconButton__CTj-- icon-button__ghost__1ok6j"
+                      onClick={() => write([])}
+                    >
+                      <span aria-hidden="true" className="base-icon-button__icon__FIIFq">
+                        <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24L">
+                          <path
+                            fill="var(--fpl-icon-color, var(--color-icon))"
+                            fillRule="evenodd"
+                            d="M6 11.5a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5"
+                            clipRule="evenodd"
+                          />
+                        </svg>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              rows.map((row) => (
+                <div
+                  key={row.id}
+                  role="row"
+                  aria-selected="false"
+                  data-fpl-grid-row="true"
+                  className="ui3_grid_rows--twoInputTwoIconRow--fNAVM ui3_grid_rows--row--lI8oS"
+                >
+                  <div
+                    data-fpl-component="primitive"
+                    data-fpl-grid-cell="true"
+                    role="gridcell"
+                    tabIndex={0}
+                    className="_1kmy3qh0 ui3_grid_rows--leftInput--KGWph"
+                  >
+                    <div className="displayContents">
+                      <div className="export_panel--splitInputContainer--QhqnU">
+                        <FigSelect
+                          value={String(row.scale)}
+                          options={[0.5, 1, 2, 3, 4].map((n) => ({ value: String(n), label: `${n}x` }))}
+                          title="Export scale"
+                          onChange={(value) => write(rows.map((r) => (r.id === row.id ? { ...r, scale: Number(value) } : r)))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    data-fpl-component="primitive"
+                    data-fpl-grid-cell="true"
+                    role="gridcell"
+                    tabIndex={0}
+                    className="_1kmy3qh0 ui3_grid_rows--rightInput--qlg1j"
+                  >
+                    <div className="displayContents">
+                      <FigSelect
+                        value={row.format}
+                        options={[
+                          { value: 'png', label: 'PNG' },
+                          { value: 'jpg', label: 'JPG' },
+                          { value: 'pdf', label: 'PDF' },
+                          { value: 'svg', label: 'SVG' },
+                          { value: 'react', label: 'React', divider: true },
+                          { value: 'html', label: 'HTML' },
+                          { value: 'json', label: 'JSON' },
+                        ]}
+                        title="Export file type"
+                        onChange={(format) => write(rows.map((r) => (r.id === row.id ? { ...r, format } : r)))}
+                      />
+                    </div>
+                  </div>
+                  <div
+                    data-fpl-component="primitive"
+                    data-fpl-grid-cell="true"
+                    role="gridcell"
+                    tabIndex={0}
+                    className="_1kmy3qh0 ui3_grid_rows--firstRightIcon---me6B"
+                  >
+                    <div className="displayContents">
+                      <span className="export_panel--exportSettings--2pbNu">
+                        <ExportOptions
+                          row={row}
+                          onChange={(patch) => write(rows.map((r) => (r.id === row.id ? { ...r, ...patch } : r)))}
+                        />
+                      </span>
+                    </div>
+                  </div>
+                  <div
+                    data-fpl-component="primitive"
+                    data-fpl-grid-cell="true"
+                    role="gridcell"
+                    tabIndex={0}
+                    className="_1kmy3qh0 ui3_grid_rows--secondRightIcon--RXHhM"
+                  >
+                    <div className="displayContents">
+                      <button
+                        data-fpl-component=""
+                        aria-label="Remove"
+                        data-tooltip="Remove"
+                        data-tooltip-type="text"
+                        type="button"
+                        tabIndex={0}
+                        data-show-focus="true"
+                        className="_19xx72g0 base-icon-button__baseIconButton__TXKzr icon-button__iconButton__CTj-- icon-button__ghost__1ok6j"
+                        onClick={() => write(rows.filter((r) => r.id !== row.id))}
+                      >
+                        <span aria-hidden="true" className="base-icon-button__icon__FIIFq">
+                          <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24L">
+                            <path
+                              fill="var(--fpl-icon-color, var(--color-icon))"
+                              fillRule="evenodd"
+                              d="M6 11.5a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="button_row--fplButtonRow--CqWjl" style={{ padding: '8px 16px' }}>
         <button
+          data-fpl-component=""
           type="button"
-          className="fig-export"
-          onClick={async () => {
-            // Figma's Export button opens nothing: it saves what the rows say.
-            // A layer with no settings of its own falls back to the dialog.
-            if (!rows.length) {
-              onExport();
-              return;
-            }
-            setStatus('Saving…');
-            const result = await runExports(selection.length ? selection : [node.id], {
-              doc,
-              tokens,
-              collections,
-              tokenVars,
-              zoom,
-            });
-            setStatus(
-              result.error ??
-                `Saved ${result.saved} file${result.saved === 1 ? '' : 's'} to your downloads.`,
-            );
-            window.setTimeout(() => setStatus(null), 4000);
+          tabIndex={0}
+          data-show-focus="true"
+          className="_19xx72g0 button__button__-U-QJ button__secondary__8YIhr button__md__fgTCf button__fill__teOYe fig-export"
+          onClick={handleExport}
+          style={{
+            width: '100%',
+            height: 24,
+            borderRadius: 6,
+            border: '1px solid var(--fig-line)',
+            background: '#fff',
+            fontWeight: 500,
+            fontSize: 11,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
         >
-          Export {target}
+          <span className="button__buttonContainer__C6lTN">
+            <span className="button__buttonText__nvCyD">
+              <span className="button__buttonContent__tVdQi">
+                <span className="end_truncated_text--truncatedText--ZajSh">Export {target}</span>
+              </span>
+            </span>
+          </span>
         </button>
       </div>
-      {status && <div className="fig-note">{status}</div>}
+      {status && <div className="fig-note" style={{ padding: '4px 16px' }}>{status}</div>}
 
-      <button
-        type="button"
-        className="fig-btn"
-        aria-expanded={preview}
-        style={{ marginTop: 6, padding: 0, gap: 6, color: 'var(--fig-dim)' }}
-        onClick={() => setPreview((v) => !v)}
-      >
-        <span style={{ display: 'inline-flex', transform: preview ? 'rotate(90deg)' : undefined }}>
-          <Icon.Chevron />
-        </span>
-        Preview
-      </button>
-      {preview && <ExportPreview id={node.id} />}
-    </FigSection>
+      <div className="cachedSubtree displayContents">
+        <div>
+          <div
+            className="raw_components--singleRow--iiiXl raw_components--_singleRow--GVyF0 raw_components--singleRowHeight--qGJa- raw_components--_row--xMgUA raw_components--row--Oh-jv export_panel--previewCaretLabelRow--PbgE8"
+            data-non-interactive="true"
+          >
+            <button
+              data-fpl-component="primitive"
+              aria-expanded={preview}
+              type="button"
+              tabIndex={0}
+              data-show-focus="true"
+              className="_19xx72g0"
+              onClick={() => setPreview((v) => !v)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 16px', border: 0, background: 'transparent' }}
+            >
+              <svg
+                width="16"
+                height="16"
+                fill="none"
+                viewBox="0 0 16 16"
+                data-fpl-icon-size="16"
+                style={{ transform: preview ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }}
+              >
+                <path
+                  fill="var(--fpl-icon-color, var(--color-icon))"
+                  d="M6.768 5.525a.5.5 0 0 1 .707 0l2.121 2.121a.5.5 0 0 1 0 .707l-2.121 2.122a.5.5 0 0 1-.707-.708L8.535 8 6.768 6.232a.5.5 0 0 1 0-.707"
+                />
+              </svg>
+              <label
+                className="raw_components--label--fq2Ju raw_components--base--kNKR5 export_panel--label--KwI4r"
+                dir="auto"
+                style={{ fontSize: 11, fontWeight: 500 }}
+              >
+                Preview
+              </label>
+            </button>
+          </div>
+        </div>
+        {preview && (
+          <div className="export_panel--previewThumbnailContainer--76lTU" style={{ padding: '8px 16px 16px' }}>
+            <ExportPreview id={node.id} />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -5353,8 +5708,7 @@ function ExportPreview({ id }: { id: string }) {
   const [image, setImage] = useState<{ src: string; w: number; h: number } | null>(null);
 
   useEffect(() => {
-    // wait a frame: a layer that just changed has not been laid out yet
-    const frame = requestAnimationFrame(() => {
+    const render = () => {
       const serialised = nodeToSvg(id, zoom, tokenVars as Record<string, string>);
       setImage(
         serialised
@@ -5365,7 +5719,13 @@ function ExportPreview({ id }: { id: string }) {
             }
           : null,
       );
-    });
+    };
+    // now, from the layout that already exists — and once more next frame,
+    // for a layer that just changed and has not been laid out yet. Not only
+    // next frame: a background tab is never given one, and would show the
+    // "scroll into view" hint for a layer that is in plain sight.
+    render();
+    const frame = requestAnimationFrame(render);
     return () => cancelAnimationFrame(frame);
   }, [id, doc, zoom, tokenVars]);
 

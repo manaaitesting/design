@@ -4,7 +4,6 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { DocStore } from '../document/store';
 import type { Identity } from './identity';
-import { seedDocument } from '../document/seed';
 
 export interface Presence {
   /** awareness connection id — unique per tab, unlike the account id */
@@ -82,12 +81,12 @@ export function getSession(
   provider.awareness.setLocalStateField('chat', null);
   provider.awareness.setLocalStateField('following', null);
 
-  // Seed only once the server has told us what it already has, otherwise every
-  // client would race to create its own starter artboards.
+  // A new file opens on an empty page, as Figma's does — the root is made
+  // once the server has said what it already has, so clients never race to
+  // create it twice.
   provider.once('sync', (isSynced: boolean) => {
     if (!isSynced || readOnly) return;
     store.ensureRoot();
-    seedDocument(store);
   });
 
   const session: Session = {

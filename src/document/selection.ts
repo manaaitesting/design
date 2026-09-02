@@ -1,4 +1,4 @@
-import { childOfContainer, topLevelOf, type Doc, type SceneNode } from './types';
+import { childOfContainer, isArtboard, topLevelOf, type Doc, type SceneNode } from './types';
 
 /**
  * Figma's selection model.
@@ -48,6 +48,18 @@ export function lockedUnder(clientX: number, clientY: number, doc: Doc): string 
 export type ClickMode = 'normal' | 'deep';
 
 /**
+ * Figma's top-level frames are transparent to the pointer: a click on anything
+ * inside one lands on the frame's direct child under the cursor, and only a
+ * click on the frame's own background — or on its label — takes the frame.
+ * Nested frames and boolean groups still trap the click, so getting inside
+ * them is a double-click, as it is in Figma.
+ */
+export function passesThrough(id: string, doc: Doc): boolean {
+  const node = doc[id];
+  return !!node && node.type === 'frame' && isArtboard(node, doc);
+}
+
+/**
  * What a plain click should select.
  * Returns null when the pointer is over nothing selectable.
  */
@@ -72,7 +84,11 @@ export function resolveClick(
   // reaching for it on the canvas hands you its artboard instead, and the drag
   // moves the whole board. Deepest first, so pressing a selected child of a
   // selected frame takes the child.
-  const held = stack.find((id) => selection.includes(id));
+  // A selected top-level frame is the exception: Figma hands a press on its
+  // content to the child, which is why a frame is dragged by its label.
+  const held = stack.find(
+    (id) => selection.includes(id) && !(id !== deepest && passesThrough(id, doc)),
+  );
   if (held) {
     const parent = doc[held]?.parent ?? null;
     return { id: held, entered: parent && doc[parent]?.type !== 'page' ? parent : entered };
@@ -84,8 +100,14 @@ export function resolveClick(
     if (sibling) return { id: sibling, entered };
   }
 
-  // outside it (or never drilled in) — back out to the artboard level
-  return { id: topLevelOf(deepest, doc), entered: null };
+  // outside it (or never drilled in) — back out to the artboard level, and
+  // through a top-level frame to the child under the pointer
+  const top = topLevelOf(deepest, doc);
+  if (top !== deepest && passesThrough(top, doc)) {
+    const child = childOfContainer(deepest, top, doc);
+    if (child) return { id: child, entered: null };
+  }
+  return { id: top, entered: null };
 }
 
 /**

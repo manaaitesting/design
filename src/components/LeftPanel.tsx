@@ -372,7 +372,7 @@ export function LeftPanel({ file }: { file: FileMeta }) {
       {tab === 'design' && (
         <>
           <PagesSection />
-          <div className="fig-left-section" style={{ borderTop: '1px solid var(--fig-line)' }}>
+          <div className="fig-left-section" style={{ borderTop: '1px solid var(--fig-line)', gap: 6 }}>
             {searching ? (
               <input
                 autoFocus
@@ -467,11 +467,12 @@ function PagesSection() {
           aria-expanded={open}
           aria-controls="fig-pages-list"
           onClick={() => setOpen((value) => !value)}
+          style={{ marginLeft: 0 }}
         >
-          <span className="fig-disclosure-caret" aria-hidden>
+          <span>Pages</span>
+          <span className="fig-disclosure-caret" aria-hidden style={{ marginLeft: 6 }}>
             <Icon.Chevron open={open} />
           </span>
-          <span>Pages</span>
         </button>
         <button
           type="button"
@@ -487,9 +488,15 @@ function PagesSection() {
           type="button"
           className="fig-btn"
           title="New page"
-          onClick={() => {
-            setPage(store.addPage());
+          onClick={(event) => {
+            // a new page arrives ready to be named, as Figma's does — and the
+            // button lets go of focus so Return names the page rather than
+            // pressing the button a second time
+            event.currentTarget.blur();
+            const id = store.addPage();
+            setPage(id);
             if (!open) setOpen(true);
+            setRenaming(id);
           }}
         >
           <Icon.Plus />
@@ -503,7 +510,9 @@ function PagesSection() {
             className="fig-pages-list"
             role="grid"
             aria-label="Pages"
-            style={{ height }}
+            // a pane of its own height, as Figma's is: the rule below it
+            // resizes it, and a long list scrolls inside it
+            style={{ height, minHeight: 0, overflowY: 'auto' }}
           >
             {pages.map((id, index) => (
               <div key={id} role="row" aria-rowindex={index + 1} aria-selected={id === active}>
@@ -532,6 +541,8 @@ function PagesSection() {
                     {renaming === id ? (
                       <input
                         autoFocus
+                        // the whole name is offered up, as Figma's rename does
+                        onFocus={(e) => e.currentTarget.select()}
                         aria-label="Page name"
                         defaultValue={doc[id]?.name ?? 'Page'}
                         style={{
@@ -564,7 +575,7 @@ function PagesSection() {
               </div>
             ))}
           </div>
-          <PagesResizer height={height} onResize={setHeight} />
+          {pages.length > 0 && <PagesResizer height={height} onResize={setHeight} />}
         </>
       )}
       {/* the section owns the rename and delete its context menu asks for, so
@@ -799,8 +810,10 @@ function LayersTree({ query }: { query: string }) {
       ?.scrollIntoView({ block: 'nearest' });
   }, [selection, rows]);
 
+  // rows touch, as Figma's do: a gap between them is a strip where a drag has
+  // nothing to land on and a click selects nothing
   return (
-    <div ref={listRef} className="scroll" style={{ flex: 1, paddingBottom: 12 }}>
+    <div ref={listRef} className="scroll" style={{ flex: 1, paddingBottom: 12, display: 'flex', flexDirection: 'column' }}>
       {rows.map((row) => (
         <LayerRow key={row.id} row={row} drag={drag} />
       ))}
@@ -922,11 +935,6 @@ function LayerRow({ row, drag }: { row: Row; drag: Drag }) {
         </span>
       )}
 
-      {node.flex && (
-        <span style={{ flex: 'none', color: 'var(--color-ink-dim)', fontSize: 10 }}>
-          {node.flex.direction === 'row' ? '→' : '↓'}
-        </span>
-      )}
       <button
         type="button"
         className={node.locked ? 'fig-btn' : 'fig-btn fig-layer-icons'}

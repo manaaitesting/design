@@ -67,21 +67,73 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
     );
   }, [generation, node.font]);
 
-  // focus once, and select everything, as Figma does when you enter a layer
-  useEffect(() => {
+  // Focus, and put the caret where a click landed — Figma's |, not a
+  // select-all. The focus is taken synchronously, in the layout effect, while
+  // the element is guaranteed to be connected: an animation frame is not a
+  // safe place for it, since a background tab never gets one, and the first
+  // keys after the click would then go to the canvas as tool shortcuts.
+  // The frame and the timer are fallbacks for a layout that is still settling.
+  useLayoutEffect(() => {
     const el = editorRef.current;
     if (!el) return;
-    const frame = requestAnimationFrame(() => {
-      el.focus();
+    const place = () => {
+      if (!el.isConnected) return;
+      el.focus({ preventScroll: true });
+      const live = window.getSelection();
+      const hasCaretInEl =
+        !!live &&
+        live.rangeCount === 1 &&
+        el.contains(live.anchorNode as Node | null) &&
+        live.getRangeAt(0).collapsed;
+      if (hasCaretInEl) {
+        const r = live!.getRangeAt(0);
+        const at = offsetOf(el, r.startContainer, r.startOffset);
+        setSelection({ start: at, end: at });
+        return;
+      }
+      // otherwise the caret goes to the end — the natural place to keep typing
       const range = document.createRange();
       range.selectNodeContents(el);
-      const live = window.getSelection();
+      range.collapse(false);
       live?.removeAllRanges();
       live?.addRange(range);
-      setSelection({ start: 0, end: plainText(runs.current).length });
-    });
-    return () => cancelAnimationFrame(frame);
+      const length = plainText(runs.current).length;
+      setSelection({ start: length, end: length });
+    };
+    place();
+    const again = () => {
+      if (document.activeElement !== el) place();
+    };
+    const frame = requestAnimationFrame(again);
+    const timer = window.setTimeout(again, 60);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
   }, []);
+
+  // Editing can also end without a blur — Escape handled by the editor's
+  // shell, a selection change, the layer swapped out from under it — and an
+  // empty layer has to go on that road too, or a stray click with the text
+  // tool leaves an invisible layer behind every time.
+  useEffect(
+    () => () => {
+      // a tick later, so a strict-mode remount — or the same layer reopened —
+      // is not mistaken for leaving it
+      window.setTimeout(() => {
+        if (useUI.getState().editing === node.id) return;
+        const latest = store.getSnapshot()[node.id];
+        if (!latest || latest.type !== 'text') return;
+        if ((latest.text ?? '').replace(/\n/g, '').trim()) return;
+        const ui = useUI.getState();
+        if (ui.selection.includes(node.id)) ui.select(ui.selection.filter((id) => id !== node.id));
+        store.remove([node.id]);
+        store.commit();
+      }, 0);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   /**
    * Where the caret is.
@@ -175,7 +227,12 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
         data-node-id={node.id}
         contentEditable
         suppressContentEditableWarning
-        style={{ ...style, outline: '1.5px solid var(--color-select)', cursor: 'text' }}
+        spellCheck={false}
+        data-gramm="false"
+        data-gramm_editor="false"
+        data-enable-grammarly="false"
+        // an empty layer still needs somewhere to draw the caret
+        style={{ ...style, minWidth: '1ch', minHeight: '1em', outline: 'none', cursor: 'text', caretColor: 'var(--color-select-line)' }}
         // the DOM inside is the browser's while it is being edited; see above
         onKeyDown={(event) => {
           event.stopPropagation();
@@ -264,6 +321,16 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           if (text !== before) {
             const { start, end, inserted } = diffText(before, text);
             runs.current = replaceRange(runs.current, start, end, inserted);
+          }
+          // a text layer with nothing in it is not a layer — Figma drops an
+          // empty one the moment you click away, and so does this
+          if (!text.replace(/\n/g, '').trim()) {
+            setEditing(null);
+            const ui = useUI.getState();
+            if (ui.selection.includes(node.id)) ui.select(ui.selection.filter((id) => id !== node.id));
+            store.remove([node.id]);
+            store.commit();
+            return;
           }
           const styled = !isPlain(runs.current);
           store.update(node.id, {

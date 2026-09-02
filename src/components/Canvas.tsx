@@ -402,9 +402,28 @@ export function Canvas() {
       const width = Math.max(1, Math.round(box.maxX - box.minX));
       const height = Math.max(1, Math.round(box.maxY - box.minY));
 
-      const id = store.create('vector', page.id, {
-        x: Math.round(box.minX),
-        y: Math.round(box.minY),
+      // the first anchor decides which frame the path lands in, the way the
+      // press decides it for a drawn shape — a path drawn over a board is
+      // part of that board, not a layer floating on top of it
+      const vp = useUI.getState().viewport;
+      const canvasRect = rootRef.current?.getBoundingClientRect();
+      const first = anchors[0];
+      const parentId =
+        (canvasRect &&
+          containerAt(
+            canvasRect.left + vp.x + first.x * vp.zoom,
+            canvasRect.top + vp.y + first.y * vp.zoom,
+            doc,
+          )) ||
+        page.id;
+      const local =
+        parentId === page.id || !canvasRect
+          ? { x: Math.round(box.minX), y: Math.round(box.minY) }
+          : localOffset(parentId, box.minX, box.minY, doc, canvasRect, vp);
+
+      const id = store.create('vector', parentId, {
+        x: local.x,
+        y: local.y,
         w: width,
         h: height,
         closed,
@@ -422,7 +441,7 @@ export function Canvas() {
       select([id]);
       setTool('move');
     },
-    [store, page, select, setTool],
+    [store, page, doc, select, setTool],
   );
 
   // Reset on tool change only — folding this into the key-handler effect below
@@ -440,10 +459,15 @@ export function Canvas() {
         event.preventDefault();
         commitPen(pen, false);
       } else if (event.key === 'Escape') {
+        // Figma keeps what you have drawn: Escape ends the path where it is
+        // rather than throwing it away, and a single point is nothing to keep
         event.preventDefault();
-        setPen([]);
-        setPenCursor(null);
-        setTool('move');
+        if (pen.length >= 2) commitPen(pen, false);
+        else {
+          setPen([]);
+          setPenCursor(null);
+          setTool('move');
+        }
       } else if (event.key === 'Backspace' && pen.length) {
         event.preventDefault();
         setPen((points) => points.slice(0, -1));
@@ -666,8 +690,10 @@ export function Canvas() {
             y: local.y,
             w: Math.round(size.w),
             h: Math.round(size.h),
+            // a new text layer starts empty, as Figma's does: the first keys
+            // are its content, and one left empty is thrown away on the way out
             ...(drawType === 'text'
-              ? { wMode: 'fit' as const, hMode: 'fit' as const, text: 'Text' }
+              ? { wMode: 'fit' as const, hMode: 'fit' as const, text: '' }
               : null),
           });
           setDraft(null);
@@ -1290,7 +1316,7 @@ export function Canvas() {
           style={{
             position: 'absolute',
             left: '50%',
-            bottom: 24,
+            bottom: 80,
             transform: 'translateX(-50%)',
             maxWidth: 460,
             padding: '8px 12px',

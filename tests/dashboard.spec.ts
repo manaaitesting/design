@@ -49,7 +49,8 @@ test('search narrows the list, and the URL says so', async ({ page }) => {
   expect(all).toBeGreaterThan(1);
 
   await page.getByLabel('Search files').fill('Vinyl');
-  await page.getByRole('button', { name: 'Search' }).click();
+  // the filter form is a GET form with no button of its own: Enter submits it
+  await page.getByLabel('Search files').press('Enter');
 
   await expect(page).toHaveURL(/\?q=Vinyl/);
   await expect(names(page)).toHaveCount(1);
@@ -60,7 +61,8 @@ test('search narrows the list, and the URL says so', async ({ page }) => {
 
 test('a search that matches nothing offers the way back', async ({ page }) => {
   await page.getByLabel('Search files').fill('zzzz-no-such-file');
-  await page.getByRole('button', { name: 'Search' }).click();
+  // the filter form is a GET form with no button of its own: Enter submits it
+  await page.getByLabel('Search files').press('Enter');
   await expect(page.getByText('Nothing here')).toBeVisible();
   await page.getByRole('link', { name: /Clear the search/ }).click();
   await expect(page).toHaveURL(/\/files$/);
@@ -68,7 +70,8 @@ test('a search that matches nothing offers the way back', async ({ page }) => {
 
 test('sorting by name actually reorders', async ({ page }) => {
   await page.getByLabel('Sort files').selectOption('name');
-  await page.getByRole('button', { name: 'Search' }).click();
+  // the filter form is a GET form with no button of its own: Enter submits it
+  await page.getByLabel('Search files').press('Enter');
 
   const listed = await names(page).evaluateAll((inputs) =>
     inputs.map((input) => (input as HTMLInputElement).value),
@@ -81,14 +84,21 @@ test('a file filed into a folder is found there and nowhere else', async ({ page
   await page.getByLabel('New folder name').fill(folder);
   await page.getByRole('button', { name: 'Create the folder' }).click();
   await expect(page.getByRole('link', { name: new RegExp(folder) })).toBeVisible();
+  // the server's re-render of the list lands a moment after the folder shows;
+  // a menu opened before it arrives is torn down with the cards it hung off
+  await page.waitForLoadState('networkidle');
 
-  await card(page, 'Playwright Scratch').getByLabel('Folder').selectOption({ label: folder });
+  // filing is on the card's right-click menu: Move file… lists the folders
+  await card(page, 'Playwright Scratch').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Move file…' }).click();
+  await page.getByRole('menuitem', { name: folder }).click();
+  // the chip counts what is in the folder, and the count is the proof
   await expect
     .poll(async () => {
       await page.reload();
-      return card(page, 'Playwright Scratch').getByLabel('Folder').inputValue();
+      return page.getByRole('link', { name: new RegExp(folder) }).textContent();
     })
-    .not.toBe('');
+    .toMatch(/1$/);
 
   // inside the folder: exactly the one file
   await page.getByRole('link', { name: new RegExp(folder) }).click();

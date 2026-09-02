@@ -12,11 +12,16 @@ test('renders the document and its layers', async ({ page }) => {
   expect(Object.keys(nodes).length).toBeGreaterThan(1);
 });
 
-test('a single click selects the artboard, not the layer under the cursor', async ({ page }) => {
+test('a single click inside a top-level frame selects the child under the cursor', async ({ page }) => {
   const cover = await nodeNamed(page, 'Cover');
   await page.locator(`[data-node-id="${cover!.id}"]`).click();
+  // Figma's top-level frames pass the click through to their direct child
+  expect(await selection(page)).toEqual([cover!.id]);
 
+  // the frame's own background still takes the frame
   const artboard = await nodeNamed(page, 'Fixture Board');
+  const box = await page.locator(`[data-node-id="${artboard!.id}"]`).boundingBox();
+  await page.mouse.click(box!.x + box!.width - 20, box!.y + box!.height - 20);
   expect(await selection(page)).toEqual([artboard!.id]);
 });
 
@@ -1015,8 +1020,8 @@ test('Space while drawing walks the box without resizing it', async ({ page }) =
 
   const drawn = (await doc(page))[(await selection(page))[0]];
   expect([drawn.w, drawn.h]).toEqual([150, 90]);
-  // the press was at world (97, 460); Space moved the origin 100 across and down
-  expect([drawn.x, drawn.y]).toEqual([197, 560]);
+  // the press was at world (139, 460); Space moved the origin 100 across and down
+  expect([drawn.x, drawn.y]).toEqual([239, 560]);
   await removeNodes(page, [drawn.id]);
 });
 
@@ -2898,7 +2903,7 @@ test.describe('sections', () => {
     await select(page, []);
     await page.keyboard.press('Shift+S');
     // the box covers 'Inside' whole and clips through 'Across'
-    await dragBy(page, { x: 1180, y: 640 }, { x: 260, y: 160 });
+    await dragBy(page, { x: 1138, y: 640 }, { x: 260, y: 160 });
 
     const section = (await selection(page))[0];
     const nodes = await doc(page);
@@ -2933,9 +2938,9 @@ test.describe('sections', () => {
     await page.keyboard.press('Meta+S');
     await select(page, []);
 
-    // clicking a layer inside the artboard selects the artboard, not the section
-    const cover = await nodeNamed(page, 'Cover');
-    await page.locator(`[data-node-id="${cover!.id}"]`).click();
+    // clicking the artboard's background selects the artboard, not the section
+    const box = await page.locator(`[data-node-id="${board!.id}"]`).boundingBox();
+    await page.mouse.click(box!.x + box!.width - 20, box!.y + box!.height - 20);
     expect(await selection(page)).toEqual([board!.id]);
   });
 
@@ -3012,7 +3017,7 @@ test.describe('panel controls that used to do nothing', () => {
     await select(page, [cover!.id]);
 
     await page.getByRole('button', { name: 'Add export settings' }).click();
-    await page.getByTitle('Format').click();
+    await page.getByTitle('Export file type').click();
     await page.getByRole('listbox').getByRole('option', { name: 'JPG', exact: true }).click();
 
     const wait = page.waitForEvent('download');
@@ -3037,7 +3042,7 @@ test.describe('panel controls that used to do nothing', () => {
     await select(page, [board!.id]);
 
     await page.getByRole('button', { name: 'Add export settings' }).click();
-    await page.getByTitle('Format').click();
+    await page.getByTitle('Export file type').click();
     await page.getByRole('listbox').getByRole('option', { name: 'PDF', exact: true }).click();
 
     const wait = page.waitForEvent('download');
@@ -4146,7 +4151,7 @@ test.describe('layout grid and text blocks', () => {
       board!.id,
     );
 
-    await page.getByTitle('Type').click();
+    await page.getByTitle('Type', { exact: true }).click();
     await page.getByRole('listbox').getByRole('option', { name: 'Right', exact: true }).click();
     await page.getByTitle('Column width').locator('input').fill('40');
     await page.keyboard.press('Enter');

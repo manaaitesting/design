@@ -193,12 +193,17 @@ export function FlexHandles({ containerRef }: { containerRef: RefObject<HTMLDivE
           (dragging?.target.kind === 'padding' && dragging.target.side === side);
         return (
           <div key={`pad-${side}`}>
-            {live && (
-              <span
-                className="fig-flex-region"
-                style={{ left: region.x, top: region.y, width: region.w, height: region.h }}
-              />
-            )}
+            <span
+              className="fig-flex-region"
+              data-live={live || undefined}
+              style={{
+                left: region.x,
+                top: region.y,
+                width: region.w,
+                height: region.h,
+                opacity: live ? 1 : 0.9,
+              }}
+            />
             <div
               className="fig-flex-pad"
               data-on={live || undefined}

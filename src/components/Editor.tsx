@@ -336,6 +336,10 @@ export function Editor({
         else if (ui.prompt) {
           ui.setPrompt(null);
           ui.setTool('move');
+        } else if (ui.tool !== 'move' && ui.tool !== 'pan') {
+          // Figma's first Escape puts a drawing tool down and hands the
+          // pointer back to Move; the selection is left as it was
+          ui.setTool('move');
         } else if (ui.selection.length === 1 && parentOf(ui.selection[0], doc)) {
           // Figma's Escape: step out to the parent, keeping a selection
           const parent = parentOf(ui.selection[0], doc)!;
@@ -938,9 +942,12 @@ export function Editor({
           onReset={useUI.getState().resetLeftWidth}
         />
       )}
-      {chrome && leftPanel && <ToolRail />}
       <div style={{ position: 'relative', flex: 1, display: 'flex', minWidth: 0, background: 'var(--color-canvas)' }}>
         <Canvas />
+        {/* the toolbar floats over the canvas, Figma-style, whether or not the
+            layers panel is open — collapsing the panel must not take the tools
+            away with it */}
+        {chrome && <ToolRail />}
         <PromptBar />
         {chrome && !leftPanel && <CollapsedLeftPanelIsland file={meta} />}
         {chrome && <Timeline />}

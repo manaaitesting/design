@@ -1005,23 +1005,35 @@ select {
     background: var(--color-canvas);
   }
 
+  /* The toolbar floats along the bottom of the canvas, as Figma's does: the
+     canvas runs edge to edge beneath it, and the pointer's path from a tool to
+     the work is the short one. */
   .fig-rail {
-    width: 42px;
-    flex: none;
-    background: #fff;
-    border-right: 1px solid var(--fig-line);
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    z-index: 30;
     display: flex;
-    flex-direction: column;
     align-items: center;
-    padding-top: 8px;
+    gap: 2px;
+    height: 48px;
+    padding: 0 6px;
+    background: #fff;
+    border: 1px solid var(--fig-line);
+    border-radius: 13px;
+    box-shadow: 0 2px 14px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
   }
-  /* 28px button plus 7px either side is the rail's full 42px width */
+  .fig-rail-slot {
+    display: flex;
+    align-items: center;
+  }
   .fig-tool {
-    width: 28px;
-    height: 28px;
-    margin: 2px 7px;
+    width: 32px;
+    height: 32px;
+    margin: 0 1px;
     border: 0;
-    border-radius: 6px;
+    border-radius: 8px;
     background: transparent;
     color: var(--fig-ink);
     display: inline-flex;
@@ -1033,24 +1045,58 @@ select {
     background: var(--fig-hover);
   }
   .fig-tool[data-on='true'] {
+    background: var(--fig-blue);
+    color: #fff;
+  }
+  .fig-tool-ai[data-on='true'] {
     background: var(--fig-selected);
     color: var(--fig-blue);
   }
+  .fig-rail-sep {
+    width: 1px;
+    height: 24px;
+    margin: 0 5px;
+    background: var(--fig-line);
+  }
 
-  /* a group of tools, and the menu that the pointer opens over it */
+  /* a group of tools: the face, the caret that opens the rest, and the menu */
   .fig-rail-group {
     position: relative;
-    width: 100%;
+    display: flex;
+    align-items: center;
   }
-  /* The rail's menus are dark, the way Figma's own menus are: they sit over
-     the canvas rather than in the chrome, and a black card says so at a glance.
-     A hairline of white keeps the corner off a dark artboard. */
+  .fig-rail-caret {
+    width: 12px;
+    height: 32px;
+    margin-left: -3px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fig-icon-3);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+  }
+  .fig-rail-caret:hover,
+  .fig-rail-caret[aria-expanded='true'] {
+    color: var(--fig-ink);
+    background: var(--fig-hover);
+  }
+  .fig-rail-caret svg {
+    width: 8px;
+    height: 8px;
+  }
+  /* The menus are dark, the way Figma's own menus are: they sit over the
+     canvas rather than in the chrome, and a black card says so at a glance.
+     They open upward, away from the edge the bar sits on. */
   .fig-flyout {
     position: absolute;
-    left: 38px;
-    top: 0;
+    left: 0;
+    bottom: 42px;
     z-index: 60;
-    min-width: 168px;
+    min-width: 176px;
     padding: 5px;
     background: #1e1e1e;
     color: #fff;
@@ -1090,6 +1136,16 @@ select {
   }
   .fig-flyout-key {
     opacity: 0.55;
+  }
+
+  /* a card's actions show themselves when the pointer arrives, as Figma's do */
+  .file-card .file-card-actions {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .file-card:hover .file-card-actions,
+  .file-card:focus-within .file-card-actions {
+    opacity: 1;
   }
 
   /* variable modes: one chip per mode, the shown one highlighted */
@@ -1906,8 +1962,8 @@ select {
      hover/on pair `.fig-btn` uses, so the panel reads as one control set. */
   .fig-layer {
     position: relative;
-    /* 24px, so the row is exactly as tall as the .fig-btn glyphs it holds */
-    height: 24px;
+    /* Figma's rows: tall enough to read, touching, so the list is one surface */
+    height: 28px;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -3300,12 +3356,21 @@ select {
   .fig-flex-gap[data-on='true'],
   .fig-flex-pad:hover,
   .fig-flex-pad[data-on='true'] {
-    background: rgba(13, 153, 255, 0.35);
+    background: repeating-linear-gradient(
+      45deg,
+      rgba(236, 72, 153, 0.28) 0 6px,
+      rgba(236, 72, 153, 0.12) 6px 12px
+    );
   }
-  /* what the number means, shown while you are on the grip that changes it */
+  /* what the number means, shown while you are on the grip that changes it — Figma pinks, diagonal */
   .fig-flex-region {
     position: absolute;
-    background: rgba(13, 153, 255, 0.16);
+    background: repeating-linear-gradient(
+      -45deg,
+      rgba(236, 72, 153, 0.16) 0 6px,
+      rgba(236, 72, 153, 0.05) 6px 12px
+    );
+    border: 1px dashed rgba(236, 72, 153, 0.32);
     pointer-events: none;
   }
   /* the value you are dragging, over the thing you are dragging */

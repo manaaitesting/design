@@ -5,7 +5,7 @@ import { useDoc, usePresence, useStore } from './Session';
 import { FlexHandles } from './FlexHandles';
 import { toScreen, toWorld, useUI } from '../state/ui';
 import { nearestEdge, snapCandidates, type SnapGuide } from '../document/snapping';
-import { isInFlow, type Doc, type SceneNode } from '../document/types';
+import { type Doc, type SceneNode } from '../document/types';
 import { gapsOf, smartRow } from '../document/arrange';
 
 export interface Rect {
@@ -640,20 +640,38 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         />
       )}
 
-      {/* hover hint */}
-      {hover && !selection.includes(hover) && rects[hover] && (
-        <div
-          style={{
-            position: 'absolute',
-            left: rects[hover].x,
-            top: rects[hover].y,
-            width: rects[hover].w,
-            height: rects[hover].h,
-            outline: '1px solid var(--color-select-line)',
-            outlineOffset: -0.5,
-          }}
-        />
-      )}
+      {/* hover – dotted, with live size like Figma inspect */}
+      {hover && !selection.includes(hover) && rects[hover] && (() => {
+        const r = rects[hover]!;
+        const n = doc[hover];
+        const isFrame = n?.type === 'frame' || n?.type === 'section';
+        return (
+          <>
+            <div
+              style={{
+                position: 'absolute',
+                left: r.x,
+                top: r.y,
+                width: r.w,
+                height: r.h,
+                outline: '1px dashed var(--color-select-line)',
+                outlineOffset: -0.5,
+                borderRadius: isFrame ? 0 : 2,
+              }}
+            />
+            <span
+              style={{
+                ...SIZE_BADGE,
+                left: r.x + r.w / 2,
+                top: r.y + r.h + 6,
+                background: 'var(--color-select-line)',
+              }}
+            >
+              {Math.round(r.w / viewport.zoom)} × {Math.round(r.h / viewport.zoom)}
+            </span>
+          </>
+        );
+      })()}
 
       {/* multi-selection bounding box */}
       {bounds && (
@@ -807,26 +825,41 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         const rect = rects[id];
         const node = doc[id];
         if (!rect || !node || !node.visible) return null;
-        // the selection draws its own name in the same place — two labels on
-        // top of each other read as a rendering fault
         if (selection.includes(id)) return null;
         return (
-          <button
-            key={`board-${id}`}
-            type="button"
-            className="section-label"
-            // a section titles a region of the page and reads larger; a frame
-            // is a board among boards, and Figma labels it more quietly
-            data-kind={node.type}
-            data-on={selection.includes(id) || undefined}
-            style={{ left: rect.x, top: rect.y - (node.type === 'section' ? 20 : 16) }}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              select([id]);
-            }}
-          >
-            {node.name}
-          </button>
+          <div key={`board-${id}`}>
+            <div
+              style={{
+                position: 'absolute',
+                left: rect.x,
+                top: rect.y,
+                width: rect.w,
+                height: rect.h,
+                border: '1px dashed rgba(13,153,255,0.55)',
+                borderRadius: 2,
+                pointerEvents: 'none',
+              }}
+            />
+            <button
+              type="button"
+              className="section-label"
+              data-kind={node.type}
+              data-on={selection.includes(id) || undefined}
+              style={{ left: rect.x, top: rect.y - (node.type === 'section' ? 20 : 16) }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                // ⇧ on a title adds the board to the selection, as it does on
+                // any layer — the title is how a board is picked up, so it
+                // has to take part in picking up several
+                if (event.shiftKey) {
+                  const current = useUI.getState().selection;
+                  select(current.includes(id) ? current.filter((other) => other !== id) : [...current, id]);
+                } else select([id]);
+              }}
+            >
+              {node.name}
+            </button>
+          </div>
         );
       })}
 
@@ -844,13 +877,12 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           );
         })}
 
-      {/* selection */}
+      {/* selection — hidden while editing that text, Figma shows only caret */}
       {selection.map((id) => {
         const rect = rects[id];
         const node = doc[id];
-        if (!rect || !node || id === vectorEdit) return null;
+        if (!rect || !node || id === vectorEdit || id === editing) return null;
         const single = selection.length === 1;
-        const flowed = isInFlow(node, doc);
 
         // A turned layer is measured by the box *around* it. That box is not the
         // layer's own, but its middle is — a layer turns about its middle — so
@@ -879,23 +911,6 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               }}
             />
 
-            {single && (
-              <span
-                style={{
-                  position: 'absolute',
-                  left: rect.x,
-                  top: rect.y - 16,
-                  fontSize: 10,
-                  color: 'var(--color-select-line)',
-                  fontWeight: 500,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {node.name}
-                {flowed && <span style={{ opacity: 0.65 }}> · in flex</span>}
-                {node.locked && <span style={{ opacity: 0.65 }}> · locked</span>}
-              </span>
-            )}
 
             {/* the readout stays upright however far the layer is turned: a
                 number you have to tilt your head to read is not a readout */}

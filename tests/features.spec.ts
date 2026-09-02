@@ -16,8 +16,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('the shape flyout arms the tool it names', async ({ page }) => {
-  // the group opens under the pointer — there is no caret to click
-  await page.getByRole('button', { name: 'Rectangle' }).hover();
+  // the caret beside the group's face opens it, as on Figma's toolbar
+  await page.getByRole('button', { name: 'Shape tools' }).click();
   await page.getByRole('menuitem', { name: 'Star' }).click();
   expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('star');
 
@@ -307,7 +307,9 @@ test('a frame set to another variable mode publishes that mode’s values', asyn
   const modes = await page.evaluate((frame) => {
     const store = window.paperlike!.store;
     const collection = store.listCollections()[0];
-    const token = store.addToken({ name: 'probe-surface', type: 'color', value: '#FFFFFF' });
+    // in the collection whose mode the frame is about to override — an earlier
+    // test may have left another collection first in the list
+    const token = store.addToken({ name: 'probe-surface', type: 'color', value: '#FFFFFF', collection: collection.id });
     const dark = store.addMode(collection.id, 'Dark')!;
     store.setTokenValue(token, dark, '#101010');
     store.setNodeMode(frame, collection.id, dark);
@@ -316,10 +318,14 @@ test('a frame set to another variable mode publishes that mode’s values', asyn
   }, board.id);
   expect(modes.dark).toBeTruthy();
 
-  const declared = await page
-    .locator(`[data-node-id="${board.id}"]`)
-    .evaluate((el) => getComputedStyle(el).getPropertyValue('--probe-surface').trim());
-  expect(declared.toLowerCase()).toBe('#101010');
+  // the frame re-declares the variable on its next render
+  await expect
+    .poll(() =>
+      page
+        .locator(`[data-node-id="${board.id}"]`)
+        .evaluate((el) => getComputedStyle(el).getPropertyValue('--probe-surface').trim().toLowerCase()),
+    )
+    .toBe('#101010');
 
   await page.evaluate((state) => {
     const store = window.paperlike!.store;

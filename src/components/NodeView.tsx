@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, memo, useContext, useEffect, useRef } from 'react';
+import { createContext, memo, useContext } from 'react';
 import { nodeStyle, shaderSurface } from '../document/css';
 import { effectLayers, effectsOf } from '../document/effects';
 import { ShaderSurface } from './ShaderSurface';
@@ -177,28 +177,9 @@ export const NodeView = memo(function NodeView({
   // variant; its own box stays, the other's content is drawn inside it
   const swappedTo = swaps[id] ? doc[swaps[id]] : null;
   const editing = useUI((s) => s.editing);
-  const setEditing = useUI((s) => s.setEditing);
-  const editorRef = useRef<HTMLDivElement>(null);
 
   const node = doc[id];
   const isEditing = editing === id;
-
-  useEffect(() => {
-    if (!isEditing) return;
-    // wait a frame: a node created by the text tool is still being laid out,
-    // and focusing too early silently fails
-    const frame = requestAnimationFrame(() => {
-      const el = editorRef.current;
-      if (!el) return;
-      el.focus();
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [isEditing]);
 
   if (!node || !node.visible) return null;
 

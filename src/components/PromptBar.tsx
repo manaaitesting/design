@@ -55,7 +55,8 @@ export function PromptBar() {
       style={{
         position: 'absolute',
         left: '50%',
-        bottom: 24,
+        // above the floating toolbar
+        bottom: 80,
         transform: 'translateX(-50%)',
         width: 470,
         maxWidth: 'calc(100vw - 640px)',

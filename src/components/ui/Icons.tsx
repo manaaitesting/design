@@ -55,26 +55,6 @@ function Svg24({ children, size = 16, ...rest }: SVGProps<SVGSVGElement> & { chi
   );
 }
 
-/** an evenly spaced dot field, for the blur and texture glyphs */
-function grid(step: number, radius: number): ReactNode {
-  const dots = [];
-  for (let row = 0; row < step; row++) {
-    for (let column = 0; column < step; column++) {
-      dots.push(
-        <circle
-          key={`${row}-${column}`}
-          cx={3.2 + (column * 9.6) / (step - 1)}
-          cy={3.2 + (row * 9.6) / (step - 1)}
-          r={radius}
-          fill="currentColor"
-          strokeWidth={0}
-        />,
-      );
-    }
-  }
-  return dots;
-}
-
 /** a deliberately irregular dot field — noise, not a grid */
 function scatter(): ReactNode {
   const points: [number, number, number][] = [
@@ -107,16 +87,17 @@ export const Icon = {
       <path d="M5 17.3336V6.66698C5 5.78742 5 5.34715 5.18509 5.08691C5.34664 4.85977 5.59564 4.71064 5.87207 4.67499C6.18868 4.63415 6.57701 4.84126 7.35254 5.25487L17.3525 10.5882L17.3562 10.5898C18.2132 11.0469 18.642 11.2756 18.7826 11.5803C18.9053 11.8462 18.9053 12.1531 18.7826 12.4189C18.6418 12.7241 18.212 12.9537 17.3525 13.4121L7.35254 18.7454C6.57645 19.1593 6.1888 19.3657 5.87207 19.3248C5.59564 19.2891 5.34664 19.1401 5.18509 18.9129C5 18.6527 5 18.2132 5 17.3336Z" />
     </Svg24>
   ),
-  /** The transport's other half. Two bars is the whole glyph; nothing to borrow. */
+  /** coolicons — Media / Pause */
   Pause: () => (
     <Svg24>
-      <path d="M9 5V19M15 5V19" />
+      <path d="M4 5.5V18.5C4 18.965 4 19.197 4.038 19.39C4.196 20.184 4.816 20.804 5.609 20.962C5.803 21 6.035 21 6.5 21C6.964 21 7.197 21 7.391 20.962C8.184 20.804 8.804 20.184 8.962 19.39C9 19.199 9 18.969 9 18.512V5.488C9 5.031 9 4.801 8.962 4.609C8.804 3.816 8.184 3.196 7.39 3.038C7.197 3 6.965 3 6.5 3C6.035 3 5.803 3 5.609 3.038C4.816 3.196 4.196 3.816 4.038 4.609C4 4.803 4 5.035 4 5.5Z" />
+      <path d="M15 5.5V18.5C15 18.965 15 19.197 15.038 19.39C15.196 20.184 15.816 20.804 16.609 20.962C16.803 21 17.035 21 17.5 21C17.964 21 18.197 21 18.391 20.962C19.184 20.804 19.804 20.184 19.962 19.39C20 19.199 20 18.969 20 18.512V5.488C20 5.031 20 4.801 19.962 4.609C19.804 3.816 19.184 3.196 18.39 3.038C18.197 3 17.965 3 17.5 3C17.035 3 16.803 3 16.609 3.038C15.816 3.196 15.196 3.816 15.038 4.609C15 4.803 15 5.035 15 5.5Z" />
     </Svg24>
   ),
-  /** Loop — an arrow that comes back round, drawn on the same 24 grid. */
+  /** coolicons — Arrow / Arrows_Reload_01 */
   Loop: () => (
     <Svg24>
-      <path d="M4 9.5V9C4 7.34315 5.34315 6 7 6H17M17 6L14.5 3.5M17 6L14.5 8.5M20 14.5V15C20 16.6569 18.6569 18 17 18H7M7 18L9.5 20.5M7 18L9.5 15.5" />
+      <path d="M10 16H5V21M14 8H19V3M4.583 9C5.144 7.62 6.082 6.41 7.293 5.53C8.503 4.65 9.937 4.13 11.43 4.02C12.923 3.91 14.415 4.23 15.738 4.93C17.061 5.63 18.161 6.68 18.914 7.98M19.418 15C18.857 16.38 17.918 17.59 16.708 18.47C15.498 19.35 14.065 19.87 12.572 19.98C11.079 20.09 9.586 19.77 8.263 19.07C6.939 18.37 5.839 17.32 5.086 16.02" />
     </Svg24>
   ),
   /**
@@ -133,28 +114,26 @@ export const Icon = {
       <path d="M17.5 10.5V6.5a1.75 1.75 0 0 0-3.5 0V10M14 9.5V5a1.75 1.75 0 0 0-3.5 0v5M10.5 10V6a1.75 1.75 0 0 0-3.5 0v8.5M17.5 8.75a1.75 1.75 0 1 1 3.5 0V14a7 7 0 0 1-7 7h-1.6c-2.2 0-3.6-.7-4.9-2L4.2 15.7a1.75 1.75 0 0 1 2.5-2.5l1.8 1.8" />
     </Svg24>
   ),
-  /** coolicons — Edit / Table */
+  /** Frame — Figma's frame/hash icon (provided element) */
   Frame: () => (
-    <Svg24>
-      <path d="M4 15V16.8002C4 17.9203 4 18.4801 4.21799 18.9079C4.40973 19.2842 4.71547 19.5905 5.0918 19.7822C5.5192 20 6.07899 20 7.19691 20H12M4 15V9M4 15H12M4 9V7.2002C4 6.08009 4 5.51962 4.21799 5.0918C4.40973 4.71547 4.71547 4.40973 5.0918 4.21799C5.51962 4 6.08009 4 7.2002 4H12M4 9H12M12 4H16.8002C17.9203 4 18.4801 4 18.9079 4.21799C19.2842 4.40973 19.5905 4.71547 19.7822 5.0918C20 5.5192 20 6.07899 20 7.19691V9M12 4V9M12 9V15M12 9H20M12 15V20M12 15H20M12 20H16.8036C17.9215 20 18.4805 20 18.9079 19.7822C19.2842 19.5905 19.5905 19.2842 19.7822 18.9079C20 18.4805 20 17.9215 20 16.8036V15M20 15V9" />
-    </Svg24>
-  ),
-  /** hash — Frame tool's rail glyph per request */
-  Hash: () => (
-    <Svg>
-      <text
-        x={8}
-        y={11.5}
-        textAnchor="middle"
-        fontSize={13}
-        fontWeight={700}
+    <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
         fill="currentColor"
-        stroke="none"
-        fontFamily="Inter, system-ui, sans-serif"
-      >
-        #
-      </text>
-    </Svg>
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M5.5 3a.5.5 0 0 1 .5.5V5h4V3.5a.5.5 0 0 1 1 0V5h1.5a.5.5 0 0 1 0 1H11v4h1.5a.5.5 0 0 1 0 1H11v1.5a.5.5 0 0 1-1 0V11H6v1.5a.5.5 0 0 1-1 0V11H3.5a.5.5 0 0 1 0-1H5V6H3.5a.5.5 0 0 1 0-1H5V3.5a.5.5 0 0 1 .5-.5m4.5 7V6H6v4z"
+      />
+    </svg>
+  ),
+  Hash: () => (
+    <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M5.5 3a.5.5 0 0 1 .5.5V5h4V3.5a.5.5 0 0 1 1 0V5h1.5a.5.5 0 0 1 0 1H11v4h1.5a.5.5 0 0 1 0 1H11v1.5a.5.5 0 0 1-1 0V11H6v1.5a.5.5 0 0 1-1 0V11H3.5a.5.5 0 0 1 0-1H5V6H3.5a.5.5 0 0 1 0-1H5V3.5a.5.5 0 0 1 .5-.5m4.5 7V6H6v4z"
+      />
+    </svg>
   ),
   /** Figma's section: a board with bracketed corners, not the frame's cross. */
   /** coolicons — Interface / Label */
@@ -214,11 +193,11 @@ export const Icon = {
   ),
 
   // ── Chrome ─────────────────────────────────────────────────────────────
+  /** coolicons — System / Bar_Left */
   PanelToggle: () => (
-    <Svg>
-      <rect x={2.5} y={3.5} width={11} height={9} rx={1.4} />
-      <path d="M6.5 3.5v9" />
-    </Svg>
+    <Svg24>
+      <path d="M9 20V4M9 20H16.803C17.921 20 18.48 20 18.907 19.782C19.284 19.59 19.59 19.284 19.782 18.907C20 18.48 20 17.921 20 16.803V7.197C20 6.079 20 5.519 19.782 5.092C19.59 4.715 19.284 4.41 18.907 4.218C18.48 4 17.92 4 16.8 4H9M9 20H7.197C6.079 20 5.519 20 5.092 19.782C4.715 19.59 4.41 19.284 4.218 18.907C4 18.48 4 17.92 4 16.8V7.2C4 6.08 4 5.52 4.218 5.092C4.41 4.715 4.715 4.41 5.092 4.218C5.52 4 6.08 4 7.2 4H9" />
+    </Svg24>
   ),
   Logo: () => (
     <Svg>
@@ -303,19 +282,18 @@ export const Icon = {
     </Svg24>
   ),
   /**
-   * The settings glyph: two sliders, each with its knob at its own height.
+   * The settings glyph: three tracks, each with its handle at its own stop.
    *
-   * coolicons' Slider_01 puts both tracks and both knobs on a 24 grid built
-   * for 24px, and at 16 the two knobs and four track stubs collapse into a
-   * smudge. Figma draws the same idea upright with far less in it, which is
-   * what this is: two tracks, two knobs, nothing else.
+   * coolicons draws this three ways. Slider_01 and _02 set the handle as a
+   * circle straddling the track, and at 16 the discs and the track stubs
+   * either side collapse into a smudge; _03 marks the same stop with a tick,
+   * which survives the size — so that is the one the set gives us here.
    */
+  /** coolicons — Interface / Slider_03 */
   Sliders: () => (
-    <Svg size={14}>
-      <path d="M5.5 2.6v3.1M5.5 8.9v4.5M10.5 2.6v6.6M10.5 12.4v1" />
-      <circle cx={5.5} cy={7.3} r={1.6} />
-      <circle cx={10.5} cy={10.8} r={1.6} />
-    </Svg>
+    <Svg24 size={14}>
+      <path d="M10 18H21M3 18H6M6 18V20M6 18V16M20 12H21M3 12H16M16 12V14M16 12V10M14 6H21M3 6H10M10 6V8M10 6V4" />
+    </Svg24>
   ),
   Corners: () => (
     <Svg size={14}>
@@ -343,9 +321,10 @@ export const Icon = {
    * StrokeStyle, StrokeInLayout and the stacking glyph; nothing about it said
    * "these two fields move together".
    */
+  /** coolicons — Interface / Link, one size down */
   AspectLock: () => (
-    // the same link the text panel uses, one size down: two drawings of a
-    // chain in one panel would only look like two different marks
+    // the same link the text panel uses: two drawings of a chain in one panel
+    // would only look like two different marks
     <Svg24 size={14}>
       <path d="M9.1718 14.8288L14.8287 9.17192M7.05086 11.293L5.63664 12.7072C4.07455 14.2693 4.07409 16.8022 5.63619 18.3643C7.19829 19.9264 9.7317 19.9259 11.2938 18.3638L12.7065 16.9498M11.2929 7.05L12.7071 5.63579C14.2692 4.07369 16.8016 4.07397 18.3637 5.63607C19.9258 7.19816 19.9257 9.73085 18.3636 11.2929L16.9501 12.7071" />
     </Svg24>
@@ -555,11 +534,12 @@ export const Icon = {
       <path d="M11.2348 15.1019C10.8672 15.2542 10.5377 15.5837 9.8788 16.2426C9.22004 16.9014 8.8904 17.231 8.73818 17.5985C8.53519 18.0886 8.53519 18.6392 8.73818 19.1293C8.89042 19.4968 9.21989 19.8263 9.87883 20.4852C10.5374 21.1438 10.8673 21.4737 11.2347 21.6259C11.7248 21.8289 12.2755 21.8289 12.7655 21.6259C13.1331 21.4737 13.4625 21.1442 14.1215 20.4852C14.7804 19.8263 15.1089 19.4968 15.2612 19.1293C15.4641 18.6392 15.4641 18.0886 15.2612 17.5985C15.1089 17.231 14.7804 16.9015 14.1215 16.2426C13.4625 15.5837 13.1331 15.2542 12.7655 15.1019C12.2755 14.899 11.7248 14.899 11.2348 15.1019Z" fill={solid ? 'currentColor' : 'none'} />
     </Svg24>
   ),
+  /** coolicons — Interface / Settings_Future; the hexagon Figma marks a variable with */
   Variable: () => (
-    <Svg size={12}>
-      <path d="M6 1.2 10.6 3.9v5.4L6 12 1.4 9.3V3.9L6 1.2Z" />
-      <circle cx={6} cy={6.6} r={1.05} fill="currentColor" strokeWidth={0} />
-    </Svg>
+    <Svg24 size={13}>
+      <path d="M13.601 21.076L19.061 17.924C19.644 17.587 19.935 17.419 20.147 17.183C20.334 16.975 20.476 16.73 20.562 16.463C20.66 16.163 20.66 15.827 20.66 15.157V8.843C20.66 8.173 20.66 7.837 20.562 7.536C20.476 7.27 20.334 7.024 20.147 6.816C19.935 6.582 19.645 6.414 19.067 6.08L13.6 2.924C13.017 2.587 12.726 2.419 12.416 2.353C12.142 2.295 11.858 2.295 11.584 2.353C11.274 2.419 10.983 2.587 10.4 2.924L4.938 6.077C4.356 6.413 4.065 6.581 3.853 6.816C3.666 7.024 3.524 7.27 3.438 7.536C3.34 7.838 3.34 8.174 3.34 8.847V15.152C3.34 15.825 3.34 16.162 3.438 16.463C3.524 16.73 3.666 16.975 3.853 17.183C4.065 17.419 4.357 17.587 4.939 17.924L10.4 21.076C10.983 21.413 11.274 21.581 11.584 21.646C11.858 21.705 12.142 21.705 12.416 21.646C12.726 21.581 13.018 21.413 13.601 21.076Z" />
+      <path d="M9 12C9 13.657 10.343 15 12 15C13.657 15 15 13.657 15 12C15 10.343 13.657 9 12 9C10.343 9 9 10.343 9 12Z" />
+    </Svg24>
   ),
   GridFlow: () => (
     <Svg size={14}>
@@ -576,13 +556,17 @@ export const Icon = {
       <rect x={5} y={9.4} width={4} height={4} rx={1} />
     </Svg>
   ),
+  /**
+   * A style or a variable mode, drawn as a set of swatches.
+   *
+   * This was four rounded squares — the same four squares GridFlow draws — so
+   * the styles list and the grid-layout button shared one mark between them.
+   */
+  /** coolicons — Edit / Swatches_Palette */
   Tokens: () => (
-    <Svg size={14}>
-      <rect x={2.6} y={2.6} width={4.4} height={4.4} rx={1} />
-      <rect x={9} y={2.6} width={4.4} height={4.4} rx={1} />
-      <rect x={2.6} y={9} width={4.4} height={4.4} rx={1} />
-      <rect x={9} y={9} width={4.4} height={4.4} rx={1} />
-    </Svg>
+    <Svg24 size={14}>
+      <path d="M6.5 21H20.471C20.763 21 21 20.76 21 20.47L21 14.53M7.98 20.67L20.642 14.77C20.907 14.64 21.022 14.33 20.898 14.06L18.387 8.68C18.264 8.41 17.949 8.3 17.684 8.42L12.03 11.06M9.882 18.4C9.382 20.27 7.462 21.38 5.595 20.88C3.728 20.38 2.62 18.46 3.12 16.59L6.736 3.1C6.812 2.82 7.102 2.65 7.384 2.72L13.123 4.26C13.405 4.34 13.573 4.63 13.497 4.91L9.882 18.4ZM6.5 17.6H6.502L6.502 17.6L6.5 17.6V17.6Z" />
+    </Svg24>
   ),
   Rotate90: () => (
     <Svg size={14}>
@@ -685,7 +669,20 @@ export const Icon = {
     </Svg>
   ),
   Noise: () => <Svg>{scatter()}</Svg>,
-  Texture: () => <Svg>{grid(4, 0.7)}</Svg>,
+  /** coolicons — Menu / More_Grid_Big, the set's own evenly spaced dot field */
+  Texture: () => (
+    <Svg24>
+      <path d="M17 18C17 18.552 17.448 19 18 19C18.552 19 19 18.552 19 18C19 17.448 18.552 17 18 17C17.448 17 17 17.448 17 18Z" />
+      <path d="M11 18C11 18.552 11.448 19 12 19C12.552 19 13 18.552 13 18C13 17.448 12.552 17 12 17C11.448 17 11 17.448 11 18Z" />
+      <path d="M5 18C5 18.552 5.448 19 6 19C6.552 19 7 18.552 7 18C7 17.448 6.552 17 6 17C5.448 17 5 17.448 5 18Z" />
+      <path d="M17 12C17 12.552 17.448 13 18 13C18.552 13 19 12.552 19 12C19 11.448 18.552 11 18 11C17.448 11 17 11.448 17 12Z" />
+      <path d="M11 12C11 12.552 11.448 13 12 13C12.552 13 13 12.552 13 12C13 11.448 12.552 11 12 11C11.448 11 11 11.448 11 12Z" />
+      <path d="M5 12C5 12.552 5.448 13 6 13C6.552 13 7 12.552 7 12C7 11.448 6.552 11 6 11C5.448 11 5 11.448 5 12Z" />
+      <path d="M17 6C17 6.552 17.448 7 18 7C18.552 7 19 6.552 19 6C19 5.448 18.552 5 18 5C17.448 5 17 5.448 17 6Z" />
+      <path d="M11 6C11 6.552 11.448 7 12 7C12.552 7 13 6.552 13 6C13 5.448 12.552 5 12 5C11.448 5 11 5.448 11 6Z" />
+      <path d="M5 6C5 6.552 5.448 7 6 7C6.552 7 7 6.552 7 6C7 5.448 6.552 5 6 5C5.448 5 5 5.448 5 6Z" />
+    </Svg24>
+  ),
   /** Glass: a pane with the two highlight bands that read as glossy. */
   Glass: () => (
     <Svg>
@@ -700,17 +697,17 @@ export const Icon = {
     </Svg>
   ),
   /** spread and radius: a circle with rays, the way Figma marks a soft edge */
+  /** coolicons — Environment / Sun */
   Spread: () => (
-    <Svg>
-      <circle cx={8} cy={8} r={2.4} />
-      <path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.9 3.9l1.1 1.1M11 11l1.1 1.1M12.1 3.9 11 5M5 11l-1.1 1.1" opacity={0.7} />
-    </Svg>
+    <Svg24>
+      <path d="M12 4V2M12 20V22M6.414 6.414L5 5M17.728 17.728L19.142 19.142M4 12H2M20 12H22M17.729 6.414L19.143 5M6.415 17.728L5 19.142M12 17C9.239 17 7 14.761 7 12C7 9.239 9.239 7 12 7C14.761 7 17 9.239 17 12C17 14.761 14.761 17 12 17Z" />
+    </Svg24>
   ),
-  /** the blend-mode droplet in an effect's settings header */
+  /** coolicons — Environment / Water_Drop */
   Droplet: () => (
-    <Svg>
-      <path d="M8 2.4 4.9 6.6a3.9 3.9 0 1 0 6.2 0L8 2.4Z" />
-    </Svg>
+    <Svg24>
+      <path d="M16 13.385C16 14.609 15.526 15.783 14.682 16.648C14.203 17.14 13.627 17.509 13 17.736M19 13.692C19 7.115 12 2 12 2C12 2 5 7.115 5 13.692C5 15.63 5.737 17.489 7.05 18.86C8.363 20.23 10.144 20.999 12 20.999C13.857 20.999 15.637 20.23 16.95 18.859C18.262 17.489 19 15.63 19 13.692Z" />
+    </Svg24>
   ),
   /**
    * Copy colors — the eyedropper at the foot of the tool rail.
@@ -739,6 +736,12 @@ export const Icon = {
       <path d="M9 15V18C9 19.6569 7.65685 21 6 21C4.34315 21 3 19.6569 3 18C3 16.3431 4.34315 15 6 15H9ZM9 15H15M9 15V9M15 15V18C15 19.6569 16.3431 21 18 21C19.6569 21 21 19.6569 21 18C21 16.3431 19.6569 15 18 15H15ZM15 15V9M15 9H9M15 9V6C15 4.34315 16.3431 3 18 3C19.6569 3 21 4.34315 21 6C21 7.65685 19.6569 9 18 9H15ZM9 9V6C9 4.34315 7.65685 3 6 3C4.34315 3 3 4.34315 3 6C3 7.65685 4.34315 9 6 9H9Z" />
     </Svg24>
   ),
+  /** coolicons — Communication / Paper_Plane */
+  Send: () => (
+    <Svg24>
+      <path d="M10.308 13.692L15.154 8.846M20.111 5.889L16.021 19.183C15.654 20.375 15.471 20.971 15.154 21.168C14.88 21.34 14.541 21.368 14.242 21.244C13.898 21.101 13.618 20.543 13.06 19.428L10.469 14.246C10.381 14.069 10.337 13.981 10.277 13.904C10.225 13.836 10.165 13.775 10.096 13.722C10.022 13.665 9.935 13.621 9.766 13.537L4.572 10.94C3.457 10.382 2.899 10.103 2.756 9.759C2.632 9.46 2.66 9.12 2.832 8.846C3.029 8.53 3.625 8.346 4.817 7.979L18.112 3.889C19.049 3.6 19.517 3.456 19.834 3.573C20.109 3.674 20.327 3.891 20.428 4.167C20.544 4.483 20.4 4.951 20.112 5.887L20.111 5.889Z" />
+    </Svg24>
+  ),
   /** coolicons — Menu / More_Horizontal */
   Dots: () => (
     <Svg24>
@@ -747,11 +750,11 @@ export const Icon = {
       <path d="M5 12C5 12.5523 5.44772 13 6 13C6.55228 13 7 12.5523 7 12C7 11.4477 6.55228 11 6 11C5.44772 11 5 11.4477 5 12Z" />
     </Svg24>
   ),
+  /** coolicons — Arrow / Arrow_Sub_Down_Left */
   Wrap: () => (
-    <Svg size={14}>
-      <path d="M2.6 4.4h8.2a2.4 2.4 0 0 1 0 4.8H4.2" />
-      <path d="M6.2 7.2 4 9.2l2.2 2" />
-    </Svg>
+    <Svg24 size={14}>
+      <path d="M11 21L6 16L11 11M6 16H13.803C14.921 16 15.48 16 15.908 15.782C16.284 15.59 16.59 15.284 16.782 14.908C17 14.48 17 13.921 17 12.803V3" />
+    </Svg24>
   ),
 
   /** Figma's Text case: the same two letters, cased four ways. */
@@ -790,14 +793,14 @@ export const Icon = {
   ),
 
   // ── Alignment ──────────────────────────────────────────────────────────
+  /** coolicons — Edit / Text_Align_Left, _Center, _Right and _Justify */
   AlignH: ({ at }: { at: 'left' | 'center' | 'right' | 'justify' }) => (
-    <Svg size={14}>
-      {at === 'left' && <path d="M3 3v10M5.4 6h7M5.4 10h4" />}
-      {at === 'center' && <path d="M8 2.4v11.2M4 6h8M5.6 10h4.8" />}
-      {at === 'right' && <path d="M13 3v10M3.6 6h7M6.6 10h4" />}
-      {/* justify sets both edges flush, so the glyph is four full-width rules */}
-      {at === 'justify' && <path d="M3 3.4h10M3 6.2h10M3 9h10M3 11.8h10" />}
-    </Svg>
+    <Svg24 size={14}>
+      {at === 'left' && <path d="M4 18H14M4 14H20M4 10H14M4 6H20" />}
+      {at === 'center' && <path d="M17 18H7M20 14H4M17 10H7M20 6H4" />}
+      {at === 'right' && <path d="M20 18H10M20 14H4M20 10H10M20 6H4" />}
+      {at === 'justify' && <path d="M20 18H4M20 14H4M20 10H4M20 6H4" />}
+    </Svg24>
   ),
 
   /**
@@ -822,6 +825,12 @@ export const Icon = {
     </Svg>
   ),
 
+  /** coolicons — Edit / Table; the file browser's grid view, beside List */
+  Grid: () => (
+    <Svg24>
+      <path d="M4 15V16.8C4 17.92 4 18.48 4.218 18.91C4.41 19.28 4.715 19.59 5.092 19.78C5.519 20 6.079 20 7.197 20H12M4 15V9M4 15H12M4 9V7.2C4 6.08 4 5.52 4.218 5.09C4.41 4.72 4.715 4.41 5.092 4.22C5.52 4 6.08 4 7.2 4H12M4 9H12M12 4H16.8C17.92 4 18.48 4 18.908 4.22C19.284 4.41 19.59 4.72 19.782 5.09C20 5.52 20 6.08 20 7.2V9M12 4V9M12 9V15M12 9H20M12 15V20M12 15H20M12 20H16.804C17.921 20 18.48 20 18.908 19.78C19.284 19.59 19.59 19.28 19.782 18.91C20 18.48 20 17.92 20 16.8V15M20 15V9" />
+    </Svg24>
+  ),
   /** List style: bullets or numbers beside two rules. */
   /** coolicons — Edit / List_Unordered, or List_Ordered when numbered */
   List: ({ ordered }: { ordered?: boolean }) => (
@@ -829,12 +838,22 @@ export const Icon = {
       <path d={ordered ? 'M10 17H20M4 15.6853V15.5C4 14.6716 4.67157 14 5.5 14H5.54054C6.34658 14 7.00021 14.6534 7.00021 15.4595C7.00021 15.8103 6.8862 16.1519 6.67568 16.4326L4 20.0002L7 20M10 12H20M10 7H20M4 5L6 4V10' : 'M9 17H19M9 12H19M9 7H19M5.00195 17V17.002L5 17.002V17H5.00195ZM5.00195 12V12.002L5 12.002V12H5.00195ZM5.00195 7V7.002L5 7.00195V7H5.00195Z'} />
     </Svg24>
   ),
+  /**
+   * Vertical alignment — the set's own text-align rules, turned 90°.
+   *
+   * coolicons has no vertical text align, and the two groups sit in one row of
+   * the type panel, so a hand-drawn AlignV put a 14-grid mark beside AlignH's
+   * 24-grid one. Rotating Text_Align_Left, _Center and _Right about their own
+   * centre gives top, middle and bottom in the set's own rhythm and weight —
+   * the same move Line makes with Line_Xl.
+   */
+  /** coolicons — Edit / Text_Align_Left, _Center and _Right, turned 90° */
   AlignV: ({ at }: { at: 'top' | 'middle' | 'bottom' }) => (
-    <Svg size={14}>
-      {at === 'top' && <path d="M3 3h10M6 5.4v7M10 5.4v4" />}
-      {at === 'middle' && <path d="M2.4 8h11.2M6 4v8M10 5.6v4.8" />}
-      {at === 'bottom' && <path d="M3 13h10M6 3.6v7M10 6.6v4" />}
-    </Svg>
+    <Svg24 size={14}>
+      {at === 'top' && <path d="M6 4V14M10 4V20M14 4V14M18 4V20" />}
+      {at === 'middle' && <path d="M6 17V7M10 20V4M14 17V7M18 20V4" />}
+      {at === 'bottom' && <path d="M6 20V10M10 20V4M14 20V10M18 20V4" />}
+    </Svg24>
   ),
 
   // ── Shapes ─────────────────────────────────────────────────────────────
@@ -844,9 +863,9 @@ export const Icon = {
       <path d="M4.37891 15.1999C3.46947 16.775 3.01489 17.5634 3.08281 18.2097C3.14206 18.7734 3.43792 19.2851 3.89648 19.6182C4.42204 20.0001 5.3309 20.0001 7.14853 20.0001H16.8515C18.6691 20.0001 19.5778 20.0001 20.1034 19.6182C20.5619 19.2851 20.8579 18.7734 20.9172 18.2097C20.9851 17.5634 20.5307 16.775 19.6212 15.1999L14.7715 6.79986C13.8621 5.22468 13.4071 4.43722 12.8135 4.17291C12.2957 3.94236 11.704 3.94236 11.1862 4.17291C10.5928 4.43711 10.1381 5.22458 9.22946 6.79845L4.37891 15.1999Z" />
     </Svg24>
   ),
-  /** coolicons — Interface / Star */
-  Star: () => (
-    <Svg24>
+  /** coolicons — Interface / Star; filled once the file is a favourite */
+  Star: ({ filled = false }: { filled?: boolean }) => (
+    <Svg24 fill={filled ? 'currentColor' : 'none'}>
       <path d="M2.33496 10.3368C2.02171 10.0471 2.19187 9.52339 2.61557 9.47316L8.61914 8.76107C8.79182 8.74059 8.94181 8.63215 9.01465 8.47425L11.5469 2.98446C11.7256 2.59703 12.2764 2.59695 12.4551 2.98439L14.9873 8.47413C15.0601 8.63204 15.2092 8.74077 15.3818 8.76124L21.3857 9.47316C21.8094 9.52339 21.9791 10.0472 21.6659 10.3369L17.2278 14.4419C17.1001 14.56 17.0433 14.7357 17.0771 14.9063L18.255 20.8359C18.3382 21.2544 17.8928 21.5787 17.5205 21.3703L12.2451 18.4166C12.0934 18.3317 11.9091 18.3321 11.7573 18.417L6.48144 21.3695C6.10913 21.5779 5.66294 21.2544 5.74609 20.8359L6.92414 14.9066C6.95803 14.7361 6.90134 14.5599 6.77367 14.4419L2.33496 10.3368Z" />
     </Svg24>
   ),
