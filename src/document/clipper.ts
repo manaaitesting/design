@@ -339,45 +339,200 @@ function disc(centre: Point, radius: number, steps = discSteps(radius)): Ring {
   return ring;
 }
 
-/**
- * The region a stroke covers — Figma's "outline stroke".
- *
- * A stroked line is the sum of a rectangle per segment and a disc per joint,
- * which is exactly the Minkowski sum of the path with a round pen. Unioning
- * those pieces is what turns a stroke into a shape you can fill, and it is why
- * this needed the kernel above rather than another mask.
- */
 function discSteps(radius: number): number {
   return Math.max(12, Math.min(64, Math.ceil(radius * 3)));
 }
 
-export function strokeRegion(rings: Ring[], width: number, closed: boolean): Region {
+/**
+ * The pen a stroke is swept with — the parts of a `BorderSpec` that change the
+ * shape rather than the paint. The defaults are the canvas's own (`Shape.tsx`
+ * spells the same two), so a border with nothing set outlines into the shape it
+ * was already drawing.
+ */
+export interface StrokePen {
+  cap?: 'butt' | 'round' | 'square';
+  join?: 'miter' | 'round' | 'bevel';
+  /** degrees; below it a mitre gives up and bevels, as in Figma */
+  miterAngle?: number;
+  dash?: number;
+  gap?: number;
+}
+
+/** Drops the repeated points a flattened curve leaves behind. */
+function cleaned(ring: Ring): Ring {
+  const out: Ring = [];
+  for (const point of ring) {
+    if (!out.length || !near(out[out.length - 1], point, WELD)) out.push(point);
+  }
+  return out;
+}
+
+/**
+ * Cuts a polyline into its dashes.
+ *
+ * The pattern starts on a dash at the path's first point, which is where SVG's
+ * `stroke-dasharray` starts it too — so what the outliner produces is the set
+ * of marks the canvas was already drawing.
+ */
+function dashRuns(points: Point[], dash: number, gap: number): Point[][] {
+  const runs: Point[][] = [];
+  let run: Point[] = [points[0]];
+  let on = true;
+  let left = dash;
+
+  for (let i = 1; i < points.length; i++) {
+    let a = points[i - 1];
+    const b = points[i];
+    let remaining = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    while (remaining > left) {
+      const t = left / remaining;
+      const cut: Point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      if (on) {
+        run.push(cut);
+        if (run.length > 1) runs.push(run);
+        run = [];
+      } else {
+        run = [cut];
+      }
+      on = !on;
+      a = cut;
+      remaining -= left;
+      left = on ? dash : gap;
+    }
+    left -= remaining;
+    if (on) run.push(b);
+  }
+  if (on && run.length > 1) runs.push(run);
+  return runs;
+}
+
+/** The piece that finishes an open end at `p`, running away along `d`. */
+function capPiece(p: Point, d: Point, half: number, cap: StrokePen['cap'] = 'butt'): Region | null {
+  if (cap === 'butt') return null;
+  if (cap === 'round') return [disc(p, half)];
+  const nx = -d[1] * half;
+  const ny = d[0] * half;
+  return [
+    [
+      [p[0] + nx, p[1] + ny],
+      [p[0] + nx + d[0] * half, p[1] + ny + d[1] * half],
+      [p[0] - nx + d[0] * half, p[1] - ny + d[1] * half],
+      [p[0] - nx, p[1] - ny],
+    ],
+  ];
+}
+
+/**
+ * The piece that fills the notch at a corner, given the unit directions of the
+ * segment arriving at `b` and the one leaving it.
+ *
+ * Both sides of the joint get the same treatment: on the inside of the turn the
+ * wedge falls within the two rectangles anyway, so the union absorbs it and the
+ * code does not have to work out which way the path bends.
+ */
+function joinPiece(b: Point, into: Point, out: Point, half: number, pen: StrokePen): Region | null {
+  const join = pen.join ?? 'miter';
+  if (join === 'round') return [disc(b, half)];
+
+  const n1: Point = [-into[1], into[0]];
+  const n2: Point = [-out[1], out[0]];
+  const sum: Point = [n1[0] + n2[0], n1[1] + n2[1]];
+  const spread = Math.hypot(sum[0], sum[1]);
+  // a straight run through the joint, or a fold back on itself: no notch to fill
+  if (spread < EPS) return null;
+
+  const wedges: Region = [];
+  for (const sign of [1, -1]) {
+    const p1: Point = [b[0] + n1[0] * half * sign, b[1] + n1[1] * half * sign];
+    const p2: Point = [b[0] + n2[0] * half * sign, b[1] + n2[1] * half * sign];
+    // the mitre reaches half/sin(φ/2) from the corner; past the miter angle
+    // Figma bevels instead, and that is what `strokeMiterlimit` does on canvas
+    const reach = 2 / spread;
+    if (join === 'miter' && reach <= 1 / Math.sin((((pen.miterAngle ?? 28.96) * Math.PI) / 180) / 2)) {
+      const away = (half * reach * sign) / spread;
+      const tip: Point = [b[0] + sum[0] * away, b[1] + sum[1] * away];
+      wedges.push([b, p1, tip, p2]);
+    } else {
+      wedges.push([b, p1, p2]);
+    }
+  }
+  return wedges;
+}
+
+/**
+ * The region a stroke covers — Figma's "outline stroke".
+ *
+ * A stroked line is the sum of a rectangle per segment plus whatever the pen
+ * leaves at the joints and the ends, which is exactly the Minkowski sum of the
+ * path with that pen. Unioning those pieces is what turns a stroke into a shape
+ * you can fill, and it is why this needed the kernel above rather than another
+ * mask. The pen matters because the canvas already honours it: outlining with a
+ * round pen regardless would round off a mitred corner the moment ⇧⌘O ran.
+ */
+export function strokeRegion(
+  rings: Ring[],
+  width: number,
+  closed: boolean,
+  pen: StrokePen = {},
+): Region {
   const half = Math.max(width, 0.01) / 2;
   const pieces: Region[] = [];
+  const dash = pen.dash && pen.dash > 0 ? pen.dash : 0;
+  const gap = dash ? (pen.gap && pen.gap > 0 ? pen.gap : dash) : 0;
 
-  for (const ring of rings) {
-    const last = closed ? ring.length : ring.length - 1;
-    for (let i = 0; i < last; i++) {
-      const a = ring[i];
-      const b = ring[(i + 1) % ring.length];
-      const dx = b[0] - a[0];
-      const dy = b[1] - a[1];
-      const length = Math.hypot(dx, dy);
-      if (length < EPS) continue;
-      const nx = (-dy / length) * half;
-      const ny = (dx / length) * half;
-      pieces.push([
-        [
-          [a[0] + nx, a[1] + ny],
-          [b[0] + nx, b[1] + ny],
-          [b[0] - nx, b[1] - ny],
-          [a[0] - nx, a[1] - ny],
-        ],
-      ]);
-      pieces.push([disc(b, half)]);
+  for (const source of rings) {
+    const ring = cleaned(source);
+    // a flattened closed ring often repeats its first point at the end, and
+    // that closing edge of no length would knock the joints out of step
+    if (closed && ring.length > 2 && near(ring[0], ring[ring.length - 1], WELD)) ring.pop();
+    if (ring.length < 2) continue;
+    // a dashed stroke is a set of separate marks, each with two ends of its
+    // own, so a closed ring is walked from its first point right round to it
+    const whole = closed && dash ? [...ring, ring[0]] : ring;
+    const runs = dash ? dashRuns(whole, dash, gap) : [ring];
+    const rounds = !dash && closed;
+
+    for (const run of runs) {
+      const last = rounds ? run.length : run.length - 1;
+      const units: Point[] = [];
+      for (let i = 0; i < last; i++) {
+        const a = run[i];
+        const b = run[(i + 1) % run.length];
+        const dx = b[0] - a[0];
+        const dy = b[1] - a[1];
+        const length = Math.hypot(dx, dy);
+        if (length < EPS) continue;
+        const unit: Point = [dx / length, dy / length];
+        units.push(unit);
+        const nx = unit[1] * -half;
+        const ny = unit[0] * half;
+        pieces.push([
+          [
+            [a[0] + nx, a[1] + ny],
+            [b[0] + nx, b[1] + ny],
+            [b[0] - nx, b[1] - ny],
+            [a[0] - nx, a[1] - ny],
+          ],
+        ]);
+      }
+      if (!units.length) continue;
+
+      for (let i = 1; i < units.length; i++) {
+        const piece = joinPiece(run[i], units[i - 1], units[i], half, pen);
+        if (piece) pieces.push(piece);
+      }
+      if (rounds) {
+        const piece = joinPiece(run[0], units[units.length - 1], units[0], half, pen);
+        if (piece) pieces.push(piece);
+      } else {
+        const head = units[0];
+        const tail = units[units.length - 1];
+        const start = capPiece(run[0], [-head[0], -head[1]], half, pen.cap);
+        const end = capPiece(run[run.length - 1], tail, half, pen.cap);
+        if (start) pieces.push(start);
+        if (end) pieces.push(end);
+      }
     }
-    // the first joint, and both ends of an open path, get a cap of their own
-    pieces.push([disc(ring[0], half)]);
   }
 
   return clipAll(pieces, 'union');

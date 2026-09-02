@@ -1,7 +1,7 @@
 'use client';
 
 import { backgroundOf, imageSizing, shapePaint, type ShapeStroke } from '../document/css';
-import { booleanClips } from '../document/geometry';
+import { booleanClips, decoratedEnds, endCapPath, END_CAP_BOX } from '../document/geometry';
 import { booleanOutlinePath } from '../document/boolean';
 import { ShaderSurface } from './ShaderSurface';
 import type { Doc, SceneNode } from '../document/types';
@@ -56,6 +56,11 @@ export function StrokePath({
   const maskId = `${id}-stroke-mask`;
   // the stroke can sit outside the box, so the mask has to be roomier than it
   const pad = Math.max(stroke.width * 2, 8);
+  // `stroke-linecap` is one value for the whole path, so the moment the two
+  // ends differ — or either of them is an arrowhead — both are drawn as markers
+  const marked = decoratedEnds(stroke.capStart, stroke.capEnd);
+  const startCap = marked ? endCapPath(stroke.capStart) : null;
+  const endCap = marked ? endCapPath(stroke.capEnd) : null;
 
   return (
     <svg
@@ -85,20 +90,52 @@ export function StrokePath({
           </mask>
         </defs>
       )}
+      {marked && (
+        <defs>
+          {startCap && <EndCapMarker id={`${id}-cap-start`} d={startCap} color={stroke.color} />}
+          {endCap && <EndCapMarker id={`${id}-cap-end`} d={endCap} color={stroke.color} />}
+        </defs>
+      )}
       <path
         d={d}
         fill="none"
         stroke={stroke.color}
         strokeWidth={drawWidth}
         strokeDasharray={stroke.dash ?? undefined}
-        strokeLinecap={stroke.cap}
+        strokeLinecap={marked ? 'butt' : stroke.cap}
         strokeLinejoin={stroke.join}
         strokeMiterlimit={stroke.join === 'miter' ? stroke.miterLimit : undefined}
+        markerStart={startCap ? `url(#${id}-cap-start)` : undefined}
+        markerEnd={endCap ? `url(#${id}-cap-end)` : undefined}
         vectorEffect="non-scaling-stroke"
         clipPath={stroke.align === 'inside' ? `url(#${clipId})` : undefined}
         mask={stroke.align === 'outside' ? `url(#${maskId})` : undefined}
       />
     </svg>
+  );
+}
+
+/**
+ * One end's decoration.
+ *
+ * `markerUnits="strokeWidth"` is what keeps a head in proportion with the line
+ * the way Figma's does, and `auto-start-reverse` is what lets the start and the
+ * end share one description: the ring points away from the path either way.
+ */
+function EndCapMarker({ id, d, color }: { id: string; d: string; color: string }) {
+  return (
+    <marker
+      id={id}
+      viewBox={`${-END_CAP_BOX} ${-END_CAP_BOX} ${END_CAP_BOX * 2} ${END_CAP_BOX * 2}`}
+      refX={0}
+      refY={0}
+      markerWidth={END_CAP_BOX * 2}
+      markerHeight={END_CAP_BOX * 2}
+      markerUnits="strokeWidth"
+      orient="auto-start-reverse"
+    >
+      <path d={d} fill={color} />
+    </marker>
   );
 }
 
@@ -243,6 +280,8 @@ function strokeOf(node: SceneNode): ShapeStroke | null {
     width: border.width,
     dash: border.dash ? `${border.dash} ${border.gap ?? border.dash}` : null,
     cap: border.cap ?? 'butt',
+    capStart: border.capStart ?? border.cap ?? 'butt',
+    capEnd: border.capEnd ?? border.cap ?? 'butt',
     join: border.join ?? 'miter',
     // Figma states the limit as the angle a mitre gives up at; SVG wants the
     // ratio it corresponds to

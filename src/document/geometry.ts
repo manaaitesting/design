@@ -8,7 +8,7 @@
  * lets a vector be resized by scaling numbers rather than re-fitting curves.
  */
 
-import type { SceneNode, VectorPath } from './types';
+import type { EndCap, SceneNode, VectorPath } from './types';
 import type { Point, Region, Ring } from './clipper';
 
 /**
@@ -439,6 +439,101 @@ export function arrowPath(w: number, h: number, weight: number): string {
     `M 0 0 L ${round(baseX)} ${round(baseY)} ` +
     `M ${round(baseX + nx)} ${round(baseY + ny)} L ${round(tipX)} ${round(tipY)} L ${round(baseX - nx)} ${round(baseY - ny)}`
   );
+}
+
+/**
+ * The shape a stroke's end wears, as a ring in multiples of the stroke width,
+ * with the end of the path at the origin and the path arriving along +x.
+ *
+ * One description with three readers: the canvas turns it into an SVG marker,
+ * the exporter emits the same marker, and outline stroke unions it into the
+ * band — which is the only reason an outlined arrow keeps its head. `butt`
+ * draws nothing, and `round`/`square` are here so that a path whose two ends
+ * differ can be drawn by markers alone, since `stroke-linecap` is one value for
+ * the whole path.
+ */
+export function endCapRing(cap: EndCap): [number, number][] | null {
+  const arc = (radius: number, steps = 24): [number, number][] =>
+    Array.from({ length: steps }, (_, i) => {
+      const angle = (i / steps) * Math.PI * 2;
+      return [Math.cos(angle) * radius, Math.sin(angle) * radius] as [number, number];
+    });
+  switch (cap) {
+    case 'round':
+      return arc(0.5);
+    case 'square':
+      return [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
+    case 'circle':
+      return arc(1.5);
+    case 'diamond':
+      return [[1.5, 0], [0, 1.5], [-1.5, 0], [0, -1.5]];
+    case 'arrowTriangle':
+      return [[0, 0], [-3, 1.5], [-3, -1.5]];
+    case 'arrowLine':
+      // the two barbs of a chevron: the V that meets the tip, and the same V
+      // set back behind it far enough that the barbs come out a width thick
+      return [[0, 0], [-3, 1.73], [-5, 1.73], [-2, 0], [-5, -1.73], [-3, -1.73]];
+    default:
+      return null;
+  }
+}
+
+/** The same ring as an SVG `d`, for a `<marker>` whose units are the width. */
+export function endCapPath(cap: EndCap): string | null {
+  const ring = endCapRing(cap);
+  if (!ring) return null;
+  return `M ${ring.map(([x, y]) => `${round(x)} ${round(y)}`).join(' L ')} Z`;
+}
+
+/**
+ * Half the square a cap is drawn in, in stroke widths — wide enough for the
+ * longest of them, which is the chevron's back V.
+ */
+export const END_CAP_BOX = 6;
+
+/**
+ * True when the two ends cannot both be drawn by one `stroke-linecap` — either
+ * because they differ, or because one of them is a shape SVG has no cap for.
+ */
+export function decoratedEnds(start: EndCap, end: EndCap): boolean {
+  const plain = (cap: EndCap) => cap === 'butt' || cap === 'round' || cap === 'square';
+  return start !== end || !plain(start);
+}
+
+/**
+ * The two ends' decorations placed on the paths they belong to.
+ *
+ * Outline stroke unions these into the band. Without them an outlined arrow
+ * comes out a bare line — which is exactly how the `arrow` node type used to
+ * lose its head the moment anyone opened it for point editing.
+ */
+export function endCapRegions(rings: Ring[], width: number, start: EndCap, end: EndCap): Region {
+  const out: Region = [];
+  const place = (cap: EndCap, at: Point, from: Point) => {
+    const shape = endCapRing(cap);
+    if (!shape) return;
+    const dx = at[0] - from[0];
+    const dy = at[1] - from[1];
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-9) return;
+    // the ring is drawn along +x with the path arriving from -x, so the outward
+    // direction of this end is the ring's own x axis
+    const ux = dx / length;
+    const uy = dy / length;
+    out.push(
+      shape.map(([x, y]) => [
+        at[0] + (x * ux - y * uy) * width,
+        at[1] + (x * uy + y * ux) * width,
+      ]),
+    );
+  };
+
+  for (const ring of rings) {
+    if (ring.length < 2) continue;
+    place(start, ring[0], ring[1]);
+    place(end, ring[ring.length - 1], ring[ring.length - 2]);
+  }
+  return out;
 }
 
 /** The per-corner radii of a node, as four numbers. */
