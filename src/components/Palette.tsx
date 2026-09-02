@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useDoc, useReadOnly, useStore } from './Session';
+import { useDoc, useReadOnly, useStore, useTokenVars } from './Session';
 import { inverseOf } from '../document/selection';
 import { useUI } from '../state/ui';
 import { openingFrame } from '../document/prototype';
 import { descendants, ROOT_ID, type Doc } from '../document/types';
 import { TYPE_LABEL } from '../document/defaults';
-import { componentize, componentizeEach } from '../lib/actions';
+import { componentize, componentizeEach, rasterizeSelection } from '../lib/actions';
 
 /**
  * Quick actions.
@@ -32,6 +32,7 @@ export function Palette() {
   const doc = useDoc();
   const store = useStore();
   const readOnly = useReadOnly();
+  const tokenVars = useTokenVars();
   const open = useUI((s) => s.paletteOpen);
   const setOpen = useUI((s) => s.setPaletteOpen);
   const [query, setQuery] = useState('');
@@ -46,7 +47,7 @@ export function Palette() {
   }, [open]);
 
   const entries = useMemo(
-    () => (open ? [...commands(doc, store), ...layerEntries(doc)] : []),
+    () => (open ? [...commands(doc, store, tokenVars), ...layerEntries(doc)] : []),
     [open, doc, store],
   );
 
@@ -160,7 +161,7 @@ export function Palette() {
 }
 
 /** Every command the palette can run, in the order they are offered by default. */
-function commands(doc: Doc, store: ReturnType<typeof useStore>): Entry[] {
+function commands(doc: Doc, store: ReturnType<typeof useStore>, tokenVars: Record<string, string>): Entry[] {
   const ui = () => useUI.getState();
   const selection = () => ui().selection;
   const pick = (ids: string[]) => ui().select(ids);
@@ -202,6 +203,24 @@ function commands(doc: Doc, store: ReturnType<typeof useStore>): Entry[] {
     make('components', 'Create multiple components', () => {
       componentizeEach(store, selection());
     }),
+    // Figma keeps these off the right-click menu and in here, where a name finds them
+    make('section', 'Create section', () => {
+      const id = store.wrapInSection(selection());
+      if (id) pick([id]);
+    }, '⇧S'),
+    make('rasterize', 'Rasterize selection', () => {
+      void rasterizeSelection(store, selection(), ui().viewport.zoom, tokenVars).then((made) => {
+        if (made.length) pick(made);
+      });
+    }),
+    make('duplicate', 'Duplicate', () => pick(store.duplicate(selection())), '⌘D'),
+    make('rename', 'Rename', () => ui().setRenameOpen(true), '⌘R', false),
+    make('forward', 'Bring forward', () => store.reorder(selection(), 'forward'), '⌘]'),
+    make('backward', 'Send backward', () => store.reorder(selection(), 'backward'), '⌘['),
+    make('delete', 'Delete', () => {
+      store.remove(selection());
+      pick([]);
+    }, '⌫'),
     make('union', 'Union selection', () => runBoolean(store, 'union'), '⌥⌘U'),
     make('subtract', 'Subtract selection', () => runBoolean(store, 'subtract'), '⌥⌘S'),
     make('intersect', 'Intersect selection', () => runBoolean(store, 'intersect'), '⌥⌘I'),

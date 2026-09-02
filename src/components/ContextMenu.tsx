@@ -32,16 +32,17 @@ import {
   pasteAt,
   pasteProperties,
   pointerWorld,
+  rasterizeSelection,
   writeText,
 } from '../lib/actions';
-import { download, framesToPdf, nodeToPng, safeFilename } from '../export/raster';
+import { download, framesToPdf, safeFilename } from '../export/raster';
 import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { toTailwind } from '../export/tailwind';
 import { pageActions, textActions, useUI } from '../state/ui';
 import { fitView, revealNode } from '../lib/view';
 import { canEditPoints } from '../document/geometry';
-import { descendants, type BooleanOp, type Doc, type SceneNode } from '../document/types';
+import { descendants, topLevelOf, type BooleanOp, type Doc, type SceneNode } from '../document/types';
 import { boardsOf } from '../document/layers';
 
 export interface Item {
@@ -63,16 +64,6 @@ export interface Item {
 }
 
 export type { Item as MenuItem };
-
-/** A rendered blob as an inline data URL, which is how this document stores images. */
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('Could not read the rendered image.'));
-    reader.readAsDataURL(blob);
-  });
-}
 
 /** The main this layer follows, if it follows one. */
 function mainOf(node: SceneNode | undefined): string | null {
@@ -148,8 +139,9 @@ export function Panel({
 
   // A panel with more rows than the window is tall cannot be clamped onto the
   // screen — the arithmetic above pins it to the top and the rest hangs off the
-  // bottom, unreachable. Scrolling is what Figma does with a long menu, and it
-  // is the only answer that does not hide a command.
+  // bottom, unreachable. On a window that short the rows still scroll, by wheel
+  // and by keyboard; the bar itself is hidden, as Figma's is, since the menu
+  // is sized to fit and a bar would only say that it did not.
   const fit = { maxHeight: 'calc(100vh - 16px)', overflowY: 'auto' as const };
 
   /** the rows the keyboard can land on — a greyed row is not one of them */
@@ -176,7 +168,7 @@ export function Panel({
   const openSub = (index: number, byKey: boolean) => {
     const box = ref.current?.children[index]?.getBoundingClientRect();
     if (!box) return;
-    setOpen({ index, left: box.right - 4, top: box.top - 6, byKey });
+    setOpen({ index, left: box.right - 4, top: box.top - 8, byKey });
   };
 
   const onKeyDown = (event: ReactKeyboardEvent) => {
@@ -248,7 +240,7 @@ export function Panel({
             setActive(-1);
             if (item.disabled || !item.items) return setOpen(null);
             const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
-            setOpen({ index, left: box.right - 4, top: box.top - 6, byKey: false });
+            setOpen({ index, left: box.right - 4, top: box.top - 8, byKey: false });
           }}
         >
           {item.divider && <div className="ctx-sep" />}
@@ -542,34 +534,6 @@ function Menu({ menu }: { menu: OpenMenu }) {
     if (pasted.length) select(pasted);
   }
 
-  /**
-   * Figma's "Rasterize selection".
-   *
-   * Rendered here rather than in the store because this is where the DOM is —
-   * the picture is the canvas's own rendering of the layer, read back through
-   * the same exporter the PNG export uses, so what you get is what you saw.
-   *
-   * Every layer is rendered before the first one is replaced: rasterising as we
-   * go would take the next layer's element off the canvas midway through, and
-   * a layer that is not on screen cannot be rendered.
-   */
-  async function rasterizeSelection() {
-    const rendered: [string, string][] = [];
-    for (const id of selection) {
-      try {
-        const blob = await nodeToPng(id, zoom, 2, tokenVars);
-        rendered.push([id, await blobToDataUrl(blob)]);
-      } catch {
-        // a layer that is not on screen cannot be rendered; the rest still can
-      }
-    }
-    const made = rendered
-      .map(([id, src]) => store.rasterize(id, src))
-      .filter((id): id is string => !!id);
-    store.commit();
-    if (made.length) select(made);
-  }
-
   /** A text layer already following a path, when that is the whole selection. */
   const onPath = one && first?.textPath ? first.id : null;
 
@@ -715,70 +679,26 @@ function Menu({ menu }: { menu: OpenMenu }) {
     if (id) select([id]);
   };
 
-  const items: Item[] = [];
+  /**
+   * Figma's menu: a handful of groups with a rule between them. A row this
+   * selection could never light up is left out rather than greyed — the
+   * instance commands on a rectangle, Boolean groups on a single layer — and a
+   * group that empties takes its rule with it. What is not here (Duplicate,
+   * Rename, Delete, the one-step reorders) has a shortcut and a row in Actions.
+   */
+  const groups: Item[][] = [];
 
-  // Overlapping layers make right-click ambiguous, so list what is under the
-  // pointer and let you pick — the stack arrives deepest-first.
-  if (menu.stack.length > 1) {
-    items.push({
-      label: 'Select layer',
-      items: menu.stack.map((id) => ({
-        label: doc[id]?.name ?? id,
-        onHover: () => setHover(id),
-        run: () => {
-          select([id]);
-          const parent = doc[id]?.parent;
-          useUI.getState().setEntered(parent && doc[parent]?.type !== 'page' ? parent : null);
-        },
-      })),
-    });
-  }
-
-  items.push(
-    {
-      // Figma offers these four wherever you right-click, selection or not
-      label: 'Show/Hide UI',
-      shortcut: '⌘\\',
-      run: () => useUI.getState().toggleChrome(),
-    },
-    {
-      label: 'Show/Hide comments',
-      shortcut: '⇧C',
-      run: () => useUI.getState().toggleView('comments'),
-    },
-    {
-      label: 'Actions…',
-      shortcut: '⌘/',
-      divider: true,
-      run: () => useUI.getState().setPaletteOpen(true),
-    },
-    {
-      label: 'Copy',
-      shortcut: '⌘C',
-      divider: true,
-      disabled: !has,
-      run: () => void writeNodes(store.serialize(selection)),
-    },
+  const clipboard: Item[] = [
+    { label: 'Copy', shortcut: '⌘C', disabled: !has, run: () => void writeNodes(store.serialize(selection)) },
     { label: 'Paste here', disabled: !hasNodes(), run: pasteHere },
     { label: 'Paste to replace', shortcut: '⇧⌘R', disabled: !hasNodes() || !has, run: pasteToReplace },
     { label: 'Copy/Paste as', items: copyPasteAs },
-    {
-      label: 'Duplicate',
-      shortcut: '⌘D',
-      disabled: !has,
-      run: () => select(store.duplicate(selection)),
-    },
-    {
-      label: 'Rename',
-      shortcut: '⌘R',
-      disabled: !has,
-      run: () => useUI.getState().setRenameOpen(true),
-    },
-    {
+  ];
+  // a file with one page has nowhere to move to, so the row is not offered
+  if (pages.length > 1) {
+    clipboard.push({
       label: 'Move to page',
-      // a file with one page has nowhere to move to, so the row greys rather
-      // than opening onto an empty list
-      disabled: !has || pages.length < 2,
+      disabled: !has,
       items: pages
         .filter((id) => id !== pageId)
         .map((id) => ({
@@ -791,71 +711,51 @@ function Menu({ menu }: { menu: OpenMenu }) {
             select([]);
           },
         })),
+    });
+  }
+  // motion belongs to a board, so the row opens the timeline of whichever
+  // board the selection is in — the same board ⇧M would open
+  const board = has ? topLevelOf(target, doc) : null;
+  const motionFrame = board && doc[board]?.type === 'frame' ? board : null;
+  clipboard.push({
+    label: 'Add motion',
+    shortcut: '⇧M',
+    disabled: !motionFrame,
+    run: () => {
+      if (!motionFrame) return;
+      store.ensureMotion(motionFrame);
+      useUI.getState().openMotion(motionFrame);
     },
-    ...(instances
-      ? [
-          {
-            label: 'Detach instance',
-            shortcut: '⌥⌘B',
-            run: () => {
-              for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
-              store.commit();
-            },
-          },
-          {
-            label: 'Go to main component',
-            disabled: !one || !mainOf(first) || !doc[mainOf(first)!],
-            run: () => revealNode(mainOf(first)!, doc),
-          },
-          {
-            label: 'Push changes to main component',
-            // nothing to push is not the same as nothing selected, and the row
-            // says which by greying rather than by running and doing nothing
-            disabled: !one || !doc[mainOf(first) ?? ''] || !hasOverrides(first?.id ?? '', doc),
-            run: () => {
-              store.pushToMain(target);
-              store.commit();
-            },
-          },
-          {
-            label: 'Restore component',
-            // only for an instance whose main has gone: with the main still
-            // there this would make a second one
-            disabled: !one || !mainOf(first) || !!doc[mainOf(first)!],
-            run: () => {
-              const restored = store.restoreComponent(target);
-              store.commit();
-              if (restored) select([restored]);
-            },
-          },
-        ]
-      : []),
-    {
-      label: onPath ? 'Take off path' : 'Type on path',
-      // two layers, one of them text and one with an outline — Figma's own
-      // requirement, and the reason this is a menu command rather than a panel
-      // control: a panel only ever knows about one layer
-      disabled: !onPath && !typeOnPath,
-      run: () => {
-        if (onPath) store.detachFromPath(onPath);
-        else if (typeOnPath) store.attachToPath(typeOnPath.text, typeOnPath.source);
-        store.commit();
-      },
-    },
-    {
-      label: 'Rasterize selection',
-      disabled: !has,
-      run: () => void rasterizeSelection(),
-    },
-    { label: 'Bring to front', shortcut: ']', divider: true, disabled: !has, run: () => store.reorder(selection, 'front') },
-    { label: 'Bring forward', shortcut: '⌘]', disabled: !has, run: () => store.reorder(selection, 'forward') },
-    { label: 'Send backward', shortcut: '⌘[', disabled: !has, run: () => store.reorder(selection, 'backward') },
-    { label: 'Send to back', shortcut: '[', disabled: !has, run: () => store.reorder(selection, 'back') },
+  });
+  groups.push(clipboard);
 
+  const order: Item[] = [];
+  // Overlapping layers make right-click ambiguous, so list what is under the
+  // pointer and let you pick — the stack arrives deepest-first.
+  if (menu.stack.length) {
+    order.push({
+      label: 'Select layer',
+      items: menu.stack.map((id) => ({
+        label: doc[id]?.name ?? id,
+        onHover: () => setHover(id),
+        run: () => {
+          select([id]);
+          const parent = doc[id]?.parent;
+          useUI.getState().setEntered(parent && doc[parent]?.type !== 'page' ? parent : null);
+        },
+      })),
+    });
+  }
+  order.push(
+    { label: 'Bring to front', shortcut: ']', disabled: !has, run: () => store.reorder(selection, 'front') },
+    { label: 'Send to back', shortcut: '[', disabled: !has, run: () => store.reorder(selection, 'back') },
+  );
+  groups.push(order);
+
+  groups.push([
     {
       label: 'Group selection',
       shortcut: '⌘G',
-      divider: true,
       disabled: !has,
       run: () => {
         const id = store.group(selection);
@@ -880,24 +780,20 @@ function Menu({ menu }: { menu: OpenMenu }) {
         if (freed.length) select(freed);
       },
     },
-
-    {
-      label: 'Boolean groups',
-      divider: true,
-      disabled: selection.length < 2,
-      items: [
-        { label: 'Union selection', shortcut: '⌥⌘U', run: () => combine('union') },
-        { label: 'Subtract selection', shortcut: '⌥⌘S', run: () => combine('subtract') },
-        { label: 'Intersect selection', shortcut: '⌥⌘I', run: () => combine('intersect') },
-        { label: 'Exclude selection', shortcut: '⌥⌘E', run: () => combine('exclude') },
-      ],
-    },
-    {
-      label: first?.isMask ? 'Remove mask' : 'Use as mask',
-      shortcut: '⌃⌘M',
-      disabled: !has,
-      run: () => store.toggleMask(selection),
-    },
+    // two layers or there is nothing to combine
+    ...(selection.length >= 2
+      ? [
+          {
+            label: 'Boolean groups',
+            items: [
+              { label: 'Union selection', shortcut: '⌥⌘U', run: () => combine('union') },
+              { label: 'Subtract selection', shortcut: '⌥⌘S', run: () => combine('subtract') },
+              { label: 'Intersect selection', shortcut: '⌥⌘I', run: () => combine('intersect') },
+              { label: 'Exclude selection', shortcut: '⌥⌘E', run: () => combine('exclude') },
+            ],
+          },
+        ]
+      : []),
     {
       label: 'Flatten',
       shortcut: '⌘E',
@@ -919,21 +815,24 @@ function Menu({ menu }: { menu: OpenMenu }) {
         if (made.length) select(made);
       },
     },
-    {
-      label: 'Edit points',
-      shortcut: '⏎',
-      disabled: !one || !first || !canEditPoints(first.type),
-      run: () => useUI.getState().setVectorEdit(target),
-    },
-    {
-      label: 'Create section',
-      shortcut: '⇧S',
-      disabled: !has,
-      run: () => {
-        const id = store.wrapInSection(selection);
-        if (id) select([id]);
-      },
-    },
+    ...(one && first && canEditPoints(first.type)
+      ? [{ label: 'Edit points', shortcut: '⏎', run: () => useUI.getState().setVectorEdit(target) }]
+      : []),
+    // two layers, one of them text and one with an outline — Figma's own
+    // requirement, and the reason this is a menu command rather than a panel
+    // control: a panel only ever knows about one layer
+    ...(onPath || typeOnPath
+      ? [
+          {
+            label: onPath ? 'Take off path' : 'Type on path',
+            run: () => {
+              if (onPath) store.detachFromPath(onPath);
+              else if (typeOnPath) store.attachToPath(typeOnPath.text, typeOnPath.source);
+              store.commit();
+            },
+          },
+        ]
+      : []),
     {
       label: 'Set as thumbnail',
       // the file browser shows one frame per file; this is how you choose it
@@ -941,20 +840,18 @@ function Menu({ menu }: { menu: OpenMenu }) {
       run: () => store.update(pageId, { thumbnailOf: selection[0] }),
     },
     {
-      // Figma marks work ready from the right-click menu as well as the panel,
-      // because the person doing the marking is looking at the canvas
-      label: first?.devStatus === 'ready' ? 'Mark as draft' : 'Mark as ready for dev',
+      label: first?.isMask ? 'Remove mask' : 'Use as mask',
+      shortcut: '⌃⌘M',
       disabled: !has,
-      run: () =>
-        store.updateMany(selection, {
-          devStatus: first?.devStatus === 'ready' ? 'none' : 'ready',
-        }),
+      run: () => store.toggleMask(selection),
     },
+  ]);
+
+  groups.push([
     {
       // Figma's menu says which way it will go, rather than offering both
       label: first?.flex ? 'Remove auto layout' : 'Add auto layout',
       shortcut: '⇧A',
-      divider: true,
       disabled: !has,
       run: () => {
         if (first?.flex) {
@@ -965,8 +862,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
         if (id) select([id]);
       },
     },
-    // two mains or it is not a thing you can ask for, so the row is absent
-    // rather than permanently grey on the selections that fill this menu
+    // two mains or it is not a thing you can ask for
     ...(selection.filter((id) => doc[id]?.isComponent).length >= 2
       ? [
           {
@@ -987,18 +883,50 @@ function Menu({ menu }: { menu: OpenMenu }) {
         if (made) select([made]);
       },
     },
-    {
-      // Figma's second gesture: a row of icons becomes a row of components,
-      // rather than one component with a row of icons inside it
-      label: 'Create multiple components',
-      disabled: selection.length < 2,
-      run: () => void componentizeEach(store, selection),
-    },
+    // The greying inside the group still does its job: with an instance
+    // selected, "Push changes" says by greying that there is nothing to push.
+    ...(instances
+      ? [
+          {
+            label: 'Detach instance',
+            shortcut: '⌥⌘B',
+            run: () => {
+              for (const id of selection) if (doc[id]?.instanceOf) store.detachInstance(id);
+              store.commit();
+            },
+          },
+          {
+            label: 'Go to main component',
+            disabled: !one || !mainOf(first) || !doc[mainOf(first)!],
+            run: () => revealNode(mainOf(first)!, doc),
+          },
+          {
+            label: 'Push changes to main component',
+            disabled: !one || !doc[mainOf(first) ?? ''] || !hasOverrides(first?.id ?? '', doc),
+            run: () => {
+              store.pushToMain(target);
+              store.commit();
+            },
+          },
+          {
+            label: 'Restore component',
+            // only for an instance whose main has gone: with the main still
+            // there this would make a second one
+            disabled: !one || !mainOf(first) || !!doc[mainOf(first)!],
+            run: () => {
+              const restored = store.restoreComponent(target);
+              store.commit();
+              if (restored) select([restored]);
+            },
+          },
+        ]
+      : []),
+  ]);
 
+  groups.push([
     {
       label: 'Show/Hide',
       shortcut: '⇧⌘H',
-      divider: true,
       disabled: !has,
       run: () => store.updateMany(selection, (n) => ({ visible: !n.visible })),
     },
@@ -1008,21 +936,28 @@ function Menu({ menu }: { menu: OpenMenu }) {
       disabled: !has,
       run: () => store.updateMany(selection, (n) => ({ locked: !n.locked })),
     },
-
-    { label: 'Flip horizontal', shortcut: '⇧H', divider: true, disabled: !has, run: () => flip(store, selection, 'h') },
-    { label: 'Flip vertical', shortcut: '⇧V', disabled: !has, run: () => flip(store, selection, 'v') },
-
     {
-      label: 'Delete',
-      shortcut: '⌫',
-      divider: true,
+      // Figma marks work ready from the right-click menu as well as the panel,
+      // because the person doing the marking is looking at the canvas
+      label: first?.devStatus === 'ready' ? 'Mark as draft' : 'Mark as ready for dev',
       disabled: !has,
-      run: () => {
-        store.remove(selection);
-        select([]);
-      },
+      run: () =>
+        store.updateMany(selection, {
+          devStatus: first?.devStatus === 'ready' ? 'none' : 'ready',
+        }),
     },
-  );
+  ]);
+
+  groups.push([
+    { label: 'Flip horizontal', shortcut: '⇧H', disabled: !has, run: () => flip(store, selection, 'h') },
+    { label: 'Flip vertical', shortcut: '⇧V', disabled: !has, run: () => flip(store, selection, 'v') },
+  ]);
+
+  const items: Item[] = [];
+  for (const group of groups) {
+    if (!group.length) continue;
+    items.push(...group.map((item, index) => (index === 0 && items.length ? { ...item, divider: true } : item)));
+  }
 
   return <Panel items={items} x={menu.x} y={menu.y} width={216} onClose={close} />;
 }

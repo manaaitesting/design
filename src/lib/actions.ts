@@ -316,3 +316,43 @@ export function stepFontSize(store: DocStore, ids: string[], by: number): boolea
   store.commit();
   return true;
 }
+
+/** A rendered blob as an inline data URL, which is how this document stores images. */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read the rendered image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Figma's "Rasterize selection": each layer replaced by a picture of itself.
+ *
+ * Rendered from the DOM rather than in the store because the picture is the
+ * canvas's own rendering of the layer, read back through the same exporter the
+ * PNG export uses, so what you get is what you saw. Every layer is rendered
+ * before the first one is replaced: rasterising as we go would take the next
+ * layer's element off the canvas midway through, and a layer that is not on
+ * screen cannot be rendered. Returns the image layers made.
+ */
+export async function rasterizeSelection(
+  store: DocStore,
+  ids: string[],
+  zoom: number,
+  vars: Record<string, string>,
+): Promise<string[]> {
+  const rendered: [string, string][] = [];
+  for (const id of ids) {
+    try {
+      const blob = await nodeToPng(id, zoom, 2, vars);
+      rendered.push([id, await blobToDataUrl(blob)]);
+    } catch {
+      // a layer that is not on screen cannot be rendered; the rest still can
+    }
+  }
+  const made = rendered.map(([id, src]) => store.rasterize(id, src)).filter((id): id is string => !!id);
+  store.commit();
+  return made;
+}

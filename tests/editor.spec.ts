@@ -2647,7 +2647,7 @@ test('right-click opens the menu with the reference sections', async ({ page }) 
 
   for (const label of ['Copy', 'Paste here', 'Copy/Paste as', 'Bring to front', 'Send to back',
                        'Group selection', 'Frame selection', 'Add auto layout', 'Create component',
-                       'Show/Hide', 'Lock/Unlock', 'Flip horizontal', 'Flip vertical', 'Delete']) {
+                       'Show/Hide', 'Lock/Unlock', 'Flip horizontal', 'Flip vertical']) {
     await expect(row(page, label)).toBeVisible();
   }
   // right-click also selects, the way Figma does
@@ -2870,7 +2870,7 @@ test('show/hide, lock/unlock and both flips toggle their flag', async ({ page })
  * Rasterize selection.
  *
  * The command has to render what is on the canvas, so it is driven through the
- * real menu rather than the store: a picture of the layer is the whole point,
+ * real palette rather than the store: a picture of the layer is the whole point,
  * and a store-only test would prove nothing about what was drawn.
  */
 test('Type on path needs a text layer and a shape, and offers to undo itself', async ({ page }) => {
@@ -2882,10 +2882,11 @@ test('Type on path needs a text layer and a shape, and offers to undo itself', a
     return { text: label, ring: shape };
   });
 
-  // one layer is not a pair, so the command has nothing to work with
+  // one layer is not a pair, so the command is not offered — Figma leaves out
+  // a row the selection could never light up rather than greying it
   await select(page, [text]);
   await openMenu(page, text);
-  await expect(row(page, 'Type on path')).toBeDisabled();
+  await expect(row(page, 'Type on path')).toHaveCount(0);
   await page.keyboard.press('Escape');
 
   await select(page, [text, ring]);
@@ -2914,7 +2915,11 @@ test('rasterize replaces a layer with a picture of it, in its place in the stack
   }, board);
 
   await select(page, [target]);
-  await runOnSelection(page, 'Rasterize selection');
+  // Figma keeps this one in Actions rather than on the right-click menu
+  await page.evaluate(() => window.paperlike!.ui.getState().setPaletteOpen(true));
+  const field = page.getByPlaceholder('Run a command or jump to a layer…');
+  await field.fill('Rasterize');
+  await field.press('Enter');
 
   // the render is asynchronous — the layer is drawn before it is replaced
   await expect.poll(async () => !!(await doc(page))[target]).toBe(false);
@@ -2990,7 +2995,11 @@ test('create component wraps a multi-selection, and the sibling row makes one of
 
   const each = await twoRects(page);
   await select(page, [each.a, each.b]);
-  await runOnSelection(page, 'Create multiple components');
+  // the sibling command lives in Actions, as Figma's does
+  await page.evaluate(() => window.paperlike!.ui.getState().setPaletteOpen(true));
+  const field = page.getByPlaceholder('Run a command or jump to a layer…');
+  await field.fill('Create multiple');
+  await field.press('Enter');
   const made = await doc(page);
   expect([made[each.a].isComponent, made[each.b].isComponent]).toEqual([true, true]);
   await removeNodes(page, [each.a, each.b]);
@@ -3156,7 +3165,7 @@ test('the instance commands are absent on a layer that follows no main', async (
   await expect(row(page, 'Push changes to main component')).toHaveCount(0);
   await expect(row(page, 'Restore component')).toHaveCount(0);
   // the rows that do apply are still there
-  await expect(row(page, 'Delete')).toBeVisible();
+  await expect(row(page, 'Create component')).toBeVisible();
 
   await page.keyboard.press('Escape');
   await removeNodes(page, [id]);
@@ -3176,12 +3185,10 @@ test('the open menu takes the keyboard, and the canvas shortcuts wait for it', a
   expect((await doc(page))[id]).toBeTruthy();
   expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
 
-  // ⇱ and ↓ move the highlight, and a letter jumps to the next row starting
-  // with it — which is where the R above went instead of arming the tool
+  // ⇱ moves the highlight, and a letter jumps to the next row starting with
+  // it — which is where the R above went instead of arming the tool
   await page.keyboard.press('Home');
-  await expect(page.locator('.ctx-row[data-active]')).toHaveCount(1);
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('c');
+  await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Copy');
   await page.keyboard.press('c');
   await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Copy/Paste as');
 
