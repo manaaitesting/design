@@ -186,10 +186,12 @@ test('the menu closes others, the rest, and all of them', async ({ page }) => {
  */
 test('the tab menu stays on screen at the edge, and Escape closes it and nothing else', async ({ page }) => {
   await open(page, DEMO);
+  // a layer of this test's own to hold selected: the demo file starts empty
   const picked = await page.evaluate(() => {
-    const nodes = window.paperlike!.doc();
-    const id = Object.keys(nodes).find((key) => nodes[key].parent) ?? null;
-    if (id) window.paperlike!.ui.getState().select([id]);
+    const store = window.paperlike!.store;
+    const id = store.create('rect', 'root', { name: 'Held', x: 40, y: 40, w: 60, h: 60 });
+    store.commit();
+    window.paperlike!.ui.getState().select([id]);
     return id;
   });
   expect(picked).toBeTruthy();
@@ -210,6 +212,10 @@ test('the tab menu stays on screen at the edge, and Escape closes it and nothing
   await expect(menu).toHaveCount(0);
   // the canvas's own Escape chain used to run instead, and take the selection
   expect(await page.evaluate(() => window.paperlike!.ui.getState().selection)).toEqual([picked]);
+  await page.evaluate((id) => {
+    window.paperlike!.store.remove([id]);
+    window.paperlike!.store.commit();
+  }, picked);
 });
 
 test('⌘\\ takes the strip away with the rest of the chrome', async ({ page }) => {

@@ -4686,11 +4686,11 @@ test.describe('layout grid and text blocks', () => {
     await select(page, [frame]);
 
     const section = page.locator('.fig-section').filter({
-      has: page.locator('.fig-title', { hasText: /^Layout grid$/ }),
+      has: page.locator('.fig-title', { hasText: /^Layout guide$/ }),
     });
-    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    await section.getByRole('button', { name: 'Add layout guide' }).click();
     // the + stays once there is one, because the second grid is not a replacement
-    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    await section.getByRole('button', { name: 'Add layout guide' }).click();
     await section.getByRole('button', { name: 'Grid', exact: true }).nth(1).click();
 
     const guides = guidesOf((await doc(page))[frame]);

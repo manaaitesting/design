@@ -377,10 +377,12 @@ test('a text dragged out with the T tool keeps the width you dragged', async ({ 
   await page.mouse.down();
   await page.mouse.move(900, 700);
   await page.mouse.up();
+  // a layer left empty is thrown away on the way out, as Figma's is
+  await page.keyboard.type('Column');
   await page.keyboard.press('Escape');
 
   const nodes = await doc(page);
-  const drawn = Object.values(nodes).find((n) => n.type === 'text' && Math.round(n.w) === 200);
+  const drawn = Object.values(nodes).find((n) => n.type === 'text' && n.text === 'Column' && Math.round(n.w) === 200);
   expect(drawn).toBeTruthy();
   // the drag chose a column: the width is kept, the height still follows the copy
   expect([drawn!.wMode, drawn!.hMode]).toEqual(['fixed', 'fit']);

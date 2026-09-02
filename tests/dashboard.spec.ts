@@ -92,26 +92,27 @@ test('the new-file button says it is working while the file is being made', asyn
   await expect(page.getByRole('button', { name: 'Working…' })).toBeDisabled();
 });
 
-test('deleting a file asks first, and it is the second press that destroys it', async ({ page }) => {
-  // A file of this test's own. The delete is a hard row delete plus an unlink
-  // of the document on disk, so the scratch file the rest of the suite lives
-  // on is not something to find that out with.
+test('deleting a file goes through the trash, and only the trash destroys it', async ({ page }) => {
+  // A file of this test's own. The final delete is a hard row delete plus an
+  // unlink of the document on disk, so the scratch file the rest of the suite
+  // lives on is not something to find that out with.
   await page.getByRole('button', { name: 'New file' }).click();
   await expect(page).toHaveURL(/\/f\/\w+$/);
   const room = page.url().split('/').pop();
+  const link = () => page.locator(`a[href="/f/${room}"]`);
 
-  const made = () => page.locator('div', { has: page.locator(`a[href="/f/${room}"]`) }).last();
+  // the first step is the card's menu, and it only moves the file to the trash
   await page.goto('/files');
-  await made().getByRole('button', { name: 'Delete', exact: true }).click();
-  await expect(made().getByRole('button', { name: 'Cancel' })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  await page.locator('.file-card', { has: link() }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Move to trash' }).click();
+  await expect(link()).toHaveCount(0);
 
-  // the first press asked a question, and nothing else
-  await page.reload();
-  await expect(page.locator(`a[href="/f/${room}"]`)).toHaveCount(1);
-
-  await made().getByRole('button', { name: 'Delete', exact: true }).click();
-  await made().getByRole('button', { name: 'Delete file' }).click();
-  await expect(page.locator(`a[href="/f/${room}"]`)).toHaveCount(0);
+  // it is still there, in the trash, and the trash is where it can be destroyed
+  await page.goto('/files?trash=1&view=list');
+  await expect(link()).toHaveCount(1);
+  await page.locator('.file-row', { has: link() }).getByRole('button', { name: 'Delete forever' }).click();
+  await expect(link()).toHaveCount(0);
 });
 
 test('a file filed into a folder is found there and nowhere else', async ({ page }) => {
