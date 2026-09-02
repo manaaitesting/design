@@ -1018,12 +1018,66 @@ export function Canvas() {
         (a, b) => doc[parentId].children.indexOf(a) - doc[parentId].children.indexOf(b),
       );
       let shifted = false;
+      // Figma keeps the layer you picked up under the pointer while the
+      // siblings reflow around a faded placeholder; a live reorder with
+      // nothing in hand reads as the layout deciding for you. The ghost is a
+      // clone laid over the canvas, scaled to the zoom, and the real layer
+      // — still in the flow, so the reflow is honest — is dimmed until release.
+      const ghosts: { clone: HTMLElement; id: string; left: number; top: number }[] = [];
+      /** where the ghosts were when the pointer let go — the drop lands there */
+      let carried = { dx: 0, dy: 0 };
+      const lift = () => {
+        const base = rootRef.current;
+        if (!base) return;
+        const canvasRect = base.getBoundingClientRect();
+        const zoom = useUI.getState().viewport.zoom;
+        for (const id of kids) {
+          const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+          if (!el) continue;
+          const rect = el.getBoundingClientRect();
+          const clone = el.cloneNode(true) as HTMLElement;
+          clone.removeAttribute('data-node-id');
+          for (const inner of clone.querySelectorAll('[data-node-id]')) inner.removeAttribute('data-node-id');
+          Object.assign(clone.style, {
+            position: 'absolute',
+            left: `${rect.left - canvasRect.left}px`,
+            top: `${rect.top - canvasRect.top}px`,
+            width: `${rect.width / zoom}px`,
+            height: `${rect.height / zoom}px`,
+            margin: '0',
+            transform: `scale(${zoom})`,
+            transformOrigin: 'top left',
+            pointerEvents: 'none',
+            opacity: '0.9',
+            zIndex: '40',
+            boxShadow: '0 12px 32px rgba(0,0,0,0.22)',
+          } as Partial<CSSStyleDeclaration>);
+          base.appendChild(clone);
+          el.style.opacity = '0.35';
+          ghosts.push({ clone, id, left: rect.left, top: rect.top });
+        }
+      };
+      const carry = (dx: number, dy: number) => {
+        carried = { dx, dy };
+        const zoom = useUI.getState().viewport.zoom;
+        for (const { clone } of ghosts) clone.style.transform = `translate(${dx}px, ${dy}px) scale(${zoom})`;
+      };
+      const settle = () => {
+        for (const { clone, id } of ghosts) {
+          clone.remove();
+          const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+          if (el) el.style.opacity = '';
+        }
+        ghosts.length = 0;
+      };
       drag(
         store,
         event,
         (e) => {
           if (!shifted && Math.hypot(e.clientX - event.clientX, e.clientY - event.clientY) < 3) return;
+          if (!shifted) lift();
           shifted = true;
+          carry(e.clientX - event.clientX, e.clientY - event.clientY);
           const snapshot = store.getSnapshot();
           markDropTarget(e, kids, snapshot);
           const parent = snapshot[parentId];
@@ -1041,6 +1095,10 @@ export function Canvas() {
         },
         (e) => {
           setDropTarget(null);
+          // the layer lands where its ghost was let go, not where the flow
+          // had parked it — the ghost is what the hand was holding
+          const placed = new Map(ghosts.map((g) => [g.id, { left: g.left + carried.dx, top: g.top + carried.dy }]));
+          settle();
           if (!shifted) {
             if (untoggle) toggle(targetId);
             return;
@@ -1058,6 +1116,7 @@ export function Canvas() {
             rootRef.current!.getBoundingClientRect(),
             useUI.getState().viewport,
             { x: e.clientX, y: e.clientY },
+            placed,
           );
         },
       );
@@ -1503,12 +1562,23 @@ function drag(
   end?: (e: PointerEvent) => void,
 ) {
   event.preventDefault();
+  // One gesture, one undo step, as in Figma: whatever was edited before the
+  // press is closed off, and every write until the release — a reorder on
+  // each move, the drop at the end — folds into a single step, however long
+  // the hand paused. The usual 350ms coalescing comes back once it is over.
+  store.commit();
+  const coalesce = store.undoManager.captureTimeout;
+  store.undoManager.captureTimeout = Number.MAX_SAFE_INTEGER;
   const onMove = (e: PointerEvent) => move(e);
   const onUp = (e: PointerEvent) => {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
-    end?.(e);
-    store.commit();
+    try {
+      end?.(e);
+    } finally {
+      store.undoManager.captureTimeout = coalesce;
+      store.commit();
+    }
   };
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
@@ -1668,6 +1738,8 @@ function dropInto(
   vp: { x: number; y: number; zoom: number },
   /** where the pointer was released, for a drop into a layout */
   pointer: { x: number; y: number },
+  /** screen positions to land at instead of where the layers are drawn now */
+  placed?: Map<string, { left: number; top: number }>,
 ): void {
   // insert back-to-front so a multi-layer drop keeps its stacking
   const ordered = [...movers].sort(
@@ -1681,7 +1753,7 @@ function dropInto(
     if (!node || node.parent === parentId) continue;
     const el = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
     if (!el) continue;
-    const rect = el.getBoundingClientRect();
+    const rect = placed?.get(id) ?? el.getBoundingClientRect();
     const world = toWorld(vp, rect.left - canvasRect.left, rect.top - canvasRect.top);
     // measured before the move, while the old tree is still on screen
     const local =
