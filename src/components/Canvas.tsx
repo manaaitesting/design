@@ -25,7 +25,7 @@ import { CanvasMotion } from './MotionStyle';
 import { useDoc, useSession, useStore, useTokenVars } from './Session';
 import type { Comment, DocStore } from '../document/store';
 import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
-import { descendants, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
+import { descendants, isArtboard, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
 import { snap, snapCandidates } from '../document/snapping';
 import { fitOnCanvas, imageFilesFrom, readImageFile, type LoadedImage } from '../lib/images';
 import { ARROW, CROSSHAIR } from '../lib/cursors';
@@ -913,8 +913,13 @@ export function Canvas() {
     // why a frame's name label matters — it is how you take hold of a board you
     // have not selected yet.
     const under = doc[stack[0]];
-    const onBackground = !!under && (under.type === 'frame' || under.type === 'section');
-    if (onBackground && !selection.includes(under.id) && !event.altKey && !event.metaKey && !event.ctrlKey) {
+    // only a board's own background marquees — a frame nested inside another
+    // is a layer like any other — and never a press inside the selection: a
+    // board you have selected is dragged from anywhere in it, cards included
+    const insideSelection = stack.some((id) => selection.includes(id));
+    const onBackground =
+      !!under && (under.type === 'frame' || under.type === 'section') && isArtboard(under, doc) && !insideSelection;
+    if (onBackground && !event.altKey && !event.metaKey && !event.ctrlKey) {
       const container = under.id;
       const kept = event.shiftKey ? [...selection] : [];
       let box: Draft | null = null;

@@ -29,7 +29,7 @@ export async function readHtml(html: string, options: ReadOptions = {}): Promise
     // web fonts and remote images decide the measurements, so they are worth a
     // moment — but an offline machine still gets a tree, with fallback metrics
     await page.waitForLoadState('load', { timeout: 4000 }).catch(() => undefined);
-    return (await page.evaluate(readInPage)) as NodeSpec[];
+    return (await page.evaluate(readInPage as unknown as () => unknown)) as NodeSpec[];
   } finally {
     await page.close().catch(() => undefined);
   }
