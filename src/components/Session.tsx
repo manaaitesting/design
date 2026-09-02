@@ -58,6 +58,14 @@ export function SessionProvider({
         evaluate: (condition: string, vars: Record<string, string>) =>
           evaluate(condition, (name) => vars[name]),
       };
+      // and gone the moment this file is: a handle left over from the previous
+      // file would answer for the next one during a client-side navigation,
+      // and anything driving it (an audit, a test's reset) would hit the
+      // wrong document
+      return () => {
+        const w = window as unknown as { paperlike?: { room?: string } };
+        if (w.paperlike?.room === room) delete w.paperlike;
+      };
     }
   }, [session, room]);
 

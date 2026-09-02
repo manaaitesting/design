@@ -134,7 +134,14 @@ export function selection(page: Page): Promise<string[]> {
 
 export async function openEditor(page: Page): Promise<void> {
   await page.goto(FILE);
-  await page.waitForFunction(() => !!window.paperlike, null, { timeout: 20_000 });
+  // The handle must belong to the scratch file, not to whichever file the tab
+  // strip had open last: `resetDoc` empties the document it is given, and a
+  // handle left over from a client-side navigation would hand it a real one.
+  await page.waitForFunction(
+    (room) => window.paperlike?.room === room,
+    FILE.split('/').pop(),
+    { timeout: 20_000 },
+  );
   await page.waitForFunction(() => !!window.paperlike!.doc().root);
   await resetDoc(page);
   // A fixed viewport, so a fixture's world coordinates map to predictable
@@ -149,7 +156,9 @@ export async function openEditor(page: Page): Promise<void> {
  * destroying it.
  */
 export async function resetDoc(page: Page): Promise<void> {
-  await page.evaluate(() => {
+  await page.evaluate((room) => {
+    // never empty anything but the scratch file
+    if (window.paperlike!.room !== room) throw new Error(`refusing to reset "${window.paperlike!.room}"`);
     const store = window.paperlike!.store;
     const doc = window.paperlike!.doc();
     const top = doc.root?.children ?? [];
@@ -185,7 +194,7 @@ export async function resetDoc(page: Page): Promise<void> {
       name: 'Caption', x: 40, y: 310, w: 240, h: 40, text: 'Fixture', fill: '#111111',
     });
     store.commit();
-  });
+  }, FILE.split('/').pop());
   await page.waitForFunction(
     () => Object.values(window.paperlike!.doc()).some((n) => n.name === 'Fixture Board'),
   );

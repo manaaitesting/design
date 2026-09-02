@@ -29,14 +29,7 @@ import { descendants, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode
 import { snap, snapCandidates } from '../document/snapping';
 import { fitOnCanvas, imageFilesFrom, readImageFile, type LoadedImage } from '../lib/images';
 import { ARROW, CROSSHAIR } from '../lib/cursors';
-import {
-  hitStack,
-  isLocked,
-  lockedUnder,
-  nodesInBox,
-  resolveClick,
-  resolveDoubleClick,
-} from '../document/selection';
+import { hitStack, isLocked, lockedUnder, nodesInBox, passesThrough, resolveClick, resolveDoubleClick } from '../document/selection';
 
 const DRAW_TOOLS: Partial<Record<Tool, NodeType>> = {
   frame: 'frame',
@@ -897,8 +890,14 @@ export function Canvas() {
       selection,
     );
     if (!resolved) return;
-    const targetId = resolved.id;
-    if (resolved.entered !== entered) setEntered(resolved.entered);
+    // Figma's grip on a selected board: pressing anywhere inside it — on its
+    // content included — and dragging moves the board, which is how a board is
+    // carried across the canvas. Only a press that stays a click hands the
+    // selection to the child under the pointer.
+    const heldFrame =
+      stack.find((id) => selection.includes(id) && id !== stack[0] && passesThrough(id, doc)) ?? null;
+    const targetId = heldFrame ?? resolved.id;
+    if (!heldFrame && resolved.entered !== entered) setEntered(resolved.entered);
 
     // ⇧ on a layer means two things at once in Figma — add it to the selection,
     // and constrain the drag that follows to one axis — and the two are settled
@@ -1054,6 +1053,13 @@ export function Canvas() {
         setGuides([]);
         // a click that never moved is a selection, not a drop
         if (!moved) {
+          if (heldFrame && !event.shiftKey) {
+            // the board was only pressed, not carried: the click goes through
+            // to the child, as it would have with the board unselected
+            select([resolved.id]);
+            if (resolved.entered !== entered) setEntered(resolved.entered);
+            return;
+          }
           if (untoggle) toggle(targetId);
           return;
         }

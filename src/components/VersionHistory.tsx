@@ -8,8 +8,6 @@ import { DocStore } from '../document/store';
 import { useUI } from '../state/ui';
 import {
   listVersionsAction,
-  readVersionAction,
-  saveVersionAction,
   type FileVersion,
 } from '../server/actions';
 
@@ -30,21 +28,6 @@ export function VersionHistory() {
 const when = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 /** A binary update as base64, in chunks: `btoa` on one giant string overflows the stack. */
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
-}
-
-function fromBase64(text: string): Uint8Array {
-  const binary = atob(text);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
 function VersionSheet() {
   const setOpen = useUI((s) => s.setVersionsOpen);
   const { ydoc, provider } = useSession();
@@ -72,7 +55,14 @@ function VersionSheet() {
     const label = name.trim();
     if (!label) return;
     setBusy('save');
-    const saved = await saveVersionAction(room, label, toBase64(Y.encodeStateAsUpdate(ydoc)));
+    // the bytes go as a request body: a design's snapshot is far larger than
+    // a server action's arguments are allowed to be
+    const response = await fetch(`/api/versions?file=${encodeURIComponent(room)}&name=${encodeURIComponent(label)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: Y.encodeStateAsUpdate(ydoc) as unknown as BodyInit,
+    }).catch(() => null);
+    const saved = response?.ok ? ((await response.json()) as FileVersion) : null;
     setBusy(null);
     if (!saved) return setStatus('Could not save the version.');
     setName('');
@@ -83,18 +73,23 @@ function VersionSheet() {
   const restore = async (version: FileVersion) => {
     setBusy(version.stamp);
     setStatus(null);
-    const payload = await readVersionAction(room, version.stamp);
-    if (!payload) {
+    const response = await fetch(
+      `/api/versions?file=${encodeURIComponent(room)}&stamp=${encodeURIComponent(version.stamp)}`,
+    ).catch(() => null);
+    if (!response?.ok) {
       setBusy(null);
       return setStatus('That version could not be read.');
     }
+    const payload = new Uint8Array(await response.arrayBuffer());
     const other = new Y.Doc();
     try {
-      Y.applyUpdate(other, fromBase64(payload));
+      Y.applyUpdate(other, payload);
       const count = store.restoreFrom(new DocStore(other));
       setStatus(
-        `Restored ${count} top-level layer${count === 1 ? '' : 's'} from ${when.format(version.at)}. ` +
-          'Undo (⌘Z) brings the current state back.',
+        count === 0
+          ? `That version from ${when.format(version.at)} has no layers on any page, so nothing was changed.`
+          : `Restored ${count} top-level layer${count === 1 ? '' : 's'} from ${when.format(version.at)}. ` +
+              'Undo (⌘Z) brings the current state back.',
       );
     } finally {
       other.destroy();

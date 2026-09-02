@@ -429,11 +429,14 @@ export class DocStore {
         if (!page) continue;
         // a page the version has and this document has since lost comes back
         // as a new one; a page added since the version is left alone
+        // a version with nothing on this page has nothing to restore — and
+        // must not take the current layers with it: an empty or unreadable
+        // version used to wipe the page before it was found to be empty
+        const roots = [...page.children].filter((id) => theirs[id]);
+        if (!roots.length) continue;
         const target = this.nodes.has(pageId) ? pageId : this.addPage(page.name);
         const mine = this.childrenOf(target)?.toArray() ?? [];
         if (mine.length) this.remove(mine);
-        const roots = [...page.children].filter((id) => theirs[id]);
-        if (!roots.length) continue;
         // `serialize` pulls its roots to the origin so a paste lands under the
         // pointer; the offset puts them back where the version had them
         const originX = Math.min(...roots.map((id) => theirs[id].x));
