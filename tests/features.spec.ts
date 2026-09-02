@@ -2916,17 +2916,17 @@ test.describe('comments', () => {
 
   test('a mention is a person the picker resolved, not a prefix of a name', async ({ page }) => {
     // typed but never resolved: the prefix match used to light this pin up for
-    // everyone whose name begins with an a
-    await leaveComment(page, { x: 900, y: 250 }, 'ask @a about the crop');
+    // everyone whose name begins with a p
+    await leaveComment(page, { x: 900, y: 250 }, 'ask @p about the crop');
     await expect(page.locator('.fig-pin[data-mine]')).toHaveCount(0);
 
     await page.evaluate(() => window.paperlike!.ui.getState().setTool('comment'));
     await page.mouse.click(1000, 250);
     const box = page.getByPlaceholder('Leave a comment…');
-    await box.fill('@a');
-    await page.locator('.fig-mention-option', { hasText: 'Ada' }).click();
-    await expect(box).toHaveValue('@Ada ');
-    await box.fill('@Ada does this crop work?');
+    await box.fill('@p');
+    await page.locator('.fig-mention-option', { hasText: 'Playwright' }).click();
+    await expect(box).toHaveValue('@Playwright ');
+    await box.fill('@Playwright does this crop work?');
     await page.keyboard.press('Enter');
 
     await expect(page.locator('.fig-pin')).toHaveCount(2);
@@ -3013,11 +3013,11 @@ test.describe('presence across pages', () => {
     try {
       // beside you, on the page you are both on
       await other.mouse.move(700, 500);
-      await expect(page.getByText('Ada', { exact: true })).toBeVisible();
+      await expect(page.getByText('Playwright', { exact: true })).toBeVisible();
 
       const away = await leave(other);
       await other.mouse.move(720, 520);
-      await expect(page.getByText('Ada', { exact: true })).toHaveCount(0);
+      await expect(page.getByText('Playwright', { exact: true })).toHaveCount(0);
 
       await other.evaluate((id) => window.paperlike!.store.removePage(id), away);
     } finally {
@@ -3032,8 +3032,8 @@ test.describe('presence across pages', () => {
     const other = await peer(context);
     try {
       await other.mouse.move(700, 500);
-      await page.getByTitle('Follow Ada').click();
-      await expect(page.getByText('Following Ada')).toBeVisible();
+      await page.getByTitle('Follow Playwright').click();
+      await expect(page.getByText('Following Playwright')).toBeVisible();
 
       const away = await leave(other);
       await expect.poll(() => page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(away);

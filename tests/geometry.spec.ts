@@ -32,6 +32,15 @@ import {
   variableWidthPath,
   type Anchor,
 } from '../src/document/geometry';
+import {
+  inWorld,
+  nearestEdge,
+  nodeBox,
+  snap,
+  type AlignGuide,
+  type GapGuide,
+  type SnapGuide,
+} from '../src/document/snapping';
 import { maskStyles } from '../src/document/mask';
 import {
   dropRegion,
@@ -835,5 +844,139 @@ test.describe('vector regions', () => {
 
   test('a path with no closed ring encloses nothing', () => {
     expect(vectorRegions([{ closed: false, anchors: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }])).toEqual([]);
+  });
+});
+
+/**
+ * Snapping, checked as arithmetic.
+ *
+ * The end-to-end tests cover the gesture; these cover what the gesture is
+ * allowed to claim. Every bug fixed here was a guide that drew somewhere the
+ * layer was not, which is worse than no guide at all — it is the app being
+ * confidently wrong about the one thing it is drawn to be right about.
+ */
+test.describe('snapping', () => {
+  const box = (x: number, y: number, w = 100, h = 100) => ({ x, y, w, h });
+  const aligns = (guides: SnapGuide[]) => guides.filter((g): g is AlignGuide => g.kind === 'align');
+  const gaps = (guides: SnapGuide[]) => guides.filter((g): g is GapGuide => g.kind === 'gap');
+
+  test('an edge inside the threshold takes, and one outside it does not', () => {
+    const near = snap(box(4, 500), [box(0, 0)], 6);
+    expect(near.x).toBeCloseTo(0, 6);
+    expect(near.snapped.x).toBe(true);
+
+    const far = snap(box(9, 500), [box(0, 0)], 6);
+    expect(far.x).toBeCloseTo(9, 6);
+    expect(far.snapped.x).toBe(false);
+    expect(far.guides).toEqual([]);
+  });
+
+  test('the guide runs through everything on the alignment, not just the winner', () => {
+    // three cards down a left edge; the dragged one joins them
+    const guides = snap(box(3, 700), [box(0, 0), box(0, 200), box(0, 400)], 6).guides;
+    const [line] = aligns(guides).filter((g) => g.axis === 'x');
+    expect(line.at).toBeCloseTo(0, 6);
+    // top of the first card to the bottom of the dragged one, in one stroke
+    expect(line.from).toBeCloseTo(0, 6);
+    expect(line.to).toBeCloseTo(800, 6);
+  });
+
+  test('a centre snap is not rounded away', () => {
+    // a 101-wide sibling puts its centre on a half pixel; the guide promises it
+    const result = snap(box(23, 0, 50, 50), [box(0, 200, 101, 100)], 6);
+    expect(result.x).toBeCloseTo(25.5, 6);
+    expect(aligns(result.guides).find((g) => g.axis === 'x')!.at).toBeCloseTo(50.5, 6);
+  });
+
+  test('a guide is measured off where the box landed, not where it was let go', () => {
+    // snaps left onto x=0 and up onto y=0 at once; the vertical line has to
+    // span the box in its settled place
+    const result = snap(box(3, 3), [box(0, 0)], 6);
+    const line = aligns(result.guides).find((g) => g.axis === 'x')!;
+    expect(result.y).toBeCloseTo(0, 6);
+    expect(line.from).toBeCloseTo(0, 6);
+    expect(line.to).toBeCloseTo(100, 6);
+  });
+
+  test('a box dropped between two others is centred, and both spaces are measured', () => {
+    // 0..100, then the drag, then 400..500: even spacing puts it at 200
+    const result = snap(box(196, 0), [box(0, 0), box(400, 0)], 6);
+    expect(result.x).toBeCloseTo(200, 6);
+    const measured = gaps(result.guides).filter((g) => g.axis === 'x');
+    expect(measured).toHaveLength(2);
+    expect(measured.map((g) => g.to - g.from)).toEqual([100, 100]);
+  });
+
+  test('a box beyond a pair matches their space, and every space of that size is measured', () => {
+    // 0..100, 150..250, 300..400 are 50 apart; the drag opens a fourth
+    const result = snap(box(447, 0), [box(0, 0), box(150, 0), box(300, 0)], 6);
+    expect(result.x).toBeCloseTo(450, 6);
+    const measured = gaps(result.guides).filter((g) => g.axis === 'x');
+    // the two the row already held, plus the one just opened
+    expect(measured).toHaveLength(3);
+    for (const bar of measured) expect(bar.to - bar.from).toBeCloseTo(50, 6);
+  });
+
+  test('a pair sets the space whichever side of it the drag comes from', () => {
+    // 300..400 and 460..560 hold 60 between them; nothing here is close enough
+    // to be an alignment, so only the spacing can explain the landing
+    const pair = [box(300, 0), box(460, 0)];
+    const left = snap(box(143, 0), pair, 6);
+    expect(left.x).toBeCloseTo(140, 6);
+    expect(gaps(left.guides)).toHaveLength(2);
+
+    // and the mirror of it, which is the case that always worked
+    const right = snap(box(323, 0), [box(0, 0), box(160, 0)], 6);
+    expect(right.x).toBeCloseTo(320, 6);
+    expect(gaps(right.guides)).toHaveLength(2);
+  });
+
+  test('a ruler guide lines things up on its own axis and leaves the other alone', () => {
+    // the canvas hands a guide over as a line at the drag's own starting corner;
+    // read as a box, its far edge is an alignment the gesture cannot escape
+    const guide = { x: 500, y: 0, w: 0, h: 0, axis: 'x' as const };
+    const result = snap({ x: 497, y: 3, w: 100, h: 100 }, [guide], 6);
+    expect(result.x).toBeCloseTo(500, 6);
+    expect(result.y).toBeCloseTo(3, 6);
+    expect(result.snapped).toEqual({ x: true, y: false });
+  });
+
+  test('spacing only counts neighbours in the same row', () => {
+    // the same arrangement, moved far down the page: nothing overlaps it
+    const result = snap(box(447, 5000), [box(0, 0), box(150, 0), box(300, 0)], 6);
+    expect(result.x).toBeCloseTo(447, 6);
+    expect(result.guides).toEqual([]);
+  });
+
+  test('an alignment outranks a spacing on the same axis, and leaves the other axis free', () => {
+    const result = snap(box(447, 3), [box(0, 0), box(150, 0), box(300, 0)], 6);
+    // y took the alignment with the row
+    expect(result.y).toBeCloseTo(0, 6);
+    // x was free, so spacing had it
+    expect(result.x).toBeCloseTo(450, 6);
+    expect(gaps(result.guides).every((g) => g.axis === 'x')).toBe(true);
+  });
+
+  test('guides come back in world coordinates when the layer is inside a frame', () => {
+    const inside = snap(box(3, 3), [box(0, 0)], 6);
+    const lifted = inWorld(inside.guides, { x: 900, y: 40 });
+    const line = lifted.filter((g): g is AlignGuide => g.kind === 'align').find((g) => g.axis === 'x')!;
+    // the frame sits at 900,40 — so does its content, and so does the guide
+    expect(line.at).toBeCloseTo(900, 6);
+    expect(line.from).toBeCloseTo(40, 6);
+    expect(line.to).toBeCloseTo(140, 6);
+  });
+
+  test('a resize edge reports the span of everything it lined up with', () => {
+    const found = nearestEdge(203, [box(200, 0), box(200, 400)], 'x', 6)!;
+    expect(found.at).toBeCloseTo(200, 6);
+    expect(found.from).toBeCloseTo(0, 6);
+    expect(found.to).toBeCloseTo(500, 6);
+  });
+
+  test('a turned layer is snapped against the box it actually occupies', () => {
+    const turned = nodeBox({ x: 0, y: 0, w: 100, h: 100, rotation: 45 } as never);
+    expect(turned.w).toBeCloseTo(Math.SQRT2 * 100, 6);
+    expect(turned.x).toBeCloseTo((100 - Math.SQRT2 * 100) / 2, 6);
   });
 });

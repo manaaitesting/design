@@ -48,13 +48,13 @@ test('search narrows the list, and the URL says so', async ({ page }) => {
   const all = await names(page).count();
   expect(all).toBeGreaterThan(1);
 
-  await page.getByLabel('Search files').fill('Vinyl');
+  await page.getByLabel('Search files').fill('Records');
   // the filter form is a GET form with no button of its own: Enter submits it
   await page.getByLabel('Search files').press('Enter');
 
-  await expect(page).toHaveURL(/\?q=Vinyl/);
+  await expect(page).toHaveURL(/\?q=Records/);
   await expect(names(page)).toHaveCount(1);
-  await expect(names(page).first()).toHaveValue('Vinyl Sundays');
+  await expect(names(page).first()).toHaveValue('Playwright Records');
   // the count says what it is showing, and out of how many
   await expect(page.getByText(`1 file of ${all}`)).toBeVisible();
 });

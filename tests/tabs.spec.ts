@@ -11,7 +11,7 @@ import { expect, test, type Page } from '@playwright/test';
  */
 
 const SCRATCH = 'testfile00';
-const DEMO = 'demofile0';
+const DEMO = 'testfile01';
 
 const tab = (page: Page, name: string) =>
   page.locator('.fig-filetab[data-tab-id]', { hasText: name });
@@ -63,7 +63,7 @@ test('a visited file joins the strip, and stays in it', async ({ page }) => {
   await page.goto(`/f/${DEMO}`);
   await ready(page, DEMO);
   await expect(tabs(page)).toHaveCount(2);
-  await expect(tab(page, 'Vinyl Sundays')).toHaveAttribute('data-on', 'true');
+  await expect(tab(page, 'Playwright Records')).toHaveAttribute('data-on', 'true');
   await expect(tab(page, 'Playwright Scratch')).toHaveAttribute('data-on', 'false');
 });
 
@@ -85,7 +85,7 @@ test('the cross closes one tab and hands over to its neighbour', async ({ page }
 
   // close the one you are standing on: the other must take over, or you are
   // left looking at a document with no tab
-  await tab(page, 'Vinyl Sundays').getByRole('button', { name: /^Close/ }).click();
+  await tab(page, 'Playwright Records').getByRole('button', { name: /^Close/ }).click();
   await expect(page).toHaveURL(new RegExp(`/f/${SCRATCH}$`));
   await expect(tabs(page)).toHaveCount(1);
   await expect(tab(page, 'Playwright Scratch')).toHaveAttribute('data-on', 'true');
@@ -150,7 +150,7 @@ test('⇧⌘T puts back the tab you just closed', async ({ page }) => {
   await ready(page, DEMO);
   await expect(tabs(page)).toHaveCount(2);
 
-  await tab(page, 'Vinyl Sundays').getByRole('button', { name: /^Close/ }).click();
+  await tab(page, 'Playwright Records').getByRole('button', { name: /^Close/ }).click();
   await expect(tabs(page)).toHaveCount(1);
 
   await page.keyboard.press('Shift+Meta+KeyT');
@@ -164,14 +164,14 @@ test('the menu closes others, the rest, and all of them', async ({ page }) => {
   await ready(page, DEMO);
   await expect(tabs(page)).toHaveCount(2);
 
-  await tab(page, 'Vinyl Sundays').click({ button: 'right' });
-  // Rename is the owner's to do, and both seeded files are Ada's
+  await tab(page, 'Playwright Records').click({ button: 'right' });
+  // Rename is the owner's to do, and both fixture files are the test account's
   await expect(page.getByRole('menuitem', { name: 'Rename' })).toBeEnabled();
   await page.getByRole('menuitem', { name: 'Close others' }).click();
   await expect(tabs(page)).toHaveCount(1);
   await expect(page).toHaveURL(new RegExp(`/f/${DEMO}$`));
 
-  await tab(page, 'Vinyl Sundays').click({ button: 'right' });
+  await tab(page, 'Playwright Records').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Close all' }).click();
   await expect(page).toHaveURL(/\/files$/);
 });
@@ -199,7 +199,7 @@ test('the tab menu stays on screen at the edge, and Escape closes it and nothing
   // narrow enough that the tab is inside a menu's width of the right edge,
   // which is where every tab ends up once a few files are open
   await page.setViewportSize({ width: 380, height: 800 });
-  const strip = (await tab(page, 'Vinyl Sundays').boundingBox())!;
+  const strip = (await tab(page, 'Playwright Records').boundingBox())!;
   await page.mouse.click(strip.x + strip.width - 4, strip.y + strip.height / 2, { button: 'right' });
 
   const menu = page.getByRole('menu');
@@ -242,7 +242,7 @@ test('a file reopens where you left it', async ({ page }) => {
 
   // the switch away is what writes the memory, so it has to be a tab click
   // rather than a reload — a hard navigation never runs the cleanup
-  await tab(page, 'Vinyl Sundays').click();
+  await tab(page, 'Playwright Records').click();
   await ready(page, DEMO);
 
   await tab(page, 'Playwright Scratch').click();

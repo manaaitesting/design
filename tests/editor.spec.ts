@@ -1298,6 +1298,83 @@ test('a layer dropped between two others evens the space either side of it', asy
   await removeNodes(page, [a, b, c]);
 });
 
+/**
+ * Two layers carried together line up by the box around the pair, not by
+ * whichever one the pointer happens to be on. Every other tool works this way,
+ * and this one used to switch snapping off entirely the moment a second layer
+ * joined the selection.
+ */
+test('a multi-selection snaps by the box around the whole drag', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const anchor = await makeNode(page, 'rect', { name: 'PairAnchor', x: 4100, y: 4000, w: 120, h: 80, fill: '#4CC3F0' });
+  const one = await makeNode(page, 'rect', { name: 'PairOne', x: 4300, y: 4150, w: 100, h: 60, fill: '#F2637F' });
+  const two = await makeNode(page, 'rect', { name: 'PairTwo', x: 4300, y: 4250, w: 100, h: 60, fill: '#F2637F' });
+  await select(page, [one, two]);
+
+  const box = (await page.locator(`[data-node-id="${one}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // four world px short of the anchor's left edge, so the pair should take it
+  for (const step of [0.25, 0.5, 0.75, 1]) await page.mouse.move(from.x - 196 * step, from.y);
+  await expect(page.locator('[data-align-guide="x"]')).toHaveCount(1);
+  await page.mouse.up();
+
+  const after = await doc(page);
+  // both landed on the edge, and the pair kept its own shape
+  expect(after[one].x).toBe(4100);
+  expect(after[two].x).toBe(4100);
+  expect(after[two].y - after[one].y).toBe(100);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [anchor, one, two]);
+});
+
+/**
+ * A node's x/y are its parent's coordinates and the overlay draws in the
+ * world's, so a guide for anything inside a frame used to be drawn a whole
+ * frame-origin away from the layer it belonged to — off screen, most of the
+ * time. The line has to land on the edge it is claiming.
+ */
+test('a guide for a layer inside a frame is drawn on the edge it snapped to', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const frame = await makeNode(page, 'frame', {
+    name: 'GuideHome', x: 4100, y: 4400, w: 400, h: 300, fill: '#FFFFFF', flex: null,
+  });
+  const [still, mover] = await page.evaluate((parent) => {
+    const a = window.paperlike!.store.create('rect', parent, {
+      name: 'GuideStill', x: 40, y: 40, w: 100, h: 60, fill: '#4CC3F0',
+    });
+    const b = window.paperlike!.store.create('rect', parent, {
+      name: 'GuideMover', x: 200, y: 160, w: 100, h: 60, fill: '#F2637F',
+    });
+    window.paperlike!.store.commit();
+    return [a, b];
+  }, frame);
+  await select(page, [mover]);
+
+  const box = (await page.locator(`[data-node-id="${mover}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (const step of [0.25, 0.5, 0.75, 1]) await page.mouse.move(from.x - 156 * step, from.y);
+
+  const line = await page.locator('[data-align-guide="x"]').first().boundingBox();
+  const edge = (await page.locator(`[data-node-id="${still}"]`).boundingBox())!;
+  // the guide sits on the still layer's left edge, in screen pixels
+  expect(Math.abs(line!.x - edge.x)).toBeLessThan(1.5);
+
+  await page.mouse.up();
+  expect((await doc(page))[mover].x).toBe(40);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [frame]);
+});
+
 test('holding the snap-bypass modifier lets a drag land off the guide', async ({ page }) => {
   const anchor = await makeNode(page, 'rect', { name: 'FreeAnchor', x: 40, y: 500, w: 120, h: 80, fill: '#4CC3F0' });
   const mover = await makeNode(page, 'rect', { name: 'FreeMover', x: 40, y: 620, w: 120, h: 80, fill: '#F2637F' });

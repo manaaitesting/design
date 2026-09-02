@@ -122,7 +122,7 @@ test('signing in at the wall opens the file that sent you there', async ({ page,
       `/signup?next=%2Ff%2F${SCRATCH}`,
     );
 
-    await visit.getByLabel('Email').fill('ada@example.com');
+    await visit.getByLabel('Email').fill('grace@example.com');
     await visit.getByLabel('Password').fill('paperlike-demo');
     await visit.getByRole('button', { name: 'Sign in' }).click();
 
@@ -175,7 +175,7 @@ test('an edit link gives a stranger the tools, a view link does not', async ({ p
 });
 
 test('a membership outranks a stingier link', async ({ page }) => {
-  // Ada owns the scratch file. A view-only link must not demote its owner.
+  // The test account owns the scratch file. A view-only link must not demote its owner.
   await setLink(page, 'viewer');
   await page.goto(`/f/${SCRATCH}`);
   await page.waitForFunction((room) => window.paperlike?.room === room, SCRATCH, {

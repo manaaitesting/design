@@ -39,8 +39,19 @@ const people = [
   { id: 'demogrc00', email: 'grace@example.com', name: 'Grace', color: '#9B7BF0' },
 ];
 
+// The Playwright suite has an account of its own. Its fixtures used to belong
+// to Ada, which put them on the dashboard of whoever works in this checkout as
+// Ada — and the first time they tidied that dashboard, every suite went red.
+// An account nobody signs into by hand has a dashboard nobody tidies.
+const tester = { id: 'demopw000', email: 'playwright@example.com', name: 'Playwright', color: '#F24E1E' };
+
+// columns the app adds on start; the seed may run first
+const columns = db.prepare('PRAGMA table_info(files)').all().map((column) => column.name);
+if (!columns.includes('trashed_at')) db.exec('ALTER TABLE files ADD COLUMN trashed_at INTEGER');
+if (!columns.includes('folder_id')) db.exec('ALTER TABLE files ADD COLUMN folder_id TEXT');
+
 const now = Date.now();
-for (const person of people) {
+for (const person of [...people, tester]) {
   db.prepare(
     `INSERT INTO users (id, email, name, color, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(email) DO UPDATE SET name = excluded.name, color = excluded.color`,
@@ -58,19 +69,27 @@ for (const [index, person] of people.entries()) {
     .run(fileId, person.id, index === 0 ? 'owner' : 'editor');
 }
 
-// A scratch file for the Playwright suite. The tests rebuild it from scratch
-// and delete as they go, so they must never run against the demo document.
+// The Playwright suite's files. The scratch file is rebuilt from nothing and
+// deleted as the tests go, so they must never run against the demo document;
+// the second file is there to be a second tab and a second search result.
+// Both are the test account's, and a run puts them back on its dashboard and
+// out of its trash however the last run left them. Grace stays an editor of
+// the scratch file: the sharing and mention tests need a second real member.
 const testFileId = 'testfile00';
-db.prepare(
-  `INSERT INTO files (id, name, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-   ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
-).run(testFileId, 'Playwright Scratch', people[0].id, now, now);
-for (const person of people) {
-  db.prepare('INSERT OR REPLACE INTO file_members (file_id, user_id, role) VALUES (?, ?, ?)')
-    .run(testFileId, person.id, 'editor');
+for (const [id, name] of [[testFileId, 'Playwright Scratch'], ['testfile01', 'Playwright Records']]) {
+  db.prepare(
+    `INSERT INTO files (id, name, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name, owner_id = excluded.owner_id, updated_at = excluded.updated_at,
+       trashed_at = NULL, folder_id = NULL`,
+  ).run(id, name, tester.id, now, now);
+  db.prepare('DELETE FROM file_members WHERE file_id = ?').run(id);
+  db.prepare('INSERT INTO file_members (file_id, user_id, role) VALUES (?, ?, ?)').run(id, tester.id, 'owner');
 }
+db.prepare('INSERT INTO file_members (file_id, user_id, role) VALUES (?, ?, ?)').run(testFileId, people[1].id, 'editor');
 
 console.log('Seeded demo accounts — password for both is:', DEV_PASSWORD);
 for (const person of people) console.log(`  ${person.email}  (${person.name})`);
 console.log(`Shared file: /f/${fileId}`);
+console.log(`Test account: ${tester.email}  (${tester.name}) — the Playwright suite signs in as this`);
 console.log(`Test scratch file: /f/${testFileId}`);
