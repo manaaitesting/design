@@ -57,6 +57,7 @@ declare global {
         bindProp(layer: string, binding: Record<string, unknown> | null): void;
         setPropValue(instance: string, propId: string, value: string): string | null;
         combineAsVariants(ids: string[]): string | null;
+        setVariantValue(variantId: string, propId: string, value: string): void;
         swapInstance(id: string, mainId: string): string | null;
         commit(): void;
         addToken(token: { name: string; type: string; value: string; collection?: string }): string;

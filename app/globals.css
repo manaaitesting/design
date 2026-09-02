@@ -402,6 +402,20 @@ select {
     gap: 8px;
     margin-top: 8px;
   }
+  /* a value the panel reports but does not let you type — it is read from
+     somewhere else, and a field would invite an edit that goes nowhere */
+  .fig-static {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    color: var(--fig-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .fig-input {
     position: relative;
     flex: 1 1 0;
@@ -449,6 +463,11 @@ select {
   }
   /* a field that is along for the ride — noise's Y, which follows X */
   .fig-input:has(> input:disabled) {
+    color: var(--fig-dim);
+  }
+  /* a number the layout owns rather than the field: still typeable, but dimmed
+     so it reads as a report of the size rather than a setting of it */
+  .fig-input[data-muted] > input {
     color: var(--fig-dim);
   }
   .fig-input > input:disabled {

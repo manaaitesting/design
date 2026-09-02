@@ -3163,7 +3163,65 @@ export class DocStore {
     if (!main?.isComponent && !main?.isComponentSet) return null;
     const id = newId();
     this.update(mainId, { props: [...(main.props ?? []), { ...prop, id }] });
+    // a new axis has to mean something on every variant already in the set, or
+    // the matcher would find nothing for any value the picker offers
+    if (prop.type === 'variant') {
+      this.transact(() => {
+        for (const child of main.children) {
+          const variant = this.snap[child];
+          if (!variant?.isComponent) continue;
+          this.nodes
+            .get(child)
+            ?.set('variantValues', { ...(variant.variantValues ?? {}), [id]: prop.value });
+        }
+      });
+      // a transaction of its own, because the snapshot `reoption` reads is only
+      // rebuilt once the one before it has closed
+      this.transact(() => this.reoption(mainId));
+    }
     return id;
+  }
+
+  /**
+   * Sets one of a variant's own values — where this variant sits on the set's
+   * axes.
+   *
+   * The set's options are re-read from the variants afterwards rather than
+   * typed alongside: an option no variant answers to is a picker entry that
+   * does nothing, and a value nothing offers is a variant nothing can reach.
+   */
+  setVariantValue(variantId: string, propId: string, value: string): void {
+    const variant = this.snap[variantId];
+    const set = setOf(variant, this.snap);
+    if (!variant || !set?.props?.some((prop) => prop.id === propId && prop.type === 'variant')) return;
+    this.transact(() => {
+      this.nodes
+        .get(variantId)
+        ?.set('variantValues', { ...(variant.variantValues ?? {}), [propId]: value });
+    });
+    // separately, because the snapshot `reoption` reads is only rebuilt once the
+    // transaction that wrote the value has closed
+    this.transact(() => this.reoption(set.id));
+    this.schedulePropagation();
+  }
+
+  /** Re-reads each variant property's options from what its variants answer to. */
+  private reoption(setId: string): void {
+    const set = this.snap[setId];
+    if (!set?.props) return;
+    this.nodes.get(setId)?.set(
+      'props',
+      set.props.map((prop) => {
+        if (prop.type !== 'variant') return prop;
+        const options: string[] = [];
+        for (const id of set.children) {
+          const value = this.snap[id]?.variantValues?.[prop.id];
+          // `*` answers for every value rather than being one of them
+          if (value && value !== '*' && !options.includes(value)) options.push(value);
+        }
+        return { ...prop, options, value: options.includes(prop.value) ? prop.value : options[0] ?? prop.value };
+      }),
+    );
   }
 
   updateComponentProp(mainId: string, propId: string, patch: Partial<ComponentProp>): void {
@@ -3222,8 +3280,17 @@ export class DocStore {
         .find(
           (variant) =>
             variant?.isComponent &&
-            Object.entries(wanted).every(([key, want]) => variant.variantValues?.[key] === want),
+            Object.entries(wanted).every(
+              ([key, want]) =>
+                // `*` is Figma's "any": one variant answers for a whole row of
+                // the matrix rather than being spelled out cell by cell
+                variant.variantValues?.[key] === want || variant.variantValues?.[key] === '*',
+            ),
         );
+      // recorded whether or not the set can answer it, so a combination no
+      // variant covers leaves the picker on what was chosen instead of snapping
+      // back with no word about why
+      this.update(instanceId, { propValues: { ...(instance.propValues ?? {}), [propId]: value } });
       if (!match || match.id === main.id) return instanceId;
       return this.swapInstance(instanceId, match.id);
     }

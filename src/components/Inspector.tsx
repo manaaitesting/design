@@ -2595,6 +2595,8 @@ function VarField({
   step?: number;
   title?: string;
   disabled?: boolean;
+  /** the number belongs to something else — the layout, for a hug or a fill */
+  muted?: boolean;
   /** a control at the field's trailing edge — the size field's preset caret */
   trailing?: React.ReactNode;
   onChange: (value: number) => void;
@@ -2826,6 +2828,7 @@ function LayoutSection({
           node={node}
           field="w"
           value={sized && node.wMode !== 'fixed' ? Math.round(sized.w) : shared(nodes, (n) => n.w)}
+          muted={!!sized && node.wMode !== 'fixed'}
           glyph="W"
           min={1}
           title="Width"
@@ -2835,6 +2838,7 @@ function LayoutSection({
           node={node}
           field="h"
           value={sized && node.hMode !== 'fixed' ? Math.round(sized.h) : shared(nodes, (n) => n.h)}
+          muted={!!sized && node.hMode !== 'fixed'}
           glyph="H"
           min={1}
           title="Height"

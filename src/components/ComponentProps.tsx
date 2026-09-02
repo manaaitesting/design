@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Icon } from './ui/Icons';
 import { FigIcon } from './ui/FigIcon';
 import {
@@ -24,6 +24,15 @@ import {
 } from '../document/types';
 
 const PURPLE = '#9747FF';
+
+/** The fixed-width caption a property row wears on its left. */
+const NAME: React.CSSProperties = {
+  flex: '0 0 84px',
+  color: 'var(--fig-label)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
 
 const TYPE_LABEL: Record<PropType, string> = {
   boolean: 'Boolean',
@@ -56,10 +65,17 @@ export function PropertiesSection({ node }: { node: SceneNode }) {
   // every hook first: a variant returns early, and a hook behind a return is a
   // hook React will look for on the next render and not find
   if (!node.isComponent && !node.isComponentSet) return null;
-  // a variant belongs to a set, and the set is where its properties live
-  if (setOf(node, doc)) return null;
+  // a variant belongs to a set: the set declares the axes, and the variant only
+  // says where on them it sits
+  const set = setOf(node, doc);
+  if (set) return <VariantValuesSection variant={node} set={set} />;
 
   const props = node.props ?? [];
+  // a variant property is an axis of a set; there is nothing for one to tell
+  // apart on a component that stands alone
+  const types = node.isComponentSet
+    ? (['variant', 'boolean', 'text', 'instance'] as const)
+    : (['boolean', 'text', 'instance'] as const);
 
   return (
     <div className="fig-section">
@@ -72,7 +88,7 @@ export function PropertiesSection({ node }: { node: SceneNode }) {
           {adding && (
             <FigPopover anchor={anchor} width={196} onClose={() => setAdding(false)}>
               <ul role="listbox" aria-label="Add property" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                {(['boolean', 'text', 'instance'] as const).map((type) => (
+                {types.map((type) => (
                   <li key={type}>
                     <FigMenuItem
                       label={TYPE_LABEL[type]}
@@ -80,7 +96,7 @@ export function PropertiesSection({ node }: { node: SceneNode }) {
                         store.addComponentProp(node.id, {
                           name: nextName(props, TYPE_LABEL[type]),
                           type,
-                          value: type === 'boolean' ? 'true' : '',
+                          value: type === 'boolean' ? 'true' : type === 'variant' ? 'Default' : '',
                         });
                         setAdding(false);
                       }}
@@ -125,14 +141,14 @@ function PropRow({ owner, prop }: { owner: string; prop: ComponentProp }) {
           onChange={(value) => store.updateComponentProp(owner, prop.id, { value })}
         />
       ) : prop.type === 'variant' ? (
-        <FigText
-          value={(prop.options ?? []).join(', ')}
-          onChange={(raw) =>
-            store.updateComponentProp(owner, prop.id, {
-              options: raw.split(',').map((entry) => entry.trim()).filter(Boolean),
-            })
-          }
-        />
+        // the options are read from what the variants answer to rather than
+        // typed here, because an option no variant carries picks nothing
+        <span
+          className="fig-static"
+          title={(prop.options ?? []).join(', ')}
+        >
+          {(prop.options ?? []).join(', ') || 'No values yet'}
+        </span>
       ) : (
         <FigText
           value={prop.value}
@@ -143,6 +159,42 @@ function PropRow({ owner, prop }: { owner: string; prop: ComponentProp }) {
       <FigButton title={`Remove ${prop.name}`} onClick={() => store.removeComponentProp(owner, prop.id)}>
         <FigIcon name="Remove" />
       </FigButton>
+    </div>
+  );
+}
+
+/**
+ * A selected variant's own values — where it sits on the set's axes.
+ *
+ * Without this a variant is only reachable by the name it happened to be
+ * combined under: a variant added by duplicating another answers to exactly the
+ * same combination as the one it came from, so the picker can never land on it.
+ */
+function VariantValuesSection({ variant, set }: { variant: SceneNode; set: SceneNode }) {
+  const store = useStore();
+  const props = (set.props ?? []).filter((prop) => prop.type === 'variant');
+  if (!props.length) return null;
+
+  return (
+    <div className="fig-section">
+      <div className="fig-head">
+        <span style={{ flex: 1, color: PURPLE }}>Current variant</span>
+      </div>
+      {props.map((prop) => (
+        <div className="fig-row" key={prop.id}>
+          <span style={NAME} title={prop.name}>
+            {prop.name}
+          </span>
+          <FigText
+            value={variant.variantValues?.[prop.id] ?? ''}
+            placeholder="Any"
+            title={`${prop.name} value`}
+            // an empty cell is Figma's `*`: this variant answers for every
+            // value of that property rather than for one of them
+            onChange={(value) => store.setVariantValue(variant.id, prop.id, value.trim() || '*')}
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -231,51 +283,58 @@ export function InstancePropsSection({ node }: { node: SceneNode }) {
           if (moved && moved !== node.id) select([moved]);
         };
 
+        // the instance asked for this value and the set had no variant for it,
+        // so the layer on screen is still the old one — said out loud, because
+        // a picker that shows a value nothing answers to reads as broken
+        const unanswered =
+          prop.type === 'variant' &&
+          main.variantValues?.[prop.id] !== undefined &&
+          main.variantValues[prop.id] !== '*' &&
+          main.variantValues[prop.id] !== value;
+
         return (
-          <div className="fig-row" key={prop.id}>
-            <span
-              style={{
-                flex: '0 0 84px',
-                color: 'var(--fig-label)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={prop.name}
-            >
-              {prop.name}
-            </span>
-            {prop.type === 'boolean' ? (
-              <label
-                style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, cursor: 'default' }}
-              >
-                <input
-                  type="checkbox"
-                  aria-label={prop.name}
-                  checked={value !== 'false'}
-                  onChange={(e) => apply(e.target.checked ? 'true' : 'false')}
-                  style={{ width: 12, height: 12, accentColor: 'var(--fig-blue)' }}
+          <Fragment key={prop.id}>
+            <div className="fig-row">
+              <span style={NAME} title={prop.name}>
+                {prop.name}
+              </span>
+              {prop.type === 'boolean' ? (
+                <label
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, cursor: 'default' }}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={prop.name}
+                    checked={value !== 'false'}
+                    onChange={(e) => apply(e.target.checked ? 'true' : 'false')}
+                    style={{ width: 12, height: 12, accentColor: 'var(--fig-blue)' }}
+                  />
+                  <span style={{ color: 'var(--fig-dim)' }}>{value !== 'false' ? 'On' : 'Off'}</span>
+                </label>
+              ) : prop.type === 'variant' ? (
+                <FigSelect
+                  value={value}
+                  options={(prop.options ?? []).map((option) => ({ value: option, label: option }))}
+                  title={prop.name}
+                  onChange={apply}
                 />
-                <span style={{ color: 'var(--fig-dim)' }}>{value !== 'false' ? 'On' : 'Off'}</span>
-              </label>
-            ) : prop.type === 'variant' ? (
-              <FigSelect
-                value={value}
-                options={(prop.options ?? []).map((option) => ({ value: option, label: option }))}
-                title={prop.name}
-                onChange={apply}
-              />
-            ) : prop.type === 'instance' ? (
-              <FigSelect
-                value={value}
-                options={components.map((entry) => ({ value: entry.id, label: entry.name }))}
-                title={prop.name}
-                onChange={apply}
-              />
-            ) : (
-              <FigText value={value} placeholder={prop.name} onChange={apply} />
+              ) : prop.type === 'instance' ? (
+                <FigSelect
+                  value={value}
+                  options={components.map((entry) => ({ value: entry.id, label: entry.name }))}
+                  title={prop.name}
+                  onChange={apply}
+                />
+              ) : (
+                <FigText value={value} placeholder={prop.name} onChange={apply} />
+              )}
+            </div>
+            {unanswered && (
+              <div style={{ color: 'var(--fig-dim)', marginTop: 4 }}>
+                No variant with {prop.name} = {value}
+              </div>
             )}
-          </div>
+          </Fragment>
         );
       })}
     </div>

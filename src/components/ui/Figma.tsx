@@ -179,6 +179,7 @@ export function FigField({
   sensitivity = 1,
   title,
   disabled,
+  muted,
   placeholder,
   width,
   trailing,
@@ -194,6 +195,8 @@ export function FigField({
   sensitivity?: number;
   title?: string;
   disabled?: boolean;
+  /** the number is reported rather than owned — a hug or fill layer's size */
+  muted?: boolean;
   placeholder?: string;
   /** a field that should not take its share of the row — the truncate count */
   width?: number;
@@ -247,7 +250,12 @@ export function FigField({
   };
 
   return (
-    <div className="fig-input" title={title} style={width ? { flex: 'none', width } : undefined}>
+    <div
+      className="fig-input"
+      data-muted={muted || undefined}
+      title={title}
+      style={width ? { flex: 'none', width } : undefined}
+    >
       {glyph !== undefined && (
         <span className="glyph" onPointerDown={scrub}>
           {glyph}
