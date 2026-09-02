@@ -134,6 +134,52 @@ test('outlining a square cap keeps the overhang, and a butt cap does not grow on
   await removeNodes(page, [grown!.id]);
 });
 
+/**
+ * A mitred corner keeps its point when it is outlined. This row was carried as
+ * "outline stroke re-draws every path with a round pen", and the caps and the
+ * dashes had tests while the join had none — so the claim about the join was
+ * the one nobody could check. `clipper.ts` `joinPiece` does build a real mitre;
+ * this is the test that says so.
+ */
+test('outlining a mitred corner keeps its point, and a round join does not grow one', async ({ page }) => {
+  // a narrow V, where a mitre reaches well past the radius a round join leaves
+  const vee = {
+    x: 60,
+    y: 900,
+    w: 100,
+    h: 100,
+    anchors: [{ x: 0, y: 100 }, { x: 50, y: 0 }, { x: 100, y: 100 }],
+    closed: false,
+  };
+  const outlined = async (name: string, join: 'miter' | 'round') => {
+    const id = await makeNode(page, 'vector', {
+      ...vee,
+      name,
+      border: { width: 20, color: '#111111', style: 'solid', position: 'center', cap: 'butt', join },
+    });
+    await select(page, [id]);
+    await page.evaluate(() => {
+      window.paperlike!.store.outlineStroke(window.paperlike!.ui.getState().selection);
+      window.paperlike!.store.commit();
+    });
+    const made = await nodeNamed(page, `${name} stroke`);
+    await removeNodes(page, [made!.id]);
+    return made!;
+  };
+
+  const mitred = await outlined('Vee', 'miter');
+  const rounded = await outlined('Arc', 'round');
+
+  // The apex is the whole difference: a round join stops half a width above it,
+  // a mitre carries on to where the two outer edges actually meet.
+  expect(mitred.h).toBeGreaterThan(rounded.h + 8);
+  // and the mitre reaches half / sin(half the angle) from the corner, which for
+  // this V is ~22px against the round join's 10
+  expect(mitred.h - rounded.h).toBeLessThan(18);
+  // neither join changes how wide the V is
+  expect(Math.abs(mitred.w - rounded.w)).toBeLessThanOrEqual(1);
+});
+
 // ── The pen and its keys ────────────────────────────────────────────────
 const armPen = (page: import('@playwright/test').Page) =>
   page.evaluate(() => window.paperlike!.ui.getState().setTool('pen'));

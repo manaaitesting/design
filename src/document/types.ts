@@ -83,6 +83,20 @@ export type AlignContent = Align | 'between';
 /** Which sibling paints on top inside an auto-layout frame. */
 export type Stacking = 'first' | 'last';
 
+/**
+ * How one column or one row of a grid auto layout is sized.
+ *
+ * The same three choices a layer itself gets, because they mean the same
+ * thing: a fixed number of pixels, hug (as wide as the cell's contents need),
+ * or fill (a share of what is left over). `value` is the pixel count for
+ * `fixed` and the `fr` weight for `fill` — two columns at 1 and 2 is Figma's
+ * ratio — and it is ignored by `fit`.
+ */
+export interface Track {
+  mode: SizeMode;
+  value?: number;
+}
+
 export interface FlexSpec {
   /** Figma's Flow: flex in a direction, or a wrapping grid */
   mode?: 'flex' | 'grid';
@@ -90,6 +104,16 @@ export interface FlexSpec {
   columns?: number;
   /** rows, when mode is 'grid'; 0 means "as many as the children need" */
   rows?: number;
+  /**
+   * Per-track sizing for a grid, column-wise and row-wise.
+   *
+   * Absent — or shorter than the track count — means the tracks it does not
+   * reach are `fill`, which is what every grid started life as. Keeping the
+   * fallback rather than materialising a full array is what lets the column
+   * count change without dragging a stale list of sizes along with it.
+   */
+  columnTracks?: Track[];
+  rowTracks?: Track[];
   direction: Axis;
   /** spacing along the direction items flow in */
   gap: number;
@@ -898,6 +922,19 @@ export interface SceneNode {
   absolute?: boolean;
   /** Overrides the parent's cross-axis alignment for this child alone. */
   alignSelf?: Align | 'auto';
+  /**
+   * Where this child sits in a grid auto layout, and how many cells it covers.
+   *
+   * Figma's "Grid position": a column and row start, each with a span. Leaving
+   * a start unset is auto-flow — the child takes the next free cell, which is
+   * what every child did before there was any way to say otherwise. A span
+   * with no start still spans, so "make this card two columns wide" needs no
+   * decision about where the card goes.
+   */
+  gridColumn?: number | null;
+  gridRow?: number | null;
+  gridColumnSpan?: number | null;
+  gridRowSpan?: number | null;
   clip: boolean;
 
   fill: string | null;

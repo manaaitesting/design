@@ -31,6 +31,7 @@ import {
   type Paint,
   type SceneNode,
   type ShaderSpec,
+  type Track,
 } from './types';
 
 /**
@@ -97,10 +98,62 @@ const ALIGN_CONTENT_CSS: Record<AlignContent, string> = {
  * in which slot depends on the direction items flow in.
  */
 function gapCss(flex: FlexSpec): string {
-  const cross = flex.crossGap ?? flex.gap;
+  // CSS has no negative gap — the whole declaration is thrown away, which is
+  // how a deliberate overlap used to turn silently into no gap at all. The
+  // negative half is carried by margins on the children instead; see
+  // `overlapMargin`.
+  const cross = Math.max(0, flex.crossGap ?? flex.gap);
+  const main = Math.max(0, flex.gap);
   const [row, column] =
-    flex.mode === 'grid' || flex.direction === 'row' ? [cross, flex.gap] : [flex.gap, cross];
+    flex.mode === 'grid' || flex.direction === 'row' ? [cross, main] : [main, cross];
   return row === column ? `${row}px` : `${row}px ${column}px`;
+}
+
+/**
+ * Figma's negative auto-layout spacing, in the one form CSS will take.
+ *
+ * A stack of overlapping avatars is a row with a negative gap. `gap` refuses
+ * it, so every child after the first pulls itself back over its neighbour with
+ * a negative margin — which lays out identically and exports as the same
+ * overlap. Only a plain, non-wrapping stack qualifies: on a wrapping row the
+ * margin would also pull the first item of each new line, and a grid places
+ * its children in tracks the margin knows nothing about.
+ */
+function overlapMargin(parent: SceneNode, node: SceneNode, doc: Doc): CSSProperties | null {
+  const flex = parent.flex;
+  if (!flex || flex.mode === 'grid' || flex.wrap || flex.gap >= 0) return null;
+  const flowed = parent.children.filter((id) => {
+    const child = doc[id];
+    return !!child && child.visible && isInFlow(child, doc);
+  });
+  // the first child has nothing behind it to overlap
+  if (flowed.indexOf(node.id) < 1) return null;
+  return flex.direction === 'row' ? { marginLeft: flex.gap } : { marginTop: flex.gap };
+}
+
+/** One grid track as CSS: pixels, content-sized, or a share of the leftover. */
+function trackCss(track: Track | undefined): string {
+  if (!track || track.mode === 'fill') {
+    const weight = track?.value && track.value > 0 ? track.value : 1;
+    return `minmax(0, ${weight}fr)`;
+  }
+  // `auto` rather than `min-content`: Figma's Hug is as big as the contents
+  // want, and `min-content` would break every word it could
+  if (track.mode === 'fit') return 'auto';
+  return `${Math.max(0, track.value ?? 0)}px`;
+}
+
+/**
+ * A grid's track list.
+ *
+ * `repeat()` survives for the all-equal case — it is what a grid has always
+ * emitted, and it is the line a person would write — and the list is only
+ * spelled out in full once one track actually differs.
+ */
+function tracksCss(count: number, tracks: Track[] | undefined): string {
+  const sized = Array.from({ length: count }, (_, index) => tracks?.[index]);
+  const uniform = sized.every((track) => !track || (track.mode === 'fill' && (track.value ?? 1) === 1));
+  return uniform ? `repeat(${count}, minmax(0, 1fr))` : sized.map(trackCss).join(' ');
 }
 
 /**
@@ -156,6 +209,16 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
 
   // ── Size ─────────────────────────────────────────────────────────────
   const mainAxisIsWidth = parentAxis === 'row';
+  /**
+   * A grid places its children in tracks, not along an axis.
+   *
+   * `flex: 1 1 0` means nothing to a grid item, so a child set to "Fill
+   * container" inside a grid used to get no width rule at all and collapse to
+   * zero — an invisible layer in a layout that looked empty. Filling a cell is
+   * `justify-self` / `align-self: stretch`, which is what these two branches
+   * say instead.
+   */
+  const inGrid = inFlow && parent?.flex?.mode === 'grid';
 
   // "Hug contents" needs contents. A leaf shape set to hug would collapse to
   // 0×0 and vanish from the canvas, so fall back to its fixed size.
@@ -165,15 +228,34 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
 
   if (wMode === 'fixed') style.width = bound(node, 'w', varNames) ?? node.w;
   else if (wMode === 'fit') style.width = 'fit-content';
+  else if (inGrid) style.justifySelf = 'stretch';
   else if (inFlow && mainAxisIsWidth) style.flex = '1 1 0';
   else if (inFlow) style.alignSelf = 'stretch';
   else style.width = '100%';
 
   if (hMode === 'fixed') style.height = bound(node, 'h', varNames) ?? node.h;
   else if (hMode === 'fit') style.height = 'fit-content';
+  else if (inGrid) style.alignSelf = 'stretch';
   else if (inFlow && !mainAxisIsWidth) style.flex = '1 1 0';
   else if (inFlow) style.alignSelf = 'stretch';
   else style.height = '100%';
+
+  // Figma's "Grid position": which cell the child starts in and how many it
+  // covers. A span with no start still spans, so widening a card to two
+  // columns does not also force a decision about where the card goes.
+  if (inGrid) {
+    const spanOf = (value: number | null | undefined) => Math.max(1, Math.round(value ?? 1));
+    const lineOf = (value: number | null | undefined) =>
+      value != null && value >= 1 ? Math.round(value) : null;
+    const column = lineOf(node.gridColumn);
+    const columnSpan = spanOf(node.gridColumnSpan);
+    if (column) style.gridColumn = `${column} / span ${columnSpan}`;
+    else if (columnSpan > 1) style.gridColumn = `span ${columnSpan}`;
+    const row = lineOf(node.gridRow);
+    const rowSpan = spanOf(node.gridRowSpan);
+    if (row) style.gridRow = `${row} / span ${rowSpan}`;
+    else if (rowSpan > 1) style.gridRow = `span ${rowSpan}`;
+  }
 
   // Min and max bounds are handed to the browser rather than clamped here, so
   // a hugging or filling layer honours them while it is being laid out.
@@ -201,23 +283,29 @@ export function nodeStyle(node: SceneNode, doc: Doc, varNames: Record<string, st
     if (index >= 0) style.zIndex = parent.children.length - index;
   }
 
+  // …and the overlap a negative gap asks for, which `gap` itself cannot carry.
+  if (inFlow && parent) Object.assign(style, overlapMargin(parent, node, doc));
+
   // ── Layout of this node's own children ───────────────────────────────
   if (node.flex) {
     const flex = node.flex;
     if (flex.mode === 'grid') {
       style.display = 'grid';
-      style.gridTemplateColumns = `repeat(${Math.max(1, flex.columns ?? 2)}, minmax(0, 1fr))`;
+      style.gridTemplateColumns = tracksCss(Math.max(1, flex.columns ?? 2), flex.columnTracks);
       // 0 rows means "however many the children need", which is grid's default
-      if (flex.rows) style.gridTemplateRows = `repeat(${flex.rows}, minmax(0, 1fr))`;
+      if (flex.rows) style.gridTemplateRows = tracksCss(flex.rows, flex.rowTracks);
       style.alignItems = ALIGN_CSS[flex.align];
       style.justifyItems =
         JUSTIFY_CSS[flex.justify] === 'space-between' ? 'stretch' : JUSTIFY_CSS[flex.justify];
     } else {
       style.display = 'flex';
       style.flexDirection = flex.direction;
-      // Baseline alignment is a cross-axis rule, so it supersedes align rather
-      // than sitting beside it — the same trade Figma's toggle makes.
-      style.alignItems = flex.baseline ? 'baseline' : ALIGN_CSS[flex.align];
+      // Baseline alignment is a cross-axis rule about text, so it only means
+      // anything while the cross axis is the vertical one. Figma offers it on a
+      // horizontal layout and disables it everywhere else; honouring it on a
+      // column would quietly throw away the frame's own cross-axis alignment.
+      style.alignItems =
+        flex.baseline && flex.direction === 'row' ? 'baseline' : ALIGN_CSS[flex.align];
       style.justifyContent = JUSTIFY_CSS[flex.justify];
       if (flex.wrap) {
         style.flexWrap = 'wrap';

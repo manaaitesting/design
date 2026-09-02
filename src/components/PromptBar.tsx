@@ -26,6 +26,14 @@ export function PromptBar() {
   const [text, setText] = useState('');
   const [style, setStyle] = useState('variety');
   const [aspect, setAspect] = useState('1:1');
+  /**
+   * Whether the style and aspect pickers are showing.
+   *
+   * The sliders button beside the field promised these and did nothing — it had
+   * no handler at all — so it now does the one thing its icon claims: it puts
+   * the options away when the prompt is all you want, and brings them back.
+   */
+  const [options, setOptions] = useState(true);
 
   if (!kind) return null;
 
@@ -91,16 +99,27 @@ export function PromptBar() {
             color: 'var(--color-ink)',
           }}
         />
-        <button type="button" className="btn" style={{ width: 24, padding: 0 }} title="Options">
+        <button
+          type="button"
+          className="btn"
+          style={{ width: 24, padding: 0 }}
+          title={options ? 'Hide options' : 'Show options'}
+          aria-label={options ? 'Hide options' : 'Show options'}
+          aria-pressed={options}
+          data-on={options ? 'true' : undefined}
+          onClick={() => setOptions((on) => !on)}
+        >
           <Icon.Sliders />
         </button>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-        <div style={{ width: 128 }}>
-          <Select value={style} options={STYLES} onChange={setStyle} glyph={<Icon.Shader />} />
-        </div>
-        {kind === 'image' && (
+        {options && (
+          <div style={{ width: 128 }}>
+            <Select value={style} options={STYLES} onChange={setStyle} glyph={<Icon.Shader />} />
+          </div>
+        )}
+        {options && kind === 'image' && (
           <div style={{ width: 82 }}>
             <Select
               value={aspect}

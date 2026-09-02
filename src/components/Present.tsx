@@ -64,6 +64,86 @@ function travel(spec: TransitionSpec, reverse: boolean): { x: number; y: number 
 }
 
 /**
+ * One overlay, arriving the way its interaction said it should.
+ *
+ * Overlays appeared and vanished instantly whatever Animation the Prototype
+ * panel had written — the three branches that open, swap and close one never
+ * looked at the transition at all. A sheet that does not slide up is not a
+ * sheet; it is a rectangle that was suddenly there.
+ *
+ * A frame transition animates by moving the whole screen. An overlay cannot do
+ * that, because `.fig-overlay` already spends its `transform` on the centring
+ * its position needs — so this animates the independent `translate` property,
+ * which composes with that transform rather than replacing it. Nothing in the
+ * stylesheet has to change and every `data-at` position keeps working.
+ */
+function OverlayBody({
+  overlay,
+  spec,
+  transition,
+  leaving,
+  scale,
+}: {
+  overlay: SceneNode;
+  spec: OverlaySpec;
+  transition?: TransitionSpec;
+  /** on its way out: it goes back where it came from, then it is dropped */
+  leaving?: boolean;
+  scale: number;
+}) {
+  // an overlay that mounts already in its final place would never animate
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const animating = !!transition && transition.type !== 'instant';
+  // a dissolve fades; everything else that is not a smart animate travels
+  const moves = animating && transition.type !== 'dissolve' && transition.type !== 'smart-animate';
+  const at = travel(transition ?? DEFAULT_TRANSITION, false);
+  // off-stage on the way in and again on the way out, which is the same place
+  const off = !entered || !!leaving;
+  const away = moves && off;
+
+  return (
+    <div
+      className="fig-overlay"
+      data-at={spec.position}
+      data-entering={animating && !entered ? '' : undefined}
+      data-leaving={leaving ? '' : undefined}
+      style={{
+        width: overlay.w * scale,
+        height: overlay.h * scale,
+        translate: away ? `${at.x * 100}% ${at.y * 100}%` : '0 0',
+        opacity: animating && off && !moves ? 0 : 1,
+        // a sheet on its way out must not take the press that closed it
+        pointerEvents: leaving ? 'none' : undefined,
+        transition: animating
+          ? `translate ${transition.duration}ms ${easingCss(transition)}, opacity ${transition.duration}ms ${easingCss(transition)}`
+          : undefined,
+      }}
+    >
+      <div
+        style={{
+          width: overlay.w,
+          height: overlay.h,
+          transform: `scale(${scale})`,
+          transformOrigin: '0 0',
+          position: 'relative',
+          background: overlay.fill ?? '#fff',
+        }}
+        data-frame-id={overlay.id}
+      >
+        <div style={{ position: 'absolute', left: -overlay.x, top: -overlay.y }}>
+          <NodeView id={overlay.id} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Plays the prototype.
  *
  * The frames are the same `NodeView` tree the canvas draws — no second
@@ -84,7 +164,20 @@ export function Present() {
 
   const [stack, setStack] = useState<string[]>([]);
   /** overlays sitting on top of the frame, innermost last */
-  const [overlays, setOverlays] = useState<{ frame: string; spec: OverlaySpec }[]>([]);
+  const [overlays, setOverlays] = useState<
+    { frame: string; spec: OverlaySpec; transition?: TransitionSpec; leaving?: boolean }[]
+  >([]);
+  /**
+   * The overlays as they stand, for the dismisser to read.
+   *
+   * Closing has to decide *before* it writes — whether there is anything to
+   * close, and with which transition — and doing that inside a state updater
+   * would mean scheduling a timer from a function React is free to call twice.
+   */
+  const overlaysNow = useRef(overlays);
+  useEffect(() => {
+    overlaysNow.current = overlays;
+  }, [overlays]);
   const [move, setMove] = useState<Move | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   /**
@@ -125,6 +218,26 @@ export function Present() {
    * is a rehearsal, and it must not leave the document different.
    */
   const [swaps, setSwaps] = useState<Record<string, string>>({});
+
+  const momentary = useRef<{
+    kind: 'hover' | 'press';
+    node: string;
+    stage: { stack: string[]; overlays: typeof overlays; overrides: typeof overrides; swaps: typeof swaps };
+  } | null>(null);
+
+  const revert = useCallback(() => {
+    const held = momentary.current;
+    if (!held) return;
+    momentary.current = null;
+    setStack(held.stage.stack);
+    setOverlays(held.stage.overlays);
+    setOverrides(held.stage.overrides);
+    setSwaps(held.stage.swaps);
+    // an overlay or a frame that was mid-transition when the pointer left
+    // would otherwise finish arriving somewhere nobody is going any more
+    setMove(null);
+  }, []);
+
   const [flash, setFlash] = useState(false);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -222,6 +335,43 @@ export function Present() {
     [overrides, tokenVars],
   );
 
+  /**
+   * Closes the top overlay, letting it leave the way it arrived.
+   *
+   * Figma animates an overlay out with the transition it was given; here it
+   * simply vanished. Leaving cannot be "remove it and then animate", because
+   * an element that is gone has nothing to animate — so the entry is marked
+   * `leaving`, which puts it back where it came from, and it is dropped once
+   * the animation has had its time.
+   *
+   * `override` is the closing interaction's own transition when it names one;
+   * without it the overlay leaves by the transition it arrived by, which is
+   * what makes a sheet slide back down rather than sideways.
+   */
+  const dismissOverlay = useCallback(
+    (override?: TransitionSpec) => {
+      const list = overlaysNow.current;
+      const last = list[list.length - 1];
+      if (!last || last.leaving) return;
+      const spec = override ?? last.transition;
+      if (!spec || spec.type === 'instant') {
+        setOverlays((prev) => prev.slice(0, -1));
+        return;
+      }
+      setOverlays((prev) =>
+        prev.length ? [...prev.slice(0, -1), { ...prev[prev.length - 1], leaving: true, transition: spec }] : prev,
+      );
+      after(
+        () =>
+          setOverlays((prev) =>
+            prev.length && prev[prev.length - 1].leaving ? prev.slice(0, -1) : prev,
+          ),
+        spec.duration + 20,
+      );
+    },
+    [after],
+  );
+
   const go = useCallback(
     (interaction: Interaction, nodeId = '') => {
       // a branch action, or one an agent wrote, may carry no transition at all
@@ -236,12 +386,20 @@ export function Present() {
         setOverlays((prev) =>
           prev.some((entry) => entry.frame === interaction.destination)
             ? prev
-            : [...prev, { frame: interaction.destination!, spec: interaction.overlay ?? DEFAULT_OVERLAY }],
+            : [
+                ...prev,
+                {
+                  frame: interaction.destination!,
+                  spec: interaction.overlay ?? DEFAULT_OVERLAY,
+                  // how it should arrive — an overlay used to ignore this
+                  transition,
+                },
+              ],
         );
         return;
       }
       if (interaction.action === 'close-overlay') {
-        setOverlays((prev) => prev.slice(0, -1));
+        dismissOverlay(interaction.transition);
         return;
       }
       if (interaction.action === 'swap-overlay') {
@@ -250,9 +408,15 @@ export function Present() {
           prev.length
             ? [
                 ...prev.slice(0, -1),
-                { frame: interaction.destination!, spec: prev[prev.length - 1].spec },
+                { frame: interaction.destination!, spec: prev[prev.length - 1].spec, transition },
               ]
-            : [{ frame: interaction.destination!, spec: interaction.overlay ?? DEFAULT_OVERLAY }],
+            : [
+                {
+                  frame: interaction.destination!,
+                  spec: interaction.overlay ?? DEFAULT_OVERLAY,
+                  transition,
+                },
+              ],
         );
         return;
       }
@@ -339,7 +503,7 @@ export function Present() {
         return [...prev, to];
       });
     },
-    [after, capture, arrive, readVariable],
+    [after, capture, arrive, readVariable, dismissOverlay],
   );
 
   // Put a frame back where it was scrolled to. It runs before paint so the
@@ -524,6 +688,38 @@ export function Present() {
   const scale =
     presentScale === 'actual' ? 1 : presentScale === 'fill' ? Math.max(across, down) : Math.min(across, down);
 
+  /**
+   * A momentary trigger, and the stage as it was before it ran.
+   *
+   * "While hovering" and "While pressing" are the only two triggers Figma
+   * undoes: the action runs on the way in and is taken back on the way out,
+   * which is the whole reason they exist — a hover state that stuck would just
+   * be a click. So the run is bracketed. Everything a run can change and a
+   * document cannot see is remembered here, and leaving means putting it back.
+   *
+   * The node is remembered too, so crossing between two children of the same
+   * hotspot does not re-run the action, and leaving one hotspot for another
+   * reverts the first before the second starts.
+   */
+  /**
+   * Runs a momentary trigger, remembering what to put back.
+   *
+   * Returns whether anything was hit, so the caller can go on to the triggers
+   * that are not momentary — a layer may carry both.
+   */
+  const fireMomentary = (event: React.PointerEvent, kind: 'hover' | 'press') => {
+    const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-node-id]');
+    const hit = el?.dataset.nodeId ? hitInteraction(el.dataset.nodeId, doc, kind) : null;
+    if (!hit) return false;
+    // already inside this hotspot: the action has run and must not run twice
+    if (momentary.current?.kind === kind && momentary.current.node === hit.node) return true;
+    // moved straight from another hotspot into this one
+    if (momentary.current) revert();
+    momentary.current = { kind, node: hit.node, stage: { stack, overlays, overrides, swaps } };
+    go(hit.interaction, hit.node);
+    return true;
+  };
+
   /** A gesture on the artwork: find what it hit, then do what that says. */
   const fire = (event: React.PointerEvent, trigger: Interaction['trigger']) => {
     const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-node-id]');
@@ -631,13 +827,15 @@ export function Present() {
 
           fire(event, 'mouse-down');
           // a click that hits nothing flashes the hotspots, as Figma does
-          if (!fire(event, 'press') && !fire(event, 'click')) {
+          if (!fireMomentary(event, 'press') && !fire(event, 'click')) {
             setFlash(true);
             after(() => setFlash(false), HOTSPOT_FLASH_MS);
           }
         }}
         onPointerUp={(event) => {
           fire(event, 'mouse-up');
+          // While pressing ends with the press, wherever the pointer has got to
+          if (momentary.current?.kind === 'press') revert();
         }}
         onScrollCapture={(event) => {
           const el = event.target as HTMLElement | null;
@@ -646,11 +844,21 @@ export function Present() {
           (scrolls.current[current] ??= {})[id] = [el!.scrollLeft, el!.scrollTop];
         }}
         onPointerOver={(event) => {
-          fire(event, 'hover');
+          fireMomentary(event, 'hover');
           fire(event, 'mouse-enter');
         }}
         onPointerOut={(event) => {
           fire(event, 'mouse-leave');
+          // Leaving the hotspot undoes While hovering — but `pointerout` also
+          // fires when the pointer merely crosses onto a *child* of it, and
+          // that is not leaving. The node under the pointer after the move
+          // settles it: still inside the hotspot, still hovering.
+          const held = momentary.current;
+          if (held?.kind !== 'hover') return;
+          const to = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>(
+            `[data-node-id="${held.node}"]`,
+          );
+          if (!to) revert();
         }}
       >
         <div
@@ -705,30 +913,20 @@ export function Present() {
                 data-dim={entry.spec.background || undefined}
                 onPointerDown={(event) => {
                   if (event.target !== event.currentTarget) return;
-                  if (entry.spec.closeOnOutside) setOverlays((prev) => prev.slice(0, index));
+                  if (!entry.spec.closeOnOutside) return;
+                  // the top one leaves the way it arrived; anything stacked
+                  // beneath it goes at once, since it was never on show
+                  if (index === overlays.length - 1) dismissOverlay();
+                  else setOverlays((prev) => prev.slice(0, index));
                 }}
               >
-                <div
-                  className="fig-overlay"
-                  data-at={entry.spec.position}
-                  style={{ width: overlay.w * scale, height: overlay.h * scale }}
-                >
-                  <div
-                    style={{
-                      width: overlay.w,
-                      height: overlay.h,
-                      transform: `scale(${scale})`,
-                      transformOrigin: '0 0',
-                      position: 'relative',
-                      background: overlay.fill ?? '#fff',
-                    }}
-                    data-frame-id={entry.frame}
-                  >
-                    <div style={{ position: 'absolute', left: -overlay.x, top: -overlay.y }}>
-                      <NodeView id={entry.frame} />
-                    </div>
-                  </div>
-                </div>
+                <OverlayBody
+                  overlay={overlay}
+                  spec={entry.spec}
+                  transition={entry.transition}
+                  leaving={entry.leaving}
+                  scale={scale}
+                />
               </div>
             );
           })}

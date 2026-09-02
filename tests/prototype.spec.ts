@@ -110,3 +110,199 @@ test('the presentation scales to the window, fills it, or shows it actual size',
   await page.keyboard.press('Escape');
   await removeNodes(page, [small]);
 });
+
+/**
+ * Figma's two momentary triggers undo themselves: While hovering runs on the
+ * way in and is taken back on the way out, and While pressing is taken back
+ * when the press ends. Both were dispatched here exactly like Mouse enter and
+ * Mouse down — one-way — so a hover state, once entered, stuck for the rest of
+ * the run. That is the difference between a hover state and a click.
+ */
+test('While hovering runs on the way in and is taken back on the way out', async ({ page }) => {
+  const board = (await nodeNamed(page, 'Fixture Board'))!.id;
+  const sheet = await makeNode(page, 'frame', {
+    name: 'Hover Sheet', x: 1200, y: 0, w: 200, h: 140, fill: '#FFF7E6', flex: null,
+  });
+  const button = (await nodeNamed(page, 'Cover'))!.id;
+  await page.evaluate(
+    ([id, dest]) => {
+      window.paperlike!.store.addInteraction(id, {
+        trigger: 'hover',
+        action: 'open-overlay',
+        destination: dest,
+      });
+      window.paperlike!.store.commit();
+    },
+    [button, sheet] as const,
+  );
+
+  await page.evaluate((id) => window.paperlike!.ui.getState().present(id), board);
+  const overlay = page.locator('.fig-overlay');
+  await expect(overlay).toHaveCount(0);
+
+  const hotspot = page.locator(`.fig-present [data-node-id="${button}"]`).first();
+  await hotspot.hover();
+  await expect(overlay).toHaveCount(1);
+
+  // off the hotspot: the overlay goes back where it was, which is away
+  await page.mouse.move(4, 4);
+  await expect(overlay).toHaveCount(0);
+
+  await page.keyboard.press('Escape');
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, { interactions: [] });
+    window.paperlike!.store.commit();
+  }, button);
+  await removeNodes(page, [sheet]);
+});
+
+test('While pressing is taken back when the press ends', async ({ page }) => {
+  const board = (await nodeNamed(page, 'Fixture Board'))!.id;
+  const sheet = await makeNode(page, 'frame', {
+    name: 'Press Sheet', x: 1200, y: 0, w: 200, h: 140, fill: '#E6F7FF', flex: null,
+  });
+  const button = (await nodeNamed(page, 'Cover'))!.id;
+  await page.evaluate(
+    ([id, dest]) => {
+      window.paperlike!.store.addInteraction(id, {
+        trigger: 'press',
+        action: 'open-overlay',
+        destination: dest,
+      });
+      window.paperlike!.store.commit();
+    },
+    [button, sheet] as const,
+  );
+
+  await page.evaluate((id) => window.paperlike!.ui.getState().present(id), board);
+  const overlay = page.locator('.fig-overlay');
+  const box = await page.locator(`.fig-present [data-node-id="${button}"]`).first().boundingBox();
+
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await expect(overlay).toHaveCount(1);
+  await page.mouse.up();
+  await expect(overlay).toHaveCount(0);
+
+  await page.keyboard.press('Escape');
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, { interactions: [] });
+    window.paperlike!.store.commit();
+  }, button);
+  await removeNodes(page, [sheet]);
+});
+
+/**
+ * An overlay animates in with the transition the interaction chose — Move in
+ * from the bottom for a sheet, Dissolve for a modal. All three overlay branches
+ * used to ignore the Animation the Prototype panel had written, so every sheet
+ * simply appeared.
+ */
+test('an overlay arrives with the animation its interaction chose', async ({ page }) => {
+  const board = (await nodeNamed(page, 'Fixture Board'))!.id;
+  const sheet = await makeNode(page, 'frame', {
+    name: 'Sliding Sheet', x: 1200, y: 0, w: 200, h: 140, fill: '#FFF7E6', flex: null,
+  });
+  const button = (await nodeNamed(page, 'Cover'))!.id;
+  const arm = (transition: Record<string, unknown>) =>
+    page.evaluate(
+      ([id, dest, spec]) => {
+        window.paperlike!.store.update(id as string, { interactions: [] });
+        window.paperlike!.store.addInteraction(id as string, {
+          trigger: 'click',
+          action: 'open-overlay',
+          destination: dest as string,
+          transition: spec,
+        });
+        window.paperlike!.store.commit();
+      },
+      [button, sheet, transition] as const,
+    );
+
+  await arm({ type: 'move', direction: 'bottom', duration: 400, easing: 'ease-out' });
+  await page.evaluate((id) => window.paperlike!.ui.getState().present(id), board);
+  const hotspot = page.locator(`.fig-present [data-node-id="${button}"]`).first();
+  await hotspot.click();
+
+  const overlay = page.locator('.fig-overlay');
+  await expect(overlay).toHaveCount(1);
+  // the animation is on the overlay itself, and on `translate` so it composes
+  // with the transform its position already spends
+  // two properties animate, so the computed value names a duration for each
+  expect(await overlay.evaluate((el) => getComputedStyle(el).transitionDuration)).toBe('0.4s, 0.4s');
+  expect(await overlay.evaluate((el) => getComputedStyle(el).transitionProperty)).toContain('translate');
+  // …and it settles where the position put it, rather than staying offset
+  await expect
+    .poll(() => overlay.evaluate((el) => getComputedStyle(el).translate))
+    .toMatch(/^(none|0px)$/);
+  await page.keyboard.press('Escape');
+
+  // Instant means instant: no transition at all, as before
+  await arm({ type: 'instant', direction: 'bottom', duration: 400, easing: 'ease-out' });
+  await page.evaluate((id) => window.paperlike!.ui.getState().present(id), board);
+  await page.locator(`.fig-present [data-node-id="${button}"]`).first().click();
+  await expect(overlay).toHaveCount(1);
+  expect(await overlay.evaluate((el) => getComputedStyle(el).transitionDuration)).toBe('0s');
+  expect(await overlay.evaluate((el) => getComputedStyle(el).translate)).toMatch(/^(none|0px)$/);
+
+  await page.keyboard.press('Escape');
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, { interactions: [] });
+    window.paperlike!.store.commit();
+  }, button);
+  await removeNodes(page, [sheet]);
+});
+
+/**
+ * …and it leaves the same way. Closing cannot be "remove it and then animate",
+ * because an element that is gone has nothing to animate — so the overlay is
+ * marked as leaving, put back where it came from, and dropped once the
+ * animation has had its time.
+ */
+test('an overlay leaves with an animation too, rather than vanishing', async ({ page }) => {
+  const board = (await nodeNamed(page, 'Fixture Board'))!.id;
+  const sheet = await makeNode(page, 'frame', {
+    name: 'Leaving Sheet', x: 1200, y: 0, w: 200, h: 140, fill: '#FFF7E6', flex: null,
+  });
+  const button = (await nodeNamed(page, 'Cover'))!.id;
+  await page.evaluate(
+    ([id, dest]) => {
+      window.paperlike!.store.addInteraction(id as string, {
+        trigger: 'click',
+        action: 'open-overlay',
+        destination: dest as string,
+        // long enough that the leaving state is observable rather than a race
+        transition: { type: 'move', direction: 'bottom', duration: 1200, easing: 'ease-out' },
+        overlay: { position: 'bottom', background: true, closeOnOutside: true },
+      });
+      window.paperlike!.store.commit();
+    },
+    [button, sheet] as const,
+  );
+
+  await page.evaluate((id) => window.paperlike!.ui.getState().present(id), board);
+  await page.locator(`.fig-present [data-node-id="${button}"]`).first().click();
+
+  const overlay = page.locator('.fig-overlay');
+  await expect(overlay).toHaveCount(1);
+  await expect
+    .poll(() => overlay.evaluate((el) => getComputedStyle(el).translate))
+    .toMatch(/^(none|0px)$/);
+
+  // a press on the scrim closes it — and it is still on screen while it goes,
+  // travelling back the way it came rather than blinking out
+  const scrim = await page.locator('.fig-overlay-layer').boundingBox();
+  await page.mouse.click(scrim!.x + scrim!.width / 2, scrim!.y + 8);
+  await expect(overlay).toHaveAttribute('data-leaving', '');
+  // on its way out it is travelling, not sitting where it rested
+  expect(await overlay.evaluate((el) => getComputedStyle(el).translate)).not.toMatch(/^(none|0px)$/);
+  // and it is gone once the animation has had its time
+  await expect(overlay).toHaveCount(0, { timeout: 4000 });
+
+  await page.keyboard.press('Escape');
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, { interactions: [] });
+    window.paperlike!.store.commit();
+  }, button);
+  await removeNodes(page, [sheet]);
+});

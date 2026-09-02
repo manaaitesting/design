@@ -103,6 +103,7 @@ import {
   type StyleKind,
   type SceneNode,
   type SizeMode,
+  type Track,
   type ExportSetting,
   type Token,
   DEVICES,
@@ -3023,9 +3024,52 @@ function ChildLayoutRow({ node, set }: { node: SceneNode; set: Setter }) {
     });
   };
 
+  const inGrid = parent.flex.mode === 'grid';
+  /**
+   * Figma's "Grid position": where the child starts, and how many cells it
+   * covers.
+   *
+   * 0 is the auto-flow the grid has always done — the next free cell — so the
+   * field reads Auto until a cell is actually chosen, and a span can be widened
+   * without also pinning the child somewhere.
+   */
+  const cell = (
+    label: string,
+    start: 'gridColumn' | 'gridRow',
+    span: 'gridColumnSpan' | 'gridRowSpan',
+    limit: number,
+  ) => (
+    <div className="fig-row">
+      <FigField
+        value={node[start] ?? 0}
+        glyph={label}
+        min={0}
+        max={limit}
+        placeholder="Auto"
+        title={`${label === 'C' ? 'Column' : 'Row'} to start in — 0 takes the next free cell`}
+        onChange={(value) => set({ [start]: value > 0 ? value : null } as Partial<SceneNode>)}
+      />
+      <FigField
+        value={node[span] ?? 1}
+        glyph="⇥"
+        min={1}
+        max={limit}
+        title={`How many ${label === 'C' ? 'columns' : 'rows'} this layer covers`}
+        onChange={(value) => set({ [span]: value > 1 ? value : null } as Partial<SceneNode>)}
+      />
+      <span style={{ width: 24, flex: 'none' }} />
+    </div>
+  );
+
   return (
     <>
       <FigLabel>In auto layout</FigLabel>
+      {inGrid && (
+        <>
+          {cell('C', 'gridColumn', 'gridColumnSpan', Math.max(1, parent.flex.columns ?? 2))}
+          {cell('R', 'gridRow', 'gridRowSpan', Math.max(1, parent.flex.rows || 24))}
+        </>
+      )}
       <div className="fig-row" style={{ marginTop: 0 }}>
         <FigSelect
           value={node.alignSelf ?? 'auto'}
@@ -3213,6 +3257,112 @@ function ConstraintsWidget({
 
 // ── Auto layout ──────────────────────────────────────────────────────────
 
+/** The three ways a grid track is sized, in Figma's order. */
+const TRACK_MODES: FigOption<SizeMode>[] = [
+  { value: 'fill', label: 'Fill' },
+  { value: 'fixed', label: 'Fixed' },
+  { value: 'fit', label: 'Hug' },
+];
+
+/**
+ * Per-track sizing for a grid — Figma's Fixed / Hug / Fill on each column and
+ * each row, which is how a 240px sidebar sits beside a filling content column.
+ *
+ * It lives behind a caret rather than in the panel because a twelve-column grid
+ * is twelve rows of controls and the counts above it are what most layouts ever
+ * touch. Only the tracks that exist are listed, and a track nobody has set is
+ * Fill — which is what every grid here began as, so opening this changes
+ * nothing until something is chosen.
+ */
+function GridTracks({ flex, patch }: { flex: FlexSpec; patch: (delta: Partial<FlexSpec>) => void }) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLSpanElement>(null);
+  const columns = Math.max(1, flex.columns ?? 2);
+  const rows = flex.rows ?? 0;
+
+  /**
+   * Writing one track materialises the whole list.
+   *
+   * The stored array is allowed to be short — the tracks it does not reach are
+   * Fill — but an edit has to land at a known index, so the list is filled out
+   * to the track count first and the untouched entries keep the default.
+   */
+  const write = (
+    key: 'columnTracks' | 'rowTracks',
+    count: number,
+    index: number,
+    delta: Partial<Track>,
+  ) => {
+    const list: Track[] = Array.from(
+      { length: count },
+      (_, at) => flex[key]?.[at] ?? { mode: 'fill' as SizeMode },
+    );
+    list[index] = { ...list[index], ...delta };
+    patch(key === 'columnTracks' ? { columnTracks: list } : { rowTracks: list });
+  };
+
+  const trackList = (key: 'columnTracks' | 'rowTracks', count: number, legend: string) => (
+    <>
+      <FigLabel>{legend}</FigLabel>
+      {Array.from({ length: count }, (_, index) => {
+        const track: Track = flex[key]?.[index] ?? { mode: 'fill' };
+        return (
+          <div className="fig-row" key={`${key}-${index}`}>
+            <span
+              style={{
+                width: 14,
+                flex: 'none',
+                textAlign: 'center',
+                color: 'var(--fig-ink-dim, #b3b3b3)',
+                fontSize: 11,
+              }}
+            >
+              {index + 1}
+            </span>
+            <FigSelect
+              value={track.mode}
+              options={TRACK_MODES}
+              title={`${legend.slice(0, -1)} ${index + 1} sizing`}
+              onChange={(mode) => write(key, count, index, { mode })}
+            />
+            <FigField
+              value={track.mode === 'fill' ? (track.value ?? 1) : (track.value ?? 100)}
+              min={track.mode === 'fill' ? 1 : 0}
+              disabled={track.mode === 'fit'}
+              placeholder="Auto"
+              suffix={track.mode === 'fill' ? 'fr' : 'px'}
+              title={
+                track.mode === 'fit'
+                  ? 'A hugging track is sized by its contents'
+                  : track.mode === 'fill'
+                    ? 'Share of the space left over'
+                    : 'Track width in pixels'
+              }
+              onChange={(value) => write(key, count, index, { value })}
+            />
+          </div>
+        );
+      })}
+    </>
+  );
+
+  return (
+    <span ref={anchor} style={{ display: 'inline-flex', flex: 'none' }}>
+      <FigButton title="Track sizing" on={open} onClick={() => setOpen((v) => !v)}>
+        <Icon.Dots />
+      </FigButton>
+      {open && (
+        <FigPopover anchor={anchor.current} width={236} maxHeight={340} onClose={() => setOpen(false)}>
+          <div style={{ padding: '2px 6px 8px' }}>
+            {trackList('columnTracks', columns, 'Columns')}
+            {rows > 0 && trackList('rowTracks', rows, 'Rows')}
+          </div>
+        </FigPopover>
+      )}
+    </span>
+  );
+}
+
 /** Gap, padding and alignment — Figma shows these inside Layout, under Flow. */
 function AutoLayoutControls({ node, set }: { node: SceneNode; set: Setter }) {
   const flex = node.flex!;
@@ -3244,7 +3394,7 @@ function AutoLayoutControls({ node, set }: { node: SceneNode; set: Setter }) {
             title="Rows — 0 fits as many as the children need"
             onChange={(rows) => patch({ rows })}
           />
-          <span style={{ width: 24, flex: 'none' }} />
+          <GridTracks flex={flex} patch={patch} />
         </div>
       )}
 
@@ -3256,7 +3406,11 @@ function AutoLayoutControls({ node, set }: { node: SceneNode; set: Setter }) {
           <FigField
             value={flex.justify === 'between' && !isGrid ? 'mixed' : flex.gap}
             glyph={<Icon.Gap />}
-            min={0}
+            // Figma's spacing goes negative, which is how overlapping avatars
+            // and shingled cards are built. Only a plain stack can draw one:
+            // the overlap is a margin on each child after the first, and in a
+            // wrapping row or a grid that would also pull the first of a line.
+            min={isGrid || flex.wrap ? 0 : -999}
             title={
               flex.justify === 'between' && !isGrid
                 ? 'Gap is decided by the distribution'
@@ -3409,6 +3563,12 @@ function AdvancedLayout({
 
             <FigLabel>Text baseline alignment</FigLabel>
             <FigGroup
+              // A baseline is a cross-axis rule about text, so it only means
+              // anything while the cross axis is the vertical one. Figma offers
+              // it on a horizontal layout and greys it everywhere else; here it
+              // used to stay live on a column and quietly replace the frame's
+              // own cross-axis alignment.
+              disabled={flex.mode === 'grid' || flex.direction !== 'row'}
               value={flex.baseline ? 'on' : 'off'}
               options={[
                 { value: 'off', label: 'Off', title: 'Align text by its box' },

@@ -560,6 +560,17 @@ select {
     background: var(--fig-selected);
     color: var(--fig-blue);
   }
+  /* A setting that cannot apply here — Figma greys it rather than hiding it,
+     so the control stays where you learned it is and the greying is the rule. */
+  .fig-seg[data-disabled] {
+    opacity: 0.4;
+  }
+  .fig-seg[data-disabled] > button:hover {
+    background: var(--fig-field);
+  }
+  .fig-seg[data-disabled] > button[data-on='true']:hover {
+    background: var(--fig-selected);
+  }
 
   .fig-swatch {
     position: relative;
@@ -3598,38 +3609,98 @@ select {
      The gutters and the padding bands of the selected flex frame. Invisible
      until the pointer is on them: this is chrome over artwork, and spacing you
      are not editing is spacing you want to see. */
+  /* The grip you take hold of: a bar centred in the space it edits, which is
+     also the thing you aim at to see that space painted. */
   .fig-flex-gap,
   .fig-flex-pad {
     position: absolute;
     pointer-events: auto;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+  }
+  .fig-flex-pad[data-inert] {
+    pointer-events: none;
+  }
+  .fig-flex-gap::after,
+  .fig-flex-pad::after {
+    content: '';
+    display: block;
+    border-radius: 2px;
+    transition:
+      transform 80ms ease-out,
+      background-color 80ms ease-out;
+  }
+  .fig-flex-gap[data-axis='x']::after,
+  .fig-flex-pad[data-axis='x']::after {
+    width: 14px;
+    height: 3px;
+  }
+  .fig-flex-gap[data-axis='y']::after,
+  .fig-flex-pad[data-axis='y']::after {
+    width: 3px;
+    height: 14px;
+  }
+  /* A gutter is spacing *between* children, and spacing is pink. Padding is
+     the frame's own inset rather than a space between two things, so it takes
+     the selection blue — which is how Figma and paper tell the two apart. */
+  .fig-flex-gap::after {
+    background: rgba(236, 72, 153, 0.85);
+  }
+  .fig-flex-pad::after {
+    background: rgba(13, 153, 255, 0.85);
+  }
+  .fig-flex-gap:hover::after,
+  .fig-flex-gap[data-on]::after,
+  .fig-flex-pad:hover::after,
+  .fig-flex-pad[data-on]::after {
+    transform: scale(1.25);
+  }
+  .fig-flex-gap:hover::after,
+  .fig-flex-gap[data-on]::after {
+    background: rgb(236, 72, 153);
+  }
+  .fig-flex-pad:hover::after,
+  .fig-flex-pad[data-on]::after {
+    background: rgb(13, 153, 255);
+  }
+  /* the gutter itself — painted pink, but only once you are on its grip */
+  .fig-flex-gutter {
+    position: absolute;
+    pointer-events: none;
     background: transparent;
     transition: background-color 80ms ease-out;
   }
-  .fig-flex-gap:hover,
-  .fig-flex-gap[data-on='true'],
-  .fig-flex-pad:hover,
-  .fig-flex-pad[data-on='true'] {
+  .fig-flex-gutter[data-live] {
     background: repeating-linear-gradient(
       45deg,
-      rgba(236, 72, 153, 0.28) 0 6px,
-      rgba(236, 72, 153, 0.12) 6px 12px
+      rgba(236, 72, 153, 0.55) 0 2px,
+      transparent 2px 6px
     );
   }
-  /* what the number means, shown while you are on the grip that changes it — Figma pinks, diagonal */
+  /* what the padding number means, painted over the strip it measures */
+  /* Bare until you are on its grip: the frame is artwork, and four painted
+     strips over artwork you are not editing is four strips in the way. */
   .fig-flex-region {
     position: absolute;
+    background: transparent;
+    pointer-events: none;
+  }
+  .fig-flex-region[data-live] {
     background: repeating-linear-gradient(
       -45deg,
-      rgba(236, 72, 153, 0.16) 0 6px,
-      rgba(236, 72, 153, 0.05) 6px 12px
+      rgba(13, 153, 255, 0.55) 0 2px,
+      transparent 2px 6px
     );
-    border: 1px dashed rgba(236, 72, 153, 0.32);
-    pointer-events: none;
   }
   /* the value you are dragging, over the thing you are dragging */
   .fig-flex-badge {
     position: absolute;
-    transform: translate(-50%, -50%);
+    /* anchored by its bottom edge, so it rises off the grip it describes */
+    transform: translate(-50%, -100%);
+    animation: fig-flex-badge-in 90ms ease-out;
     padding: 1px 5px;
     border-radius: 3px;
     background: var(--color-select-line);
@@ -3638,6 +3709,17 @@ select {
     font-weight: 600;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  @keyframes fig-flex-badge-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -100%) translateY(3px);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, -100%) translateY(0);
+    }
   }
 
   .fig-tab-menu {

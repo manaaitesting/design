@@ -6,6 +6,7 @@ import { FigIcon } from './ui/FigIcon';
 import { FigButton } from './ui/Figma';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { FileHead, FileMenu, requestRename, type FileMeta } from './FileMenu';
+import { MainMenu } from './MainMenu';
 import { useCollections, useDoc, usePages, useReadOnly, useSession, useStore, useTokens } from './Session';
 import {
   fetchLibraryComponentAction,
@@ -247,6 +248,9 @@ export function CollapsedLeftPanelIsland({ file }: { file: FileMeta }) {
   const fileName = file.name;
   const toggleLeftPanel = useUI((s) => s.toggleLeftPanel);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // the app menu, which is not the file menu: Figma's glyph opens the first and
+  // the caret beside the name opens the second
+  const [appMenu, setAppMenu] = useState<{ x: number; y: number } | null>(null);
   return (
     <div
       className="left_panel_island_container--islandContainer--Dn6cB left_panel_island_container--collapsed--qikIv"
@@ -263,12 +267,19 @@ export function CollapsedLeftPanelIsland({ file }: { file: FileMeta }) {
             data-tooltip-type="lookup"
             data-tooltip-offset-x="0"
             aria-haspopup="menu"
-            aria-expanded="false"
+            aria-expanded={!!appMenu}
             type="button"
             tabIndex={0}
             data-show-focus="true"
             className="_19xx72g0 toolbar_view--menuButtonNew--7p2v4"
+            data-on={appMenu ? 'true' : undefined}
             title="Main menu"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              if (appMenu) return setAppMenu(null);
+              const box = event.currentTarget.getBoundingClientRect();
+              setAppMenu({ x: box.left, y: box.bottom + 6 });
+            }}
           >
             <svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24L" aria-hidden="true">
               <path
@@ -365,6 +376,9 @@ export function CollapsedLeftPanelIsland({ file }: { file: FileMeta }) {
       >
         <Icon.Caret />
       </button>
+      {appMenu && (
+        <MainMenu x={appMenu.x} y={appMenu.y} onClose={() => setAppMenu(null)} />
+      )}
       {menu && (
         <FileMenu
           file={file}

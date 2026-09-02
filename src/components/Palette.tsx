@@ -19,7 +19,14 @@ import { componentize, componentizeEach, rasterizeSelection } from '../lib/actio
  * unpredictable first result is the one thing a palette must not have.
  */
 
-interface Entry {
+/**
+ * One command, as the palette and the main menu both need it.
+ *
+ * The two surfaces list the same commands in different orders — a palette
+ * ranks them by what you typed, a menu groups them the way Figma groups them —
+ * so the list itself is shared and only the arrangement differs.
+ */
+export interface Command {
   id: string;
   label: string;
   hint?: string;
@@ -27,6 +34,8 @@ interface Entry {
   writes?: boolean;
   run: () => void;
 }
+
+type Entry = Command;
 
 export function Palette() {
   const doc = useDoc();
@@ -161,7 +170,11 @@ export function Palette() {
 }
 
 /** Every command the palette can run, in the order they are offered by default. */
-function commands(doc: Doc, store: ReturnType<typeof useStore>, tokenVars: Record<string, string>): Entry[] {
+export function commands(
+  doc: Doc,
+  store: ReturnType<typeof useStore>,
+  tokenVars: Record<string, string>,
+): Command[] {
   const ui = () => useUI.getState();
   const selection = () => ui().selection;
   const pick = (ids: string[]) => ui().select(ids);

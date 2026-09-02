@@ -409,19 +409,30 @@ export function FigGroup<T extends string>({
   value,
   options,
   onChange,
+  disabled,
 }: {
   value: T;
   options: { value: T; label: ReactNode; title?: string }[];
   onChange: (value: T) => void;
+  /**
+   * The whole control is inapplicable here.
+   *
+   * Figma greys a setting that cannot apply rather than hiding it, so the
+   * setting stays where you learned it was and the greying is what tells you
+   * the rule — text baseline alignment needs a horizontal layout, and a column
+   * says so by showing the control it will not honour.
+   */
+  disabled?: boolean;
 }) {
   return (
-    <div className="fig-seg">
+    <div className="fig-seg" data-disabled={disabled || undefined}>
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           title={option.title}
           aria-label={option.title}
+          disabled={disabled}
           data-on={value === option.value ? 'true' : undefined}
           onClick={() => onChange(option.value)}
         >

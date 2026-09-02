@@ -68,15 +68,41 @@ test('a search that matches nothing offers the way back', async ({ page }) => {
   await expect(page).toHaveURL(/\/files$/);
 });
 
-test('sorting by name actually reorders', async ({ page }) => {
+/**
+ * Choosing a sort order sorts. It used to take a second, unrelated gesture:
+ * the field sits in a GET form with no submit button of its own, and a
+ * `<select>` has no Enter to press — so the only way to apply it was to click
+ * into the *search* box and press Enter there. This test used to do exactly
+ * that, which meant it documented the dead control instead of catching it.
+ */
+test('choosing a sort order applies it, with no second gesture', async ({ page }) => {
   await page.getByLabel('Sort files').selectOption('name');
-  // the filter form is a GET form with no button of its own: Enter submits it
-  await page.getByLabel('Search files').press('Enter');
+  await page.waitForURL(/[?&]sort=name/);
 
   const listed = await names(page).evaluateAll((inputs) =>
     inputs.map((input) => (input as HTMLInputElement).value),
   );
   expect(listed).toEqual([...listed].sort((a, b) => a.localeCompare(b)));
+});
+
+/**
+ * The list view carried a hand-copied star: the same markup and the same
+ * `data-testid` as the working component in the grid view, with a hard-coded
+ * `aria-pressed="false"` and no handler at all. Two views of one dashboard, one
+ * of which quietly did nothing.
+ */
+test('the star works in list view, the way it already did in grid view', async ({ page }) => {
+  await page.goto('/files?view=list');
+  const star = page.getByTestId('favorite-star-button').first();
+  await expect(star).toHaveAttribute('aria-pressed', 'false');
+
+  await star.click();
+  await expect(star).toHaveAttribute('aria-pressed', 'true');
+  await expect(star).toHaveAccessibleName('Remove from favorites');
+
+  // put the dashboard back the way it was found
+  await star.click();
+  await expect(star).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('the new-file button says it is working while the file is being made', async ({ page }) => {

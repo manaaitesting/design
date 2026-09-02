@@ -18,6 +18,7 @@ import { ShareControl } from '../../src/components/ShareControl';
 import { FileViewBar } from '../../src/components/FileViewBar';
 import { FileContextMenu } from '../../src/components/FileContextMenu';
 import { StarButton } from '../../src/components/StarButton';
+import { SortSelect } from '../../src/components/SortSelect';
 import { SubmitButton } from '../../src/components/SubmitButton';
 import { readableOn } from '../../src/lib/color';
 
@@ -156,10 +157,13 @@ export default async function FilesPage({
                 outline: 'none',
               }}
             />
-            <select
-              name="sort"
-              defaultValue={sortBy}
-              aria-label="Sort files"
+            <SortSelect
+              value={sortBy}
+              options={[
+                { value: 'recent', label: 'Recently edited' },
+                { value: 'created', label: 'Recently created' },
+                { value: 'name', label: 'Name' },
+              ]}
               style={{
                 height: 24,
                 border: 0,
@@ -169,11 +173,7 @@ export default async function FilesPage({
                 boxShadow: 'var(--shadow-control)',
                 outline: 'none',
               }}
-            >
-              <option value="recent">Recently edited</option>
-              <option value="created">Recently created</option>
-              <option value="name">Name</option>
-            </select>
+            />
           </form>
 
           <form action={newFile}>
@@ -364,11 +364,7 @@ export default async function FilesPage({
                       </form>
                     )}
                   </div>
-                  <button type="button" aria-label="Add to Starred" aria-pressed="false" data-testid="favorite-star-button" title="Add to sidebar" style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', border: 0, borderRadius: 6, background: 'transparent', color: 'rgba(0,0,0,0.32)', flex: 'none', position: 'relative', zIndex: 1 }}>
-                    <svg width="16" height="16" fill="none" viewBox="0 0 16 16" style={{ display: 'block' }}>
-                      <path fill="currentColor" fillRule="evenodd" d="M8.952 2.195a1 1 0 0 0-1.904 0L6.148 5H3.245a1 1 0 0 0-.58 1.815L4.993 8.47l-.937 2.701a1 1 0 0 0 1.516 1.148L8 10.63l2.429 1.691a1 1 0 0 0 1.516-1.148l-.938-2.701 2.328-1.656A1 1 0 0 0 12.755 5H9.853zM4.97 6h1.908l.597-1.863L8 2.5l.525 1.637L9.123 6h3.633l-1.407 1-1.532 1.09.625 1.802L11 11.5l-1.396-.973L8 9.41l-1.604 1.117L5 11.5l.558-1.608.626-1.802L4.65 7 3.245 6z" clipRule="evenodd" />
-                    </svg>
-                  </button>
+                  <StarButton fileId={file.id} starred={file.starred as number | undefined} />
                 </div>
                 </FileContextMenu>
               );

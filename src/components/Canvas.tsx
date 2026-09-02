@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeView } from './NodeView';
-import { Overlay, SIZE_BADGE } from './Overlay';
+import { Overlay, parentOrigin, SIZE_BADGE } from './Overlay';
 import { Cursors } from './Cursors';
 import { Connections } from './Connections';
 import {
@@ -26,7 +26,7 @@ import { useDoc, useSession, useStore, useTokenVars } from './Session';
 import type { Comment, DocStore } from '../document/store';
 import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
 import { descendants, isArtboard, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
-import { snap, snapCandidates } from '../document/snapping';
+import { inWorld, nodeBox, snap, snapCandidates } from '../document/snapping';
 import { fitOnCanvas, imageFilesFrom, readImageFile, type LoadedImage } from '../lib/images';
 import { ARROW, CROSSHAIR } from '../lib/cursors';
 import { hitStack, isLocked, lockedUnder, nodesInBox, passesThrough, resolveClick, resolveDoubleClick } from '../document/selection';
@@ -1130,21 +1130,42 @@ export function Canvas() {
     const snapshot = store.getSnapshot();
     const origins = new Map(movers.map((id) => [id, { x: snapshot[id]?.x ?? 0, y: snapshot[id]?.y ?? 0 }]));
 
-    // one node dragging alone gets edge/centre snapping against its siblings
-    const lead = movers.length === 1 ? snapshot[movers[0]] : null;
-    const candidates = lead?.parent ? snapCandidates(snapshot, movers, lead.parent) : [];
+    // What gets snapped is the box around the whole drag, not one layer in it —
+    // two cards carried together line up by the edge of the pair, the way every
+    // other tool does it and the way you would line them up by hand.
+    const held = movers.map((id) => snapshot[id]).filter((n): n is SceneNode => !!n);
+    const homes = new Set(held.map((n) => n.parent));
+    // a selection spanning two parents has no one coordinate space to snap in
+    const snapParent = homes.size === 1 ? held[0]?.parent : null;
+    const boxes = held.map(nodeBox);
+    const bounds =
+      snapParent && boxes.length
+        ? {
+            x: Math.min(...boxes.map((b) => b.x)),
+            y: Math.min(...boxes.map((b) => b.y)),
+            w: Math.max(...boxes.map((b) => b.x + b.w)) - Math.min(...boxes.map((b) => b.x)),
+            h: Math.max(...boxes.map((b) => b.y + b.h)) - Math.min(...boxes.map((b) => b.y)),
+          }
+        : null;
+    const candidates = snapParent ? snapCandidates(snapshot, movers, snapParent) : [];
     // a guide dragged off the ruler snaps like any other edge
-    if (lead?.parent === page.id) {
+    if (snapParent === page.id && bounds) {
       for (const guide of snapshot[page.id]?.rulerGuides ?? []) {
         candidates.push(
           guide.axis === 'x'
-            ? { x: guide.at, y: lead.y, w: 0, h: 0 }
-            : { x: lead.x, y: guide.at, w: 0, h: 0 },
+            ? { x: guide.at, y: bounds.y, w: 0, h: 0, axis: 'x' as const }
+            : { x: bounds.x, y: guide.at, w: 0, h: 0, axis: 'y' as const },
         );
       }
     }
+    // measured once: the parent does not move while its child is being dragged,
+    // and a world coordinate does not care where the viewport has got to
+    const guideOrigin = parentOrigin(snapParent, rootRef.current!.getBoundingClientRect(), vp);
 
     let moved = false;
+    // whether any guide is currently on screen, so a drag with nothing to snap
+    // to does not re-publish an empty list on every pointer move
+    let lit = false;
     drag(
       store,
       event,
@@ -1165,24 +1186,35 @@ export function Canvas() {
 
         // ⌥ already means "duplicate on drag", so ⌘ is the ignore-snapping
         // modifier — same split as Figma
-        if (lead && candidates.length && !e.metaKey && !e.ctrlKey) {
-          const origin = origins.get(lead.id)!;
-          const box = { x: origin.x + dx, y: origin.y + dy, w: lead.w, h: lead.h };
+        let took = { x: false, y: false };
+        if (bounds && candidates.length && !e.metaKey && !e.ctrlKey) {
+          const box = { x: bounds.x + dx, y: bounds.y + dy, w: bounds.w, h: bounds.h };
           // tolerance is in world units so it feels constant on screen
           const snapped = snap(box, candidates, 6 / vp.zoom);
           dx += snapped.x - box.x;
           dy += snapped.y - box.y;
-          setGuides(snapped.guides);
+          took = snapped.snapped;
+          if (snapped.guides.length || lit) setGuides(inWorld(snapped.guides, guideOrigin));
+          lit = snapped.guides.length > 0;
+        } else if (lit) {
+          // reaching for ⌘ part-way through has to take the lines away with the
+          // snapping, or they sit there claiming an alignment that is not on
+          setGuides([]);
+          lit = false;
         }
 
         // "Snap to pixel grid" is what makes a drag land on whole numbers;
-        // with it off a layer can sit between pixels, as Figma allows
-        const place = useUI.getState().view.snapToPixel
+        // with it off a layer can sit between pixels, as Figma allows. An axis
+        // that snapped is left alone either way: rounding it afterwards is what
+        // puts the layer half a pixel off the line the guide has just drawn.
+        const round = useUI.getState().view.snapToPixel
           ? Math.round
           : (value: number) => Math.round(value * 100) / 100;
+        const placeX = took.x ? (value: number) => value : round;
+        const placeY = took.y ? (value: number) => value : round;
         store.updateMany(movers, (n) => {
           const origin = origins.get(n.id)!;
-          return { x: place(origin.x + dx), y: place(origin.y + dy) };
+          return { x: placeX(origin.x + dx), y: placeY(origin.y + dy) };
         });
         markDropTarget(e, movers, snapshot);
       },

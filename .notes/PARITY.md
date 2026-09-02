@@ -894,12 +894,12 @@ this way and the argument against doing it carelessly.
 
 | id | what Figma does | what this did | verdict | closed by |
 |----|-----------------|---------------|---------|-----------|
-| `hug-fill-size-readout` | W and H always report the laid-out size. Set a frame to Hug and the fields track the content live as you type into it — greyed to say the layout owns  | The Design panel's W and H print the stored number for a hug or fill layer instead of the size the browser actually laid out, so the panel and the selection's own size badge — both on screen | wrong | **open** |
-| `grid-child-span-and-cell` | In grid auto layout a selected child gets a "Grid position" block: column start + column span, row start + row span. You can also drag a child into a  | Grid auto layout auto-flows every child into the next free 1×1 cell — a selected child has no column/row start or span, cannot be dragged into a chosen cell, and no cell can be left empty —  | missing | **open** |
-| `grid-track-sizing` | Each column and each row of a grid auto layout carries its own sizing: Fixed (px), Hug contents, or Fill. You click a track's handle on canvas or its  | Grid auto layout has no per-track sizing: every column and row is emitted as a hard-coded `minmax(0, 1fr)`, so Figma's Fixed/Hug/Fill per track — a 240px sidebar beside a filling content col | missing | **open** |
-| `grid-canvas-handles` | Selecting a grid auto-layout frame gives you the same direct manipulation as a stack: the padding bands on all four sides, and draggable gutters betwe | A grid auto-layout frame gets zero on-canvas layout chrome — `FlexHandles` bails out on `mode === 'grid'` before it draws anything, so the four padding bands (whose geometry is already mode- | partial | **open** |
-| `negative-gap` | Auto-layout gap goes negative — that is how stacked avatars, overlapping cards and shingled lists are built. It is the reason Figma ships the "Canvas  | Negative auto-layout spacing is writable (gutter drag clamps only at -999) and Paperlike even ships the Canvas-stacking control that exists only to arbitrate the resulting overlap, but the v | wrong | **open** |
-| `baseline-on-vertical` | "Text baseline alignment" is only available on a horizontal auto layout — the control is disabled otherwise, because a baseline is a cross-axis rule a | The Advanced-layout "Text baseline alignment" toggle stays enabled on vertical and grid frames, where Figma disables it: on a column it overwrites the frame's cross-axis alignment with `alig | wrong | **open** |
+| `hug-fill-size-readout` | W and H always report the laid-out size. Set a frame to Hug and the fields track the content live as you type into it — greyed to say the layout owns  | The Design panel's W and H print the stored number for a hug or fill layer instead of the size the browser actually laid out, so the panel and the selection's own size badge — both on screen **Now matches Figma.** | parity | Verified rather than assumed: `LayoutSection` already measures a hug/fill layer (`Inspector.tsx` `measuredBox`, `sized`) and the canvas size badge divides the measured rect by the zoom, so the panel and the badge agree with the browser. A probe read the panel fields as 146x76 on a frame whose stored w/h were 999x999. **The row was stale, not open.** |
+| `grid-child-span-and-cell` | In grid auto layout a selected child gets a "Grid position" block: column start + column span, row start + row span. You can also drag a child into a  | Grid auto layout auto-flows every child into the next free 1×1 cell — a selected child has no column/row start or span, cannot be dragged into a chosen cell, and no cell can be left empty — **Now matches Figma.** | parity | Nodes carry `gridColumn` / `gridRow` / `gridColumnSpan` / `gridRowSpan`; `css.ts` writes `grid-column: <start> / span <n>`, and a span with no start still spans. The child panel gains a Grid position block. — autolayout: "a grid child spans the columns it is given", "a grid child put in a named cell goes there, and leaves the others alone" |
+| `grid-track-sizing` | Each column and each row of a grid auto layout carries its own sizing: Fixed (px), Hug contents, or Fill. You click a track's handle on canvas or its  | Grid auto layout has no per-track sizing: every column and row is emitted as a hard-coded `minmax(0, 1fr)`, so Figma's Fixed/Hug/Fill per track — a 240px sidebar beside a filling content col **Now matches Figma.** | parity | `FlexSpec.columnTracks` / `rowTracks` carry Figma's three modes per track; `tracksCss` keeps `repeat()` for the all-equal case and spells the list out the moment one track differs. A caret beside the column/row counts opens the editor. — autolayout: "a grid column can be fixed while the others take what is left", "a fill track takes its share by weight, so 1fr beside 2fr is a third" |
+| `grid-canvas-handles` | Selecting a grid auto-layout frame gives you the same direct manipulation as a stack: the padding bands on all four sides, and draggable gutters betwe | A grid auto-layout frame gets zero on-canvas layout chrome — `FlexHandles` bails out on `mode === 'grid'` before it draws anything, so the four padding bands (whose geometry is already mode- **Now matches Figma.** | parity | `FlexHandles` no longer bails on `mode === 'grid'`: the padding bands are shared with the stack path, and a grid's two families of gutter are read off the measured child boxes, so a column gutter edits `gap` and a row gutter edits `crossGap`. — autolayout: "a grid frame gets its padding bands and both families of gutter", "dragging a grid's row gutter changes the space between rows, not between columns" |
+| `negative-gap` | Auto-layout gap goes negative — that is how stacked avatars, overlapping cards and shingled lists are built. It is the reason Figma ships the "Canvas  | Negative auto-layout spacing is writable (gutter drag clamps only at -999) and Paperlike even ships the Canvas-stacking control that exists only to arbitrate the resulting overlap, but the v **Now matches Figma.** | parity | CSS `gap` refuses a negative length and drops the declaration, so the overlap is carried by a negative margin on every child after the first (`overlapMargin`), and `gapCss` clamps the gap itself to 0. Only a plain stack qualifies — a wrapping row or a grid would pull the first child of each new line — and the panel's field stops at 0 for exactly those two. — autolayout: "a negative gap overlaps the children instead of being thrown away", "a positive gap is still spacing, not a margin", "the gap field takes a negative number on a stack and refuses one on a grid" |
+| `baseline-on-vertical` | "Text baseline alignment" is only available on a horizontal auto layout — the control is disabled otherwise, because a baseline is a cross-axis rule a | The Advanced-layout "Text baseline alignment" toggle stays enabled on vertical and grid frames, where Figma disables it: on a column it overwrites the frame's cross-axis alignment with `alig **Now matches Figma.** | parity | `css.ts` applies `align-items: baseline` only on a horizontal flex, so a column keeps its own cross-axis alignment; the Advanced-layout control is greyed on a column and on a grid, which is where Figma disables it. — autolayout: "text baseline alignment is honoured on a row and ignored down a column", "the baseline control is greyed on a column, where Figma disables it" |
 
 ### canvas-chrome
 
@@ -930,8 +930,8 @@ this way and the argument against doing it carelessly.
 
 | id | what Figma does | what this did | verdict | closed by |
 |----|-----------------|---------------|---------|-----------|
-| `cv-nested-instance-identity` | An instance of a component that itself contains instances keeps those nested instances alive. Selecting the inner one (⌘-click, or the layers tree) gi | Placing an instance of a component that contains an instance flattens the inner one into a plain frame — no Instance panel, no swap, no Reset/Detach, no properties, no component glyph in the | wrong | **open** |
-| `cv-one-variant-property` | A component set carries any number of variant properties — Size × State × Type — and the panel shows one control per property, so an instance is confi | A component set is permanently stuck with the one "Property 1" that Combine-as-variants seeds from layer names: nothing in the UI can add a second variant axis (the Add-property menu omits ` | missing | **open** |
+| `cv-nested-instance-identity` | An instance of a component that itself contains instances keeps those nested instances alive. Selecting the inner one (⌘-click, or the layers tree) gi | Placing an instance of a component that contains an instance flattens the inner one into a plain frame — no Instance panel, no swap, no Reset/Detach, no properties, no component glyph in the **Now matches Figma.** | parity | Stale row — already closed and never marked. variables: "placing a component that holds an instance keeps the inner one an instance", "a nested instance sets its own properties, not the outer one's" both pass today. |
+| `cv-one-variant-property` | A component set carries any number of variant properties — Size × State × Type — and the panel shows one control per property, so an instance is confi | A component set is permanently stuck with the one "Property 1" that Combine-as-variants seeds from layer names: nothing in the UI can add a second variant axis (the Add-property menu omits ` **Now matches Figma.** | parity | Stale row — already closed and never marked. variables: "a set takes a second variant axis, and every variant answers to it" passes today, with three more tests around it. |
 | `vr-alias-no-ui` | A variable's value in any mode can be another variable. That is the entire semantic-token workflow: `surface/default` → `grey/100` in Light and `grey/ | Variable aliasing exists only in the resolver: nothing in the app or the MCP surface can set `Token.alias`, and the field hangs off the token rather than off a mode, so the one case that mat | partial | **open** |
 | `vr-string-variables-inert` | String variables bind to a text layer's content. It is the headline use of modes — one frame, an English mode and a German mode — and they also drive  | A string variable cannot drive a text layer's content — the Figma localization story (one frame, an English mode and a German mode) is impossible here — and a text token's scope editor silen | partial | **open** |
 | `lib-variables-styles-not-published` | A library publishes components, styles and variable collections together, and enabling the library in another file brings the tokens the components ar | Publishing to the shared library carries node JSON only - no variable collections and no styles - so an imported component's colour picked from a variable arrives as the literal string `var( | wrong | **open** |
@@ -1018,12 +1018,12 @@ this way and the argument against doing it carelessly.
 
 | id | what Figma does | what this did | verdict | closed by |
 |----|-----------------|---------------|---------|-----------|
-| `proto-frames-in-sections-invisible` | Sections are a first-class way to organise flows on a page, and a frame inside one is still a full prototype citizen: it appears in the Navigate-to de | The whole prototype surface is keyed to `page.children`, so putting a board in a section drops it from the Destination menu, the Flows list, the noodle drop target, the Prototype tab's Flow- | missing | **open** |
-| `proto-hover-press-never-revert` | Both triggers are momentary: While hovering runs the action on enter and *undoes* it when the cursor leaves; While pressing runs it on press and undoe | "While hovering" and "While pressing" are dispatched identically to "Mouse enter" and "Mouse down" — `fire()` calls one-way `go()` and no handler restores the prior overlay, frame or variant | wrong | **open** |
-| `proto-overlay-ignores-transition` | An overlay animates in with the transition you chose — Move in from the bottom for a sheet, Dissolve for a modal — with direction, duration and easing | Overlays open, swap and close instantly no matter what Animation the Prototype panel wrote: Present's three overlay branches return before ever calling setMove, and `.fig-overlay` has no CSS | wrong | **open** |
+| `proto-frames-in-sections-invisible` | Sections are a first-class way to organise flows on a page, and a frame inside one is still a full prototype citizen: it appears in the Navigate-to de | The whole prototype surface is keyed to `page.children`, so putting a board in a section drops it from the Destination menu, the Flows list, the noodle drop target, the Prototype tab's Flow- **Now matches Figma.** | parity | Stale row — already closed and never marked. prototype: "a board inside a section is still a destination, a flow and a target" passes today. |
+| `proto-hover-press-never-revert` | Both triggers are momentary: While hovering runs the action on enter and *undoes* it when the cursor leaves; While pressing runs it on press and undoe | "While hovering" and "While pressing" are dispatched identically to "Mouse enter" and "Mouse down" — `fire()` calls one-way `go()` and no handler restores the prior overlay, frame or variant **Now matches Figma.** | parity | A momentary trigger is now bracketed: `Present.fireMomentary` remembers the reversible stage (stack, overlays, overrides, swaps) before running the action, and `revert` puts it back. Leaving is decided by `relatedTarget`, so crossing onto a *child* of the hotspot is not leaving, and moving straight from one hotspot to another reverts the first before the second runs. — prototype: "While hovering runs on the way in and is taken back on the way out", "While pressing is taken back when the press ends" |
+| `proto-overlay-ignores-transition` | An overlay animates in with the transition you chose — Move in from the bottom for a sheet, Dissolve for a modal — with direction, duration and easing | Overlays open, swap and close instantly no matter what Animation the Prototype panel wrote: Present's three overlay branches return before ever calling setMove, and `.fig-overlay` has no CSS **Now matches Figma.** | parity | An overlay entry carries the interaction's `transition`, and `OverlayBody` animates the independent `translate` property so it composes with the centring `transform` that `data-at` already spends — no stylesheet change, every position still works. Leaving is the same journey backwards: `dismissOverlay` marks the entry `leaving`, which puts it back where it came from, and drops it once the animation has had its time. — prototype: "an overlay arrives with the animation its interaction chose", "an overlay leaves with an animation too, rather than vanishing" |
 | `proto-noodles-inert` | A prototype connection is an object: hover highlights it, click selects it (and reveals that interaction in the Prototype panel), Delete removes it, a | Prototype noodles are inert decoration: the connection layer is `pointerEvents: 'none'` and each link's path/endpoint has no hit target, hover, click, endpoint re-drag or Delete — the only w | missing | **open** |
-| `proto-noodles-navigate-only` | The canvas draws a connection for every action that points somewhere: Open overlay and Swap overlay get noodles to their target frame, Scroll to gets  | In the Prototype tab the canvas draws a noodle only for `navigate` — an Open overlay, Swap overlay or Scroll to interaction that Present actually honours leaves the hotspot completely unmark | partial | **open** |
-| `present-no-scaling-controls` | The presentation view has a scaling menu (Fit to screen, Fill screen, Actual size, Scale down to fit width) with ⇧1 / ⇧0 shortcuts, and it remembers t | Presentation view has no scaling control of any kind — the stage scale is hard-clamped to `Math.min(1, fit)`, so a frame smaller than the window is always drawn at 1:1 and there is no Fit /  | missing | **open** |
+| `proto-noodles-navigate-only` | The canvas draws a connection for every action that points somewhere: Open overlay and Swap overlay get noodles to their target frame, Scroll to gets  | In the Prototype tab the canvas draws a noodle only for `navigate` — an Open overlay, Swap overlay or Scroll to interaction that Present actually honours leaves the hotspot completely unmark **Now matches Figma.** | parity | Stale row — already closed and never marked. prototype: "an overlay draws a connection too, and says it is not a navigation" passes today. |
+| `present-no-scaling-controls` | The presentation view has a scaling menu (Fit to screen, Fill screen, Actual size, Scale down to fit width) with ⇧1 / ⇧0 shortcuts, and it remembers t | Presentation view has no scaling control of any kind — the stage scale is hard-clamped to `Math.min(1, fit)`, so a frame smaller than the window is always drawn at 1:1 and there is no Fit / **Now matches Figma.** | parity | Stale row — already closed and never marked. prototype: "the presentation scales to the window, fills it, or shows it actual size" passes today. |
 
 ### text-engine
 
@@ -1042,8 +1042,147 @@ this way and the argument against doing it carelessly.
 |----|-----------------|---------------|---------|-----------|
 | `vec-cmd-backspace-deletes-layer` | ⌘⌫ is "Delete and heal selection" — with a vector point selected in edit mode it removes the point and closes the gap, and it never touches the layer  | Any ⌫/Delete that VectorEdit's capture handler declines to consume — ⌘⌫ (Figma's "Delete and heal selection") or a plain ⌫ with no anchors selected, which is the state the instant edit mode  | wrong | `fa33abe` |
 | `vec-pen-path-discarded` | The vector layer exists from the first segment — it appears in the Layers panel while you are still clicking, and every point you place is on the docu | Escape and any tool switch silently delete the whole in-progress pen path instead of finishing it as Figma does, and because the anchors live only in React state and never in the document, u | wrong | `fa33abe` |
-| `vec-no-arrow-or-per-end-caps` | The cap dropdown includes the arrow caps beside None/Round/Square, and in vector edit mode with a single endpoint selected the stroke panel shows Star | Stroke caps are one layer-level None/Round/Square value, so no path can carry an arrowhead and the two ends of an open path can never differ; the only arrowhead is the `arrow` node type, who | missing | **open** |
+| `vec-no-arrow-or-per-end-caps` | The cap dropdown includes the arrow caps beside None/Round/Square, and in vector edit mode with a single endpoint selected the stroke panel shows Star | Stroke caps are one layer-level None/Round/Square value, so no path can carry an arrowhead and the two ends of an open path can never differ; the only arrowhead is the `arrow` node type, who **Now matches Figma.** | parity | Stale row — already closed and never marked. vector: "a path wears a head on one end and nothing on the other", "an arrow keeps its head when it is opened for point editing" both pass today. |
 | `vec-pen-ignores-shift-and-alt` | ⇧ while placing the next point constrains it to 45° from the previous one — how straight and diagonal runs get drawn. ⌥ while dragging a point's handl | The pen tool never constrains: ⇧ while placing the next point does nothing, so every straight horizontal, vertical or diagonal run has to be eyeballed — even though `constrain45` sits twenty | missing | `fa33abe` |
 | `vec-no-vector-network` | A vector network lets any number of segments meet at one node, so a plus, a Y, a wireframe box or a lettering skeleton is one editable path. The paint | Paths are subpath lists, not a vector network: no anchor can carry a third segment (the pen only grows from `isEndpoint`s, `joinAnchors` only welds two loose ends), and the paint bucket can  | missing | **open** |
-| `vec-outline-stroke-ignores-cap-join-dash` | Outline stroke produces exactly the shape that was on screen: butt ends stay square-ended, square caps keep their overhang, mitred corners keep their  | Outline stroke (⇧⌘O) re-draws every path with a round pen, so a shape's mitred corners — Paperlike's own rendering default — round off, square caps lose their overhang, and a dashed stroke c | wrong | **open** |
+| `vec-outline-stroke-ignores-cap-join-dash` | Outline stroke produces exactly the shape that was on screen: butt ends stay square-ended, square caps keep their overhang, mitred corners keep their  | Outline stroke (⇧⌘O) re-draws every path with a round pen, so a shape's mitred corners — Paperlike's own rendering default — round off, square caps lose their overhang, and a dashed stroke c **Now matches Figma.** | parity | Stale row — all three were already done. Caps and dashes had tests; the join had none, so one was written. `clipper.ts` `joinPiece` builds a real mitre with Figma's miter-angle limit and bevels past it, and `strokeRegion` takes the layer's own pen rather than a round one. — vector: "outlining a dashed stroke leaves one shape per dash, not one long bar", "outlining a square cap keeps the overhang, and a butt cap does not grow one", "outlining a mitred corner keeps its point, and a round join does not grow one" |
 | `vec-no-pencil` | The pen button is a flyout with Pencil (⇧P) under it: you drag freehand and Figma fits a smoothed bezier path to the stroke. Figma Draw added more of  | Nothing in Paperlike turns a pointer drag into geometry: the only path-creation route in the app is the pen's one-anchor-per-click placement (`Canvas.tsx:520-545`), so a user cannot sketch a | missing | **open** |
+
+# Phase 1 — ninth pass (2026-09-02): the layout engine, driven rather than read
+
+The eight passes before this one established their rows by reading source. This
+one established them by **driving the browser and reading back what it computed**
+— a throwaway Playwright probe that built a frame, then printed the resolved
+`grid-template-columns`, `align-items`, `margin-left` and the child's rendered
+box. Two things came of doing it that way.
+
+The first is that **a ledger row can go stale in the direction of pessimism.**
+`hug-fill-size-readout` was carried as `wrong` and was already correct: the panel
+measures, the badge measures, and a probe on a hug frame stored at 999×999 read
+146×76 in both. It is closed as `parity` on evidence, not on work.
+
+The second is that **reading source under-reports severity.** The ledger had
+grid sizing down as two `missing` rows about features. The probe found something
+neither row says: a grid child set to *Fill container* rendered **0px wide** —
+`flex: 1 1 0` means nothing to a grid item, so the child had no width rule at
+all and collapsed. Not a missing feature; a layer that disappears out of a
+layout that then looks empty. That is the most likely thing behind "the layouts
+are completely not working", and no amount of reading the `FlexSpec` type would
+have shown it.
+
+Baseline: before this pass, `pnpm test` **620 passed, 0 failed**; typecheck
+clean. Nothing here was a regression — the suite never covered any of it.
+
+## Rows this pass added
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `grid-fill-child-collapses` | A child of a grid set to "Fill container" fills the cell it was placed in. | A grid child set to fill got `flex: 1 1 0` — a flex rule a grid item ignores — and no width rule of its own, so with the frame's default `justify-items` it collapsed to **0px** and vanished. The layout drew as an empty frame with invisible children in it. **Now matches Figma.** | wrong | `css.ts` sizing branches take a grid child through `justify-self` / `align-self: stretch` instead of the flex ones — autolayout: "a child set to fill fills its grid cell rather than collapsing to nothing" |
+| `main-menu-button-dead` | The glyph at the top left opens the application menu — File, Edit, View, Object, Help — and Escape or a click away closes it. | The main-menu button carried `aria-haspopup="menu"`, a hard-coded `aria-expanded="false"` and **no handler at all**: the one combination that promises a menu and never opens one. It is the most prominent control in the editor's chrome. **Now matches Figma.** | missing | new `MainMenu.tsx` renders the existing `Panel` over the quick-action registry — every row runs a command the app already had, so the menu is a second way to reach commands rather than a second implementation — autolayout: "the main menu button opens the app menu, grouped as Figma groups it", "Escape closes the main menu and leaves the button unpressed" |
+| `prompt-options-button-dead` | Controls in the generate bar do what their icon says. | The sliders button beside the prompt field had no `onClick`, while the options it names sat permanently visible below it. **Now works.** | wrong | `PromptBar.tsx` — the button toggles the style and aspect pickers, which is the one thing its icon claims |
+
+## What this pass says about the method
+
+`Panel` deliberately leaves dismissal to its caller — the context menu and the
+file menu each bring their own Escape-and-click-away effect. Reusing it without
+that effect produced a menu that opened and could not be shut, and the test that
+caught it was the second one written, not the first. Worth remembering the next
+time `Panel` is reused: **it draws rows and owns the arrow keys; it does not
+close itself.**
+
+# Phase 1 — tenth pass (2026-09-02): every dead control, and the momentary triggers
+
+## The dead-control sweep, done properly this time
+
+The ninth pass scanned for controls with no handler using a regex that ended the
+tag at the first `>`. That truncates every tag containing a JSX expression —
+`disabled={zoom > 1}` ends the match early — so it reported false positives and,
+worse, **missed real ones**. Redone with a brace- and string-aware tag reader
+over all 76 `.tsx` files in `src/` and `app/`, covering `button`, `input`,
+`select` and `textarea`, plus separate passes for `role="button"`, no-op
+handlers (`onClick={() => {}}`) and `href="#"`.
+
+22 candidates, of which **two were real**; the rest are hidden fields in
+server-action forms, deliberately `disabled` fields whose no-op `onChange` is
+documented, a `readOnly` mirror input, and three matches inside JSDoc prose and
+CSS selector strings. The sweep is now clean.
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `list-view-star-dead` | The star on a file works wherever the file is shown. | The dashboard's **list** view carried a hand-copied star: the same markup and the same `data-testid` as the working `StarButton` used by the grid view, with a hard-coded `aria-pressed="false"`, a hard-coded grey, and no handler. Two views of one dashboard, one of which quietly did nothing. **Now works.** | wrong | `app/files/page.tsx` renders the real `StarButton` in both views; 960 characters of duplicated dead markup deleted — dashboard: "the star works in list view, the way it already did in grid view" |
+| `sort-select-never-submits` | Choosing a sort order sorts the list. | The sort field sits in a GET form with no submit button, and a `<select>` has no Enter to press — so choosing an order did nothing at all. The suite had *encoded the bug*: its sort test selected an option and then pressed Enter in the unrelated **search** box to make the form go, with a comment explaining that as the design. **Now works.** | wrong | new `SortSelect` submits its own form on change, keeping the hidden fields that carry the folder and query — dashboard: "choosing a sort order applies it, with no second gesture" |
+
+## Stale rows, again
+
+Three prototype rows carried as `open` were already done and simply never
+marked: `proto-frames-in-sections-invisible`, `proto-noodles-navigate-only` and
+`present-no-scaling-controls` each have a passing test in
+`tests/prototype.spec.ts` today. Together with `hug-fill-size-readout` last
+pass, that is **four of the rows this campaign thought were outstanding that
+were not**. The open count went 30 → 19 across two passes, and only seven of
+those eleven were work.
+
+**The ledger over-reports.** Check a row against the running app before
+believing it, and check whether a test already covers it before writing one.
+
+## A trap worth writing down
+
+`Present` returns early — `if (!presenting || !frame) return null;` — and the
+`fire` helpers live *below* that line. Adding `useRef`/`useCallback` beside them
+put hooks after a conditional return, so the whole presentation blanked the
+moment it opened: React saw a different number of hooks, and the error boundary
+took the canvas with it. The symptom was baffling (`window.paperlike`
+undefined, nothing in the DOM) and the cause was one line of placement. Hooks in
+this file belong above line ~532 with the rest of the state; only plain helpers
+belong below it.
+
+## Staleness audit — every remaining row checked against the running app
+
+Rather than fix rows one at a time and keep discovering they were already done,
+all nineteen remaining `open` rows were checked against the suite and the source
+in one pass. **Four more were stale**, each with a passing test that predates
+this session:
+
+- `cv-nested-instance-identity` — variables: "placing a component that holds an
+  instance keeps the inner one an instance"
+- `cv-one-variant-property` — variables: "a set takes a second variant axis, and
+  every variant answers to it"
+- `vec-no-arrow-or-per-end-caps` — vector: "a path wears a head on one end and
+  nothing on the other"
+- `vec-outline-stroke-ignores-cap-join-dash` — parity. This one was nearly
+  mis-closed as `partial`: a grep for `miter` in `geometry.ts` found nothing, so
+  the join looked absent. It is implemented in **`clipper.ts`** — `joinPiece`,
+  with a real mitre, Figma's miter-angle limit and a bevel past it. Grepping one
+  plausible file is not a check; a test is, so one was written.
+
+Two rows were checked and **confirmed still open**, which is the point of
+checking rather than assuming in either direction:
+
+- `native-title-tooltips` — 422 `title=` attributes across 40 `.tsx` files, and
+  only 4 files use the `Tooltip` component. The row stands as written.
+- `palette-command-coverage` — the new `MainMenu` gives the app the menu bar the
+  row says it lacks, but the row is about ⌘/ indexing every command, and the
+  palette's registry is unchanged at ~40 entries. Still open.
+
+**Running total: 30 open at the start of the ninth pass, 15 now.** Of the
+fifteen closed, **eight were stale rows that needed no work at all.** A ledger
+that is not audited drifts toward over-reporting, because closing a row is work
+and marking it closed is a separate, forgettable step.
+
+## Closing the row this pass opened
+
+`proto-overlay-ignores-transition` was first closed as `partial` — opening and
+swapping animated, closing did not — and then finished, so it is `parity`.
+Worth recording *why* the second half looked harder than it was: closing cannot
+be "remove it, then animate", because an element that is gone has nothing to
+animate. The entry is marked `leaving` instead, which sends it back the way it
+came, and it is dropped once the animation has had its time.
+
+The decision that mattered was where to schedule that drop. Doing it inside a
+`setOverlays` updater would mean starting a timer from a function React is free
+to call twice; `overlaysNow`, a ref synced by an effect, lets the dismisser read
+the current overlays and decide *before* it writes.
+
+One deliberate omission remains, recorded rather than hidden: the scrim closes
+the top overlay with its animation, but anything stacked underneath it goes at
+once. Nothing was on show under a scrim, so there is nothing to animate away.

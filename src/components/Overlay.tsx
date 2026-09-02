@@ -2,9 +2,9 @@
 
 import { useLayoutEffect, useState, type RefObject } from 'react';
 import { useDoc, usePresence, useStore } from './Session';
-import { FlexHandles } from './FlexHandles';
+import { FlexHandles, PaddingBands } from './FlexHandles';
 import { toScreen, toWorld, useUI } from '../state/ui';
-import { nearestEdge, snapCandidates, type SnapGuide } from '../document/snapping';
+import { inWorld, nearestEdge, snapCandidates, type SnapGuide } from '../document/snapping';
 import { isInFlow, type Doc, type SceneNode } from '../document/types';
 import { gapsOf, smartRow } from '../document/arrange';
 
@@ -117,7 +117,7 @@ export function useRects(ids: string[], containerRef: RefObject<HTMLDivElement |
  * to come back through this before it can be written. A page has no element of
  * its own, and page-local already *is* world, so the origin is nothing.
  */
-function parentOrigin(
+export function parentOrigin(
   id: string | null | undefined,
   base: DOMRect,
   vp: { x: number; y: number; zoom: number },
@@ -512,24 +512,42 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
       const guides: SnapGuide[] = [];
       if (!angle && !held && !e.metaKey && !e.ctrlKey && candidates.length) {
         const tolerance = 6 / viewport.zoom;
-        if (ex) {
-          const edge = ex > 0 ? origin.x + w : origin.x + startW - w;
-          const near = nearestEdge(edge, candidates, 'x', tolerance);
-          if (near) {
-            w = Math.max(1, Math.round(ex > 0 ? near.at - origin.x : origin.x + startW - near.at));
-            guides.push({ kind: 'align', axis: 'x', at: near.at, from: near.other.y, to: near.other.y + near.other.h });
-          }
+        const tookX = ex ? nearestEdge(ex > 0 ? origin.x + w : origin.x + startW - w, candidates, 'x', tolerance) : null;
+        if (tookX) w = Math.max(1, Math.round(ex > 0 ? tookX.at - origin.x : origin.x + startW - tookX.at));
+        const tookY = ey ? nearestEdge(ey > 0 ? origin.y + h : origin.y + startH - h, candidates, 'y', tolerance) : null;
+        if (tookY) h = Math.max(1, Math.round(ey > 0 ? tookY.at - origin.y : origin.y + startH - tookY.at));
+        // where the box has ended up, so the line spans it as well as the
+        // layers it lined up with rather than stopping short of the thing
+        // being resized
+        const box = {
+          x: ex < 0 ? origin.x + startW - w : origin.x,
+          y: ey < 0 ? origin.y + startH - h : origin.y,
+          w,
+          h,
+        };
+        if (tookX) {
+          guides.push({
+            kind: 'align',
+            axis: 'x',
+            at: tookX.at,
+            from: Math.min(tookX.from, box.y),
+            to: Math.max(tookX.to, box.y + box.h),
+          });
         }
-        if (ey) {
-          const edge = ey > 0 ? origin.y + h : origin.y + startH - h;
-          const near = nearestEdge(edge, candidates, 'y', tolerance);
-          if (near) {
-            h = Math.max(1, Math.round(ey > 0 ? near.at - origin.y : origin.y + startH - near.at));
-            guides.push({ kind: 'align', axis: 'y', at: near.at, from: near.other.x, to: near.other.x + near.other.w });
-          }
+        if (tookY) {
+          guides.push({
+            kind: 'align',
+            axis: 'y',
+            at: tookY.at,
+            from: Math.min(tookY.from, box.x),
+            to: Math.max(tookY.to, box.x + box.w),
+          });
         }
       }
-      setGuides(guides);
+      // the snap ran in the parent's coordinates; the guides are drawn in the
+      // world's
+      const base = containerRef.current?.getBoundingClientRect();
+      setGuides(base ? inWorld(guides, parentOrigin(node.parent, base, viewport)) : guides);
 
       // How far the middle has to move for the anchor to stay put.
       //
@@ -644,6 +662,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         return (
           <div
             key={`${guide.axis}-${guide.at}-${index}`}
+            data-align-guide={guide.axis}
             style={{
               position: 'absolute',
               left: Math.min(start.x, end.x),
@@ -834,8 +853,8 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               top: bounds.y,
               width: bounds.w,
               height: bounds.h,
-              outline: `1.75px solid ${groupChrome}`,
-              outlineOffset: -0.875,
+              outline: `1px solid ${groupChrome}`,
+              outlineOffset: -0.5,
             }}
           />
           <span
@@ -933,6 +952,12 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           corner handle still wins the pointer where the two meet. */}
       {!vectorEdit && <FlexHandles containerRef={containerRef} />}
 
+      {/* …and the padding of the frame merely under the pointer, which is how
+          you read a layout's spacing without selecting your way through it */}
+      {!vectorEdit && hover && !selection.includes(hover) && (
+        <PaddingBands id={hover} containerRef={containerRef} />
+      )}
+
       {/* slices: an export region, drawn as chrome because it paints nothing */}
       {slices.map((id) => {
         const rect = rects[id];
@@ -986,7 +1011,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 top: rect.y,
                 width: rect.w,
                 height: rect.h,
-                border: '1px dashed rgba(13,153,255,0.55)',
+                border: '2px dashed rgba(13,153,255,0.55)',
                 borderRadius: 2,
                 pointerEvents: 'none',
               }}
@@ -1060,8 +1085,8 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 width: w,
                 height: h,
                 transform: turn,
-                outline: `1.75px solid ${chrome}`,
-                outlineOffset: -0.875,
+                outline: `1px solid ${chrome}`,
+                outlineOffset: -0.5,
               }}
             />
 

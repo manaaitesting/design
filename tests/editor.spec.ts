@@ -3125,8 +3125,15 @@ test('paste to replace swaps the layer, keeping its place', async ({ page }) => 
 
 test('delete removes the layer and clears the selection', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'CtxGone', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
-  await runCommand(page, id, 'Delete');
-  expect((await doc(page))[id]).toBeUndefined();
+  await select(page, [id]);
+  // Delete keeps its shortcut but lives in Actions rather than on the
+  // right-click menu, where Figma keeps it
+  await page.evaluate(() => window.paperlike!.ui.getState().setPaletteOpen(true));
+  const field = page.getByPlaceholder('Run a command or jump to a layer…');
+  await field.fill('Delete');
+  await field.press('Enter');
+
+  await expect.poll(async () => (await doc(page))[id]).toBeUndefined();
   expect(await selection(page)).toEqual([]);
 });
 
