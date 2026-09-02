@@ -15,6 +15,10 @@
      the accent used for controls — otherwise 1.5px of #0d99ff disappears
      against light fills */
   --color-select-line: #0a7ad4;
+  /* Figma paints a component, a component set and an instance purple, and
+     everything else blue. It is how you tell an instance from a detached copy
+     without leaving the canvas. */
+  --color-select-component: #9747ff;
 
   --rail-left: 240px;
   --rail-tools: 42px;
@@ -642,7 +646,16 @@ select {
     box-shadow: none !important;
     outline: 1px solid var(--color-select-line);
     outline-offset: -1px;
+  }
+  /* Text is geometry too. A transparent fill alone turned every text layer
+     into an anonymous empty box, which is the opposite of what the mode is
+     for; the stroke draws the letterforms hollow so the copy still reads.
+     The span rule catches styled runs, which carry their colour inline. */
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id],
+  .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] span {
     color: transparent !important;
+    -webkit-text-stroke: 0.5px var(--color-select-line);
+    text-shadow: none !important;
   }
   .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] svg,
   .fig-shell[data-outlines='true'] [data-canvas-root] [data-node-id] img,
@@ -1323,11 +1336,168 @@ select {
     color: var(--fig-blue);
     font-weight: 600;
   }
+  /* the @-picker, above the box so it never covers what you are typing */
+  .fig-mention-list {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    margin-bottom: 4px;
+    padding: 4px;
+    border-radius: 6px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-pop);
+    z-index: 1;
+  }
+  .fig-mention-option {
+    width: 100%;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .fig-mention-option:hover {
+    background: var(--fig-hover);
+  }
+  .fig-mention-dot {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    border-radius: 999px;
+  }
+  /* reactions on one message in a thread */
+  .fig-react {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-top: 4px;
+  }
+  .fig-react-chip {
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--fig-hover);
+    color: inherit;
+    font: inherit;
+    font-size: 10px;
+    line-height: 1;
+    cursor: default;
+  }
+  .fig-react-chip[data-mine] {
+    box-shadow: inset 0 0 0 1px var(--fig-blue);
+  }
+  /* the + is quiet until the message is hovered, so a thread stays readable */
+  .fig-react-chip:last-child:not([data-mine]) {
+    opacity: 0.45;
+  }
+  .fig-react:hover .fig-react-chip:last-child {
+    opacity: 1;
+  }
+  .fig-react-pick {
+    position: absolute;
+    left: 0;
+    top: 100%;
+    margin-top: 3px;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-pop);
+    z-index: 1;
+  }
+  .fig-react-pick > button {
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    font: inherit;
+    cursor: default;
+  }
+  .fig-react-pick > button:hover {
+    background: var(--fig-hover);
+  }
+
   .fig-pin[data-mine] {
     box-shadow:
       0 1px 4px rgba(0, 0, 0, 0.25),
       0 0 0 2px #fff,
       0 0 0 4px var(--fig-blue) !important;
+  }
+
+  /* the comments list: one row per thread, and the thread's first line under it */
+  .fig-thread {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px;
+    border: 0;
+    border-bottom: 1px solid var(--fig-line);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .fig-thread:hover {
+    background: var(--fig-hover);
+  }
+  .fig-thread[data-mine] {
+    box-shadow: inset 2px 0 0 var(--fig-blue);
+  }
+  .fig-thread-avatar {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .fig-thread-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .fig-thread-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .fig-thread-name {
+    font-weight: 550;
+  }
+  .fig-thread-when,
+  .fig-thread-meta {
+    color: var(--fig-dim);
+  }
+  /* two lines of the remark, which is enough to know which thread this is */
+  .fig-thread-snippet {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .fig-thread-empty {
+    padding: 16px;
+    color: var(--fig-dim);
   }
 
   /* observation mode: the ring around the canvas and the bar that names it */
@@ -1490,6 +1660,17 @@ select {
     border-radius: 4px;
     background: none;
   }
+  .fig-range-bar input[type='url'] {
+    width: 150px;
+    height: 22px;
+    border: 0;
+    border-radius: 5px;
+    padding: 0 6px;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    font: inherit;
+    font-size: 11px;
+  }
   .fig-range-bar input[type='number'] {
     width: 40px;
     height: 22px;
@@ -1570,6 +1751,28 @@ select {
     font-size: 10px;
     line-height: 1.55;
     white-space: pre;
+  }
+
+  /* naming a version: the row above the list that makes a checkpoint */
+  .fig-version-save {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--fig-line);
+  }
+  .fig-version-save input {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 24px;
+    border: 0;
+    border-radius: 5px;
+    padding: 0 8px;
+    background: var(--color-control);
+    box-shadow: var(--shadow-control);
+    font: inherit;
+    outline: none;
   }
 
   /* one row of the version-history list */
@@ -1712,8 +1915,12 @@ select {
     white-space: nowrap;
   }
   .ctx-row:hover:not(:disabled),
-  .ctx-row[data-open='true'] {
+  .ctx-row[data-active]:not(:disabled),
+  .ctx-row[aria-expanded='true'] {
     background: var(--fig-blue, #0d99ff);
+  }
+  .ctx:focus-visible {
+    outline: none;
   }
   .ctx-row:disabled {
     color: rgba(255, 255, 255, 0.32);
@@ -1727,7 +1934,8 @@ select {
     flex: none;
   }
   .ctx-row:hover:not(:disabled) .ctx-shortcut,
-  .ctx-row[data-open='true'] .ctx-shortcut {
+  .ctx-row[data-active]:not(:disabled) .ctx-shortcut,
+  .ctx-row[aria-expanded='true'] .ctx-shortcut {
     color: rgba(255, 255, 255, 0.85);
   }
   .ctx-row:disabled .ctx-shortcut {
@@ -1740,7 +1948,8 @@ select {
     flex: none;
   }
   .ctx-row:hover:not(:disabled) .ctx-arrow,
-  .ctx-row[data-open='true'] .ctx-arrow {
+  .ctx-row[data-active]:not(:disabled) .ctx-arrow,
+  .ctx-row[aria-expanded='true'] .ctx-arrow {
     color: #fff;
   }
   .ctx-sep {
@@ -2010,6 +2219,18 @@ select {
   }
   .fig-layer[data-drop='inside'] {
     box-shadow: inset 0 0 0 1.5px var(--fig-blue);
+  }
+
+  /* A page cannot be dropped into anything, so its indicator is only ever the
+     line between two rows. */
+  .fig-layer[data-drop='above'] {
+    box-shadow: inset 0 2px 0 -0.5px var(--fig-blue);
+  }
+  .fig-layer[data-drop='below'] {
+    box-shadow: inset 0 -2px 0 -0.5px var(--fig-blue);
+  }
+  .fig-layer[data-dragging] {
+    opacity: 0.5;
   }
 
   /* ── Prototype ───────────────────────────────────────────────────────
@@ -2718,6 +2939,14 @@ select {
 .section-label:hover,
 .section-label[data-on] {
   color: var(--color-select-line);
+}
+/* a component's board wears the purple and Figma's diamond at all times, not
+   only when it is under the pointer */
+.section-label[data-component] {
+  color: var(--color-select-component);
+}
+.section-label[data-component]::before {
+  content: '◆ ';
 }
 /* A frame is one board among many, so its name is quieter than a section's,
    which titles a whole region of the page. */
@@ -3814,6 +4043,38 @@ select {
 
 .mo-lane-layer {
   background: rgb(255 255 255 / 0.03);
+}
+
+/* The disclosure on a timeline layer, pointing down until it is folded. */
+.mo-fold {
+  display: inline-block;
+  width: 12px;
+  margin-right: 2px;
+  opacity: 0.55;
+  transform: rotate(90deg);
+  transition: transform 90ms ease;
+}
+
+.mo-fold[data-on='true'] {
+  transform: rotate(0deg);
+}
+
+.mo-fold:hover {
+  opacity: 1;
+}
+
+/* What a layer row says about itself: one mark per moment something happens on
+   it, drawn through so the marquee underneath still gets the pointer. */
+.mo-summary-key {
+  position: absolute;
+  top: 10px;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 /* A keyframe is a diamond, as every timeline has drawn one since After

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { dragBy, doc, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
+import { guidesOf } from '../src/document/types';
 
 test.beforeEach(async ({ page }) => {
   await openEditor(page);
@@ -96,6 +97,46 @@ test('a \u21e7 press that never moves still takes the layer out of the selection
  * back to the page — in both directions without the layer appearing to move,
  * which is the whole point: the drop changes the tree, not the picture.
  */
+test('dragging a layer over a frame outlines the frame that will adopt it', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'Highlighter', x: 700, y: 0, w: 300, h: 300, fill: '#FFFFFF', flex: null,
+  });
+  const id = await makeNode(page, 'rect', {
+    name: 'Passenger', x: 700, y: 400, w: 100, h: 60, fill: '#F2637F',
+  });
+  await select(page, [id]);
+
+  const before = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+  const from = { x: before!.x + before!.width / 2, y: before!.y + before!.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // several moves, because one is under the threshold that starts a drag
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await page.mouse.move(from.x + 80 * step, from.y - 270 * step);
+  }
+
+  // still holding it: the frame says it is about to take the layer
+  const target = await page.evaluate(() => window.paperlike!.ui.getState().dropTarget);
+  expect(target).toBe(frame);
+  // and the chrome draws it, over the frame's own box
+  const box = (await page.locator(`[data-node-id="${frame}"]`).boundingBox())!;
+  const outlined = await page.evaluate((want) =>
+    [...document.querySelectorAll('div')].some((el) => {
+      if (getComputedStyle(el).outlineWidth !== '2px') return false;
+      const r = el.getBoundingClientRect();
+      return Math.abs(r.x - want.x) < 2 && Math.abs(r.width - want.width) < 2;
+    }),
+  { x: box.x, width: box.width });
+  expect(outlined).toBe(true);
+
+  await page.mouse.up();
+  // and the outline goes away with the gesture that raised it
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().dropTarget)).toBeNull();
+  expect((await doc(page))[id].parent).toBe(frame);
+
+  await removeNodes(page, [frame, id]);
+});
+
 test('dropping a layer on a frame makes it a child of that frame', async ({ page }) => {
   // a frame away from the origin, so a parent-local coordinate is not the same
   // number as the world one and a wrong conversion cannot pass by accident
@@ -406,6 +447,46 @@ test('dropping into an auto layout lands where the pointer is, not at the end', 
     'First', 'Arriving', 'Second',
   ]);
 
+  await removeNodes(page, [built.frame]);
+});
+
+test('dragging over an auto layout draws the line the layer would land on', async ({ page }) => {
+  const built = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const frame = store.create('frame', 'root', {
+      name: 'SlotRack', x: 700, y: 0, w: 300, h: 100, fill: '#FFFFFF',
+      flex: {
+        mode: 'flex', direction: 'row', gap: 10, padding: [0, 0, 0, 0],
+        align: 'start', justify: 'start', wrap: false,
+      },
+    } as never);
+    store.create('rect', frame, { name: 'SlotFirst', w: 60, h: 60, fill: '#4CC3F0' } as never);
+    const second = store.create('rect', frame, { name: 'SlotSecond', w: 60, h: 60, fill: '#9B7BF0' } as never);
+    const loose = store.create('rect', 'root', {
+      name: 'SlotArriving', x: 700, y: 300, w: 60, h: 60, fill: '#F2637F',
+    } as never);
+    store.commit();
+    return { frame, second, loose };
+  });
+  await select(page, [built.loose]);
+
+  const box = (await page.locator(`[data-node-id="${built.loose}"]`).boundingBox())!;
+  const edge = (await page.locator(`[data-node-id="${built.second}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await page.mouse.move(from.x + 35 * step, from.y - 300 * step);
+  }
+
+  // the outline says which frame; only the line says between which two children
+  const line = page.locator('[data-drop-slot]');
+  await expect(line).toBeVisible();
+  // the line is 2px wide and straddles the edge it marks
+  expect(Math.abs((await line.boundingBox())!.x - edge.x)).toBeLessThanOrEqual(2);
+
+  await page.mouse.up();
+  await expect(line).toHaveCount(0);
   await removeNodes(page, [built.frame]);
 });
 
@@ -1026,6 +1107,43 @@ test('Space while drawing walks the box without resizing it', async ({ page }) =
 });
 
 /**
+ * An armed tool owns the pointer, selection chrome included (C-27).
+ *
+ * Found by a drawing test whose press happened to land on the corner of the
+ * layer the previous test had left selected: it resized that layer instead of
+ * starting a shape. Figma gives the canvas to the armed tool — the chrome stays
+ * drawn, but nothing in it takes a press.
+ */
+test('a press on a selected layer’s handle draws, once a shape tool is armed', async ({ page }) => {
+  const sitting = await makeNode(page, 'rect', {
+    name: 'C27 Sitting', x: 700, y: 500, w: 100, h: 100, fill: '#4CC3F0',
+  });
+  await select(page, [sitting]);
+
+  // the east handle, which is where the next press is about to land
+  const handle = await page.locator('[data-handle="e"]').boundingBox();
+  const from = { x: handle!.x + handle!.width / 2, y: handle!.y + handle!.height / 2 };
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('rect'));
+  await dragBy(page, from, { x: 80, y: 60 });
+
+  // the layer that was selected is untouched, and a new one has been drawn
+  const after = await doc(page);
+  expect([after[sitting].w, after[sitting].h]).toEqual([100, 100]);
+  const drawn = (await selection(page))[0];
+  expect(drawn).not.toBe(sitting);
+  expect([after[drawn].w, after[drawn].h]).toEqual([80, 60]);
+
+  // and with the move tool back, the same press resizes as it always did
+  await select(page, [sitting]);
+  const again = await page.locator('[data-handle="e"]').boundingBox();
+  await dragBy(page, { x: again!.x + again!.width / 2, y: again!.y + again!.height / 2 }, { x: 40, y: 0 });
+  expect((await doc(page))[sitting].w).toBe(140);
+
+  await removeNodes(page, [sitting, drawn]);
+});
+
+/**
  * Move to page.
  *
  * The layers land at canvas level on the destination — a layer three frames
@@ -1125,6 +1243,59 @@ test('dragging snaps to a sibling edge', async ({ page }) => {
   expect(after.x).toBe(40);
   expect(after.y).toBeGreaterThan(660);
   await removeNodes(page, [anchor, mover]);
+});
+
+/**
+ * Alignment is half of what smart guides do; spacing is the other half. Figma
+ * users space a row by dragging until the numbers read the same, so the snap
+ * has to take an even arrangement and say what it took.
+ */
+test('a drag snaps to match the space its neighbours already hold, and says so', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const a = await makeNode(page, 'rect', { name: 'GapA', x: 4105, y: 4000, w: 100, h: 80, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'GapB', x: 4305, y: 4000, w: 100, h: 80, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'GapC', x: 4700, y: 4000, w: 100, h: 80, fill: '#F2637F' });
+  await select(page, [c]);
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  // five world px short of an even row — inside the threshold, so it should take
+  for (const step of [0.25, 0.5, 0.75, 1]) await page.mouse.move(from.x - 190 * step, from.y);
+
+  // both spaces are drawn, and both carry the measurement
+  await expect(page.locator('[data-gap-guide="x"]')).toHaveCount(2);
+  await expect(page.locator('[data-gap-label="x"]').first()).toHaveText('100');
+
+  await page.mouse.up();
+  expect((await doc(page))[c].x).toBe(4505);
+  await expect(page.locator('[data-gap-guide="x"]')).toHaveCount(0);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [a, b, c]);
+});
+
+test('a layer dropped between two others evens the space either side of it', async ({ page }) => {
+  await page.evaluate(() =>
+    window.paperlike!.ui.getState().setViewport({ x: -4050, y: -3950, zoom: 1 }),
+  );
+  const a = await makeNode(page, 'rect', { name: 'EvenA', x: 4105, y: 4200, w: 100, h: 80, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'EvenB', x: 4705, y: 4200, w: 100, h: 80, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'EvenC', x: 4600, y: 4200, w: 100, h: 80, fill: '#F2637F' });
+  await select(page, [c]);
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await dragBy(page, from, { x: -190, y: 0 });
+
+  // 4405 leaves 200 on each side, where the drag alone would have left 205 and 195
+  expect((await doc(page))[c].x).toBe(4405);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  await removeNodes(page, [a, b, c]);
 });
 
 test('holding the snap-bypass modifier lets a drag land off the guide', async ({ page }) => {
@@ -1488,6 +1659,42 @@ test('constraints reposition children when their frame resizes', async ({ page }
   await removeNodes(page, [frame]);
 });
 
+test('the constraint diagram pins an edge, stretches, and centres', async ({ page }) => {
+  const frame = await makeNode(page, 'frame', {
+    name: 'PinFrame', x: 700, y: 40, w: 400, h: 200, fill: '#FFFFFF', flex: null,
+  });
+  const child = await page.evaluate(
+    (parent) =>
+      window.paperlike!.store.create('rect', parent, {
+        name: 'Pinned', x: 40, y: 40, w: 60, h: 40, fill: '#DDDDDD',
+      }),
+    frame,
+  );
+  await select(page, [child]);
+
+  const widget = page.getByRole('group', { name: 'Constraints' });
+  // the diagram reads the state out without a dropdown having to be opened
+  await expect(widget.getByLabel('Pin left')).toHaveAttribute('aria-pressed', 'true');
+  await expect(widget.getByLabel('Pin right')).toHaveAttribute('aria-pressed', 'false');
+
+  // the opposite bar as well as the one already pinned is Left and right
+  await widget.getByLabel('Pin right').click();
+  expect((await doc(page))[child].constraints!.h).toBe('stretch');
+  await expect(page.getByTitle('Horizontal constraint')).toHaveText(/Left and right/);
+
+  // and taking the first one off again leaves the layer pinned to the right
+  await widget.getByLabel('Pin left').click();
+  expect((await doc(page))[child].constraints!.h).toBe('end');
+
+  // the crossing four pixels belong to both lines, so press the vertical one clear of it
+  await widget.getByLabel('Center horizontally').click({ position: { x: 2, y: 3 } });
+  expect((await doc(page))[child].constraints!.h).toBe('center');
+  await widget.getByLabel('Center vertically').click({ position: { x: 3, y: 2 } });
+  expect((await doc(page))[child].constraints!.v).toBe('center');
+
+  await removeNodes(page, [frame]);
+});
+
 test('export produces React, HTML and JSON', async ({ page }) => {
   const artboard = await nodeNamed(page, 'Fixture Board');
   await select(page, [artboard!.id]);
@@ -1684,6 +1891,33 @@ test('the fill row matches Figma: one field holding swatch, hex and opacity', as
   const row = page.locator('.fig-paint').first().locator('..');
   await expect(row.locator('input[type="checkbox"][aria-label="Toggle visibility"]')).toHaveCount(1);
   await expect(row.locator('button[title="Remove"]')).toHaveCount(1);
+
+  await removeNodes(page, [id]);
+});
+
+test('\u21e7 makes a label-scrub step by ten, and \u2325 by a tenth', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Scrubbed', x: 40, y: 500, w: 100, h: 100, fill: '#d9d9d9' });
+  await select(page, [id]);
+
+  const glyph = page.getByTitle('Width').locator('.glyph');
+  const box = (await glyph.boundingBox())!;
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+  await dragBy(page, at, { x: 20, y: 0 });
+  expect((await doc(page))[id].w).toBe(120);
+
+  await dragBy(page, at, { x: 20, y: 0 }, ['Shift']);
+  expect((await doc(page))[id].w).toBe(320);
+
+  // a tenth-grain drag has to be able to land between the whole numbers
+  await dragBy(page, at, { x: 2, y: 0 }, ['Alt']);
+  expect((await doc(page))[id].w).toBeCloseTo(320.2, 3);
+
+  // the paint row's % handle takes the same accelerator
+  const percent = page.locator('.fig-paint-percent').first();
+  const pbox = (await percent.boundingBox())!;
+  await dragBy(page, { x: pbox.x + pbox.width / 2, y: pbox.y + pbox.height / 2 }, { x: -10, y: 0 }, ['Shift']);
+  expect((await doc(page))[id].fills![0].opacity).toBeCloseTo(0.5, 2);
 
   await removeNodes(page, [id]);
 });
@@ -1919,6 +2153,31 @@ test.describe('paint picker', () => {
 
     await page.getByRole('option', { name: 'Plus lighter' }).click();
     expect((await doc(page))[cover!.id].blend).toBe('plus-lighter');
+  });
+
+  test('a frame passes blending through until you set it to Normal', async ({ page }) => {
+    const frame = await makeNode(page, 'frame', { name: 'Isolator', x: 700, y: 40, w: 200, h: 200, fill: '#FFFFFF' });
+    await page.evaluate((id) => {
+      const store = window.paperlike!.store;
+      store.create('rect', id, { name: 'Darkener', x: 20, y: 20, w: 80, h: 80, blend: 'multiply' });
+      store.commit();
+    }, frame);
+    await select(page, [frame]);
+
+    // a frame starts pass-through, so the Multiply child reaches the page behind it
+    expect((await doc(page))[frame].blend).toBe('pass-through');
+    await expect(page.locator(`[data-node-id="${frame}"]`)).toHaveCSS('isolation', 'auto');
+
+    await page.getByRole('button', { name: /Apply blend mode/ }).click();
+    const list = page.getByRole('listbox', { name: 'Blend mode' });
+    await expect(list.getByRole('option')).toHaveCount(19);
+    await expect(list.getByRole('option').first()).toHaveText('Pass through');
+
+    await list.getByRole('option', { name: 'Normal', exact: true }).click();
+    expect((await doc(page))[frame].blend).toBe('normal');
+    await expect(page.locator(`[data-node-id="${frame}"]`)).toHaveCSS('isolation', 'isolate');
+
+    await removeNodes(page, [frame]);
   });
 
   test('the format dropdown round-trips a typed value', async ({ page }) => {
@@ -2319,11 +2578,15 @@ test.describe('prototype', () => {
     const screen = (await page.locator('.fig-present-screen').boundingBox())!;
     const child = (await page.locator(`.fig-present [data-node-id="${heading}"]`).boundingBox())!;
 
-    // the artboard's world position must not leak into playback: the heading
-    // sits 40px inside the screen, not 740px off the side of it
-    expect(child.x - screen.x).toBeGreaterThan(20);
-    expect(child.x - screen.x).toBeLessThan(80);
-    expect(child.y - screen.y).toBeGreaterThan(20);
+    // The artboard's world position must not leak into playback: the heading
+    // sits 40px inside the screen, not 740px off the side of it. Measured
+    // against the scale the stage is actually drawing at, which since the
+    // scaling row is a choice rather than a clamp is no longer always 1:1 —
+    // 40 world px is 40 × scale on screen.
+    const scale = screen.width / 600;
+    expect(child.x - screen.x).toBeGreaterThan(20 * scale);
+    expect(child.x - screen.x).toBeLessThan(80 * scale);
+    expect(child.y - screen.y).toBeGreaterThan(20 * scale);
   });
 
   test('Escape closes the player and leaves the document alone', async ({ page }) => {
@@ -2676,6 +2939,63 @@ test('create component marks the layer as a main', async ({ page }) => {
   await removeNodes(page, [id]);
 });
 
+test('a component wears purple chrome where a plain frame wears blue', async ({ page }) => {
+  const main = await makeNode(page, 'frame', {
+    name: 'PurpleMain', x: 40, y: 1700, w: 160, h: 100, fill: '#EEEEEE', isComponent: true,
+  });
+  const plain = await makeNode(page, 'frame', {
+    name: 'BlueBoard', x: 260, y: 1700, w: 160, h: 100, fill: '#EEEEEE',
+  });
+
+  const handleColour = () =>
+    page.evaluate(() => getComputedStyle(document.querySelector('[data-handle="nw"]')!).borderTopColor);
+
+  await select(page, [main]);
+  expect(await handleColour()).toBe('rgb(151, 71, 255)');
+
+  await select(page, [plain]);
+  expect(await handleColour()).toBe('rgb(10, 122, 212)');
+  // and the board label says the same thing without anything being selected
+  await expect(page.locator('.section-label[data-component]')).toHaveText(/PurpleMain/);
+
+  await removeNodes(page, [main, plain]);
+});
+
+/**
+ * Componentising several layers at once, which Figma offers two ways: one
+ * component around the lot, or one component each.
+ */
+test('create component wraps a multi-selection, and the sibling row makes one of each', async ({ page }) => {
+  const { a, b } = await twoRects(page);
+  await select(page, [a, b]);
+  await runOnSelection(page, 'Create component');
+
+  const wrapper = (await selection(page))[0];
+  const wrapped = await doc(page);
+  expect(wrapper).not.toBe(a);
+  expect(wrapped[wrapper].isComponent).toBe(true);
+  expect(wrapped[wrapper].children).toEqual([a, b]);
+  // the layers inside are not components themselves — that is the other row
+  expect(wrapped[a].isComponent).toBeFalsy();
+  await removeNodes(page, [wrapper]);
+
+  // ⌥⌘K takes the same path rather than going dead at two layers
+  const keys = await twoRects(page);
+  await select(page, [keys.a, keys.b]);
+  await page.keyboard.press('Alt+Meta+KeyK');
+  await expect
+    .poll(async () => (await doc(page))[(await selection(page))[0]]?.isComponent ?? false)
+    .toBe(true);
+  await removeNodes(page, [(await selection(page))[0]]);
+
+  const each = await twoRects(page);
+  await select(page, [each.a, each.b]);
+  await runOnSelection(page, 'Create multiple components');
+  const made = await doc(page);
+  expect([made[each.a].isComponent, made[each.b].isComponent]).toEqual([true, true]);
+  await removeNodes(page, [each.a, each.b]);
+});
+
 test('paste here drops the copy under the pointer', async ({ page }) => {
   const id = await makeNode(page, 'rect', { name: 'CtxSrc', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
   await select(page, [id]);
@@ -2724,16 +3044,179 @@ test('delete removes the layer and clears the selection', async ({ page }) => {
   expect(await selection(page)).toEqual([]);
 });
 
-test('rows that need a selection are disabled without one', async ({ page }) => {
+/**
+ * A right-click over a caret is about the characters, not about the layer they
+ * are in — the object menu's Copy copies the layer, and its Delete removes the
+ * one you are mid-sentence in.
+ */
+test('right-clicking inside text being edited offers the characters, not the layer', async ({ page }) => {
+  const id = await page.evaluate(() => {
+    const store = window.paperlike!.store;
+    const made = store.create('text', 'root', {
+      name: 'CtxCaret', x: 40, y: 560, w: 300, h: 40, text: 'hello brave new world',
+    });
+    store.commit();
+    return made;
+  });
+  await page.evaluate((target) => {
+    window.paperlike!.ui.getState().select([target]);
+    window.paperlike!.ui.getState().setEditing(target);
+  }, id);
+  await page.waitForFunction(() => document.querySelector('[contenteditable]') !== null);
+  await page.waitForTimeout(120);
+
+  await page.locator(`[contenteditable][data-node-id="${id}"]`).click({ button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
+
+  await expect(row(page, 'Delete')).toHaveCount(0);
+  await expect(row(page, 'Group selection')).toHaveCount(0);
+  await expect(row(page, 'Rasterize selection')).toHaveCount(0);
+  await expect(row(page, 'Cut')).toBeVisible();
+
+  // the marks reach the runs the way ⌘B does, and the edit survives the click
+  await row(page, 'Bold').click();
+  await expect.poll(async () => (await doc(page))[id].runs?.some((run) => run.bold)).toBe(true);
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().editing)).toBe(id);
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setEditing(null));
+  await removeNodes(page, [id]);
+});
+
+test('the mask toggle is one row, and it reads the same way each time', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxMask', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  const maskRows = page.locator('.ctx-row .ctx-label', { hasText: 'mask' });
+
+  await openMenu(page, id);
+  await expect(maskRows).toHaveCount(1);
+  await row(page, 'Use as mask').click();
+  await expect.poll(async () => (await doc(page))[id].isMask).toBe(true);
+
+  // masked, the one row says the one thing — not "Remove mask" and
+  // "Release mask" as if they were different commands
+  await select(page, [id]);
+  await runOnSelection(page, 'Remove mask');
+  await expect.poll(async () => (await doc(page))[id].isMask).toBe(false);
+
+  await select(page, [id]);
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(maskRows).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+test('an empty patch of canvas gets the short canvas menu, not the object menu greyed out', async ({ page }) => {
   await page.evaluate(() => window.paperlike!.ui.getState().clearSelection());
   await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
 
-  await expect(row(page, 'Copy')).toBeDisabled();
-  await expect(row(page, 'Group selection')).toBeDisabled();
-  await expect(row(page, 'Flip horizontal')).toBeDisabled();
+  // nothing is under the pointer and nothing is selected, so no row that acts
+  // on a layer is offered at all
+  await expect(row(page, 'Copy')).toHaveCount(0);
+  await expect(row(page, 'Group selection')).toHaveCount(0);
+  await expect(row(page, 'Flip horizontal')).toHaveCount(0);
+  await expect(row(page, 'Delete')).toHaveCount(0);
+  await expect(page.locator('.ctx-row')).toHaveCount(8);
+
+  // what is left is what the canvas itself can do
+  await expect(row(page, 'Zoom to fit')).toBeVisible();
+  await expect(row(page, 'Select all')).toBeVisible();
+
+  // and it fits the window: the object menu was long enough to need scrolling
+  const scrolls = await page
+    .locator('.ctx')
+    .first()
+    .evaluate((el) => el.scrollHeight > el.clientHeight);
+  expect(scrolls).toBe(false);
 
   await page.keyboard.press('Escape');
   await expect(page.locator('.ctx')).toHaveCount(0);
+});
+
+test('select all from the canvas menu takes the whole page', async ({ page }) => {
+  const { a, b } = await twoRects(page);
+  await page.evaluate(() => window.paperlike!.ui.getState().clearSelection());
+
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await row(page, 'Select all').click();
+
+  expect(await selection(page)).toEqual(expect.arrayContaining([a, b]));
+  await removeNodes(page, [a, b]);
+});
+
+/**
+ * The instance commands are the clearest case of a row that can never light up
+ * on the selection in front of you — a rectangle has no main.
+ */
+test('the instance commands are absent on a layer that follows no main', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxPlain', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await openMenu(page, id);
+
+  await expect(row(page, 'Detach instance')).toHaveCount(0);
+  await expect(row(page, 'Go to main component')).toHaveCount(0);
+  await expect(row(page, 'Push changes to main component')).toHaveCount(0);
+  await expect(row(page, 'Restore component')).toHaveCount(0);
+  // the rows that do apply are still there
+  await expect(row(page, 'Delete')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await removeNodes(page, [id]);
+});
+
+/**
+ * An open menu owns the keyboard. Both halves matter: the rows have to answer
+ * the arrows, and the canvas shortcuts underneath have to stop answering — a
+ * stray ⌫ used to delete the selection sitting out of sight behind the panel.
+ */
+test('the open menu takes the keyboard, and the canvas shortcuts wait for it', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxKeys', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await openMenu(page, id);
+
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('r');
+  expect((await doc(page))[id]).toBeTruthy();
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().tool)).toBe('move');
+
+  // ⇱ and ↓ move the highlight, and a letter jumps to the next row starting
+  // with it — which is where the R above went instead of arming the tool
+  await page.keyboard.press('Home');
+  await expect(page.locator('.ctx-row[data-active]')).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('c');
+  await page.keyboard.press('c');
+  await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Copy/Paste as');
+
+  // → opens the submenu that row owns, ← closes it again
+  await page.keyboard.press('ArrowRight');
+  await expect(row(page, 'Copy as SVG')).toBeVisible();
+  await page.keyboard.press('ArrowLeft');
+  await expect(row(page, 'Copy as SVG')).toHaveCount(0);
+
+  await page.keyboard.press('f');
+  await expect(page.locator('.ctx-row[data-active] .ctx-label')).toHaveText('Frame selection');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ctx')).toHaveCount(0);
+
+  const framed = (await selection(page))[0];
+  expect((await doc(page))[framed].children).toEqual([id]);
+  await removeNodes(page, [framed]);
+});
+
+test('escape over an open menu closes the menu and nothing else', async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'CtxEsc', x: 40, y: 560, w: 120, h: 80, fill: '#4CC3F0' });
+  await select(page, [id]);
+  await page.evaluate((target) => window.paperlike!.ui.getState().setVectorEdit(target), id);
+
+  await page.mouse.click(EMPTY.x, EMPTY.y, { button: 'right' });
+  await expect(page.locator('.ctx').first()).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await expect(page.locator('.ctx')).toHaveCount(0);
+  // one press, one mode: point editing used to go with it
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().vectorEdit)).toBe(id);
+
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().vectorEdit)).toBeNull();
+  await removeNodes(page, [id]);
 });
 
 test('the menu shortcuts run the same commands from the keyboard', async ({ page }) => {
@@ -3165,6 +3648,39 @@ test.describe('effects', () => {
       'rgba(0, 0, 0, 0.25) 0px 10px 16px 0px',
     );
     await removeNodes(page, [id]);
+  });
+
+  test("effects the selected layers disagree on read Mixed, not the first layer's list", async ({ page }) => {
+    const ids = await page.evaluate(() => {
+      const store = window.paperlike!.store;
+      const a = store.create('rect', 'root', { name: 'Dropped', x: 700, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      const b = store.create('rect', 'root', { name: 'Blurred', x: 800, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      const c = store.create('rect', 'root', { name: 'Dropped too', x: 900, y: 40, w: 60, h: 60, fill: '#FFFFFF' });
+      store.commit();
+      return [a, b, c];
+    });
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Effects$/ }),
+    });
+
+    await select(page, [ids[0]]);
+    await addEffect(page, 'Drop shadow');
+    await select(page, [ids[1]]);
+    await addEffect(page, 'Layer blur');
+    await select(page, [ids[2]]);
+    await addEffect(page, 'Drop shadow');
+
+    await select(page, [ids[0], ids[1]]);
+    await expect(section).toContainText('Click + to replace mixed content');
+    // with no row there is nothing to nudge, so the blur is still a blur
+    await expect(section.getByTitle('Drop shadow settings')).toHaveCount(0);
+    expect((await doc(page))[ids[1]].effects![0].type).toBe('layer-blur');
+
+    // two shadows built the same way are the same shadow, whatever their ids
+    await select(page, [ids[0], ids[2]]);
+    await expect(section.getByTitle('Drop shadow settings')).toBeVisible();
+
+    await removeNodes(page, ids);
   });
 
   test('the eye keeps an effect but takes it off the layer', async ({ page }) => {
@@ -4156,12 +4672,42 @@ test.describe('layout grid and text blocks', () => {
     await page.getByTitle('Column width').locator('input').fill('40');
     await page.keyboard.press('Enter');
 
-    const guides = (await doc(page))[board!.id].guides!;
+    // the frame was given a lone spec, as a document written before the stack has
+    const [guides] = guidesOf((await doc(page))[board!.id]);
     expect(guides.align).toBe('end');
     expect(guides.width).toBe(40);
 
     const track = page.locator(`[data-node-id="${board!.id}"] > div`).last().locator('> div').first();
     await expect(track).toHaveCSS('width', '40px');
+  });
+
+  test('a frame carries columns and a square grid at once, each with its own eye', async ({ page }) => {
+    const frame = await makeNode(page, 'frame', { name: 'Template', x: 700, y: 40, w: 400, h: 300, fill: '#FFFFFF' });
+    await select(page, [frame]);
+
+    const section = page.locator('.fig-section').filter({
+      has: page.locator('.fig-title', { hasText: /^Layout grid$/ }),
+    });
+    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    // the + stays once there is one, because the second grid is not a replacement
+    await section.getByRole('button', { name: 'Add layout grid' }).click();
+    await section.getByRole('button', { name: 'Grid', exact: true }).nth(1).click();
+
+    const guides = guidesOf((await doc(page))[frame]);
+    expect(guides.map((guide) => guide.type)).toEqual(['columns', 'grid']);
+    const overlays = page.locator(`[data-node-id="${frame}"] > div`);
+    await expect(overlays).toHaveCount(2);
+
+    // each grid's eye takes its own overlay off, and leaves the other one
+    await section.locator('input[aria-label="Toggle visibility"]').first().click();
+    expect(guidesOf((await doc(page))[frame]).map((guide) => guide.visible)).toEqual([false, true]);
+    await expect(overlays).toHaveCount(1);
+
+    // and each row's minus removes that grid alone
+    await section.getByRole('button', { name: 'Remove' }).first().click();
+    expect(guidesOf((await doc(page))[frame]).map((guide) => guide.type)).toEqual(['grid']);
+
+    await removeNodes(page, [frame]);
   });
 
   test('paragraph spacing and lists turn the lines into real blocks', async ({ page }) => {
@@ -4182,6 +4728,41 @@ test.describe('layout grid and text blocks', () => {
 
     await removeNodes(page, [id]);
   });
+});
+
+test("a stroke's opacity reaches the canvas, and its eye keeps the weight", async ({ page }) => {
+  const id = await makeNode(page, 'rect', { name: 'Hairline', x: 700, y: 40, w: 160, h: 100, fill: '#FFFFFF' });
+  await page.evaluate((id) => {
+    window.paperlike!.store.update(id, {
+      border: { width: 8, color: '#000000', style: 'solid', position: 'inside' },
+    });
+  }, id);
+  await select(page, [id]);
+
+  const section = page
+    .locator('.fig-section')
+    .filter({ has: page.getByRole('heading', { name: 'Stroke', exact: true }) });
+  await section.locator('input[aria-label="Opacity"]').fill('20');
+
+  expect((await doc(page))[id].border!.opacity).toBeCloseTo(0.2);
+  await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCSS(
+    'box-shadow',
+    /rgba\(0, 0, 0, 0\.2\)/,
+  );
+
+  // the eye hides the stroke; the weight is still 8 when it comes back
+  await section.locator('input[aria-label="Toggle visibility"]').click();
+  let border = (await doc(page))[id].border!;
+  expect(border.visible).toBe(false);
+  expect(border.width).toBe(8);
+  await expect(page.locator(`[data-node-id="${id}"]`)).not.toHaveCSS('box-shadow', /rgba/);
+
+  await section.locator('input[aria-label="Toggle visibility"]').click();
+  border = (await doc(page))[id].border!;
+  expect(border.visible).toBe(true);
+  expect(border.width).toBe(8);
+
+  await removeNodes(page, [id]);
 });
 
 test('the stroke-style menu opens inside the panel, with its own glyph', async ({ page }) => {
@@ -4729,6 +5310,60 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 
+  test('⇧1 fits the page you are looking at, not the first one', async ({ page }) => {
+    const other = await page.evaluate(() => {
+      const id = window.paperlike!.store.addPage('Fit Elsewhere');
+      window.paperlike!.store.commit();
+      return id;
+    });
+    const id = await page.evaluate((parent) => {
+      const made = window.paperlike!.store.create('rect', parent, {
+        name: 'OnTheSecondPage',
+        x: 3200,
+        y: 2600,
+        w: 200,
+        h: 150,
+        fill: '#4CC3F0',
+      });
+      window.paperlike!.store.commit();
+      return made;
+    }, other);
+    await page.evaluate((id) => window.paperlike!.ui.getState().setPage(id), other);
+    await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+    await expect(page.locator(`[data-node-id="${id}"]`)).toBeAttached();
+
+    await page.keyboard.press('Shift+1');
+
+    // fit used to measure Page 1's layers whatever page you were on
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThan(0);
+    expect(box!.y).toBeGreaterThan(0);
+    expect(box!.x + box!.width).toBeLessThan(page.viewportSize()!.width);
+
+    await page.evaluate(() => {
+      const ui = window.paperlike!.ui.getState();
+      ui.setPage(window.paperlike!.store.listPages()[0]);
+      ui.setViewport({ x: 0, y: 0, zoom: 1 });
+    });
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), other);
+  });
+
+  test('⇧2 on something small magnifies it rather than stopping at 100%', async ({ page }) => {
+    const id = await makeNode(page, 'rect', { name: 'TinyIcon', x: 1800, y: 1200, w: 24, h: 24 });
+    await select(page, [id]);
+    await page.keyboard.press('Shift+2');
+
+    // fit used to clamp at 1, so framing an icon only re-centred it
+    const zoom = await page.evaluate(() => window.paperlike!.ui.getState().viewport.zoom);
+    expect(zoom).toBeGreaterThan(4);
+    const box = await page.locator(`[data-node-id="${id}"]`).boundingBox();
+    expect(box!.width).toBeGreaterThan(100);
+
+    await page.keyboard.press('Shift+0');
+    await removeNodes(page, [id]);
+  });
+
   test('typing a minus in a field does not zoom the canvas', async ({ page }) => {
     const id = await makeNode(page, 'rect', { name: 'TypeHere', x: 60, y: 560, w: 120, h: 90 });
     await select(page, [id]);
@@ -4744,3 +5379,5 @@ test.describe('zoom', () => {
     await removeNodes(page, [id]);
   });
 });
+
+

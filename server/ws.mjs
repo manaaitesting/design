@@ -38,6 +38,9 @@ const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
 const MESSAGE_QUERY_AWARENESS = 3;
 
+/** The one root type a view-only socket is allowed to write into. */
+const COMMENTS = 'comments';
+
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 if (!AUTH_SECRET) {
@@ -66,6 +69,90 @@ function verifySyncToken(token, room) {
   if (fileId !== room) return null;
   // the role is inside the signature, so a client cannot promote itself
   return { userId, role: role === 'owner' || role === 'editor' ? role : 'viewer' };
+}
+
+/** The name of the root type a struct ultimately hangs off, or null if it is gone. */
+function rootOf(struct) {
+  let type = struct?.parent;
+  while (type && type._item) type = type._item.parent;
+  return type && typeof type === 'object' ? Y.findRootTypeKey(type) : null;
+}
+
+/**
+ * Whether an update from a viewer only writes comments.
+ *
+ * Comments share the document with the layers — one Y.Doc per room — so read-only
+ * access cannot simply be "drop every write". A viewer may comment in Figma and
+ * may here too, which means the wire has to tell one kind of write from the other.
+ *
+ * An update is a list of structs plus a set of deletions. A struct names its
+ * parent directly only when it is the first thing at that position; otherwise it
+ * names a neighbour, and a deletion names nothing but a clock range. Both are
+ * resolved against the document we already hold, and anything that cannot be
+ * resolved to the comments map is refused — the failure is a rejected comment,
+ * never an accepted edit.
+ */
+function commentsOnly(update, doc) {
+  let decoded;
+  try {
+    decoded = Y.decodeUpdate(update);
+  } catch {
+    return false;
+  }
+
+  /** clock ranges this very update creates, which its later structs may lean on */
+  const fresh = new Map();
+  const freshEnd = (client, clock) => {
+    for (const [from, to] of fresh.get(client) ?? []) if (clock >= from && clock < to) return to;
+    return 0;
+  };
+  const resolve = (id) => {
+    const structs = doc.store.clients.get(id.client);
+    if (!structs || structs.length === 0) return null;
+    try {
+      return rootOf(structs[Y.findIndexSS(structs, id.clock)]);
+    } catch {
+      return null;
+    }
+  };
+
+  for (const struct of decoded.structs) {
+    const anchor = struct.parent ?? struct.origin ?? struct.rightOrigin;
+    if (!anchor) return false;
+    if (typeof anchor === 'string') {
+      if (anchor !== COMMENTS) return false;
+    } else if (!freshEnd(anchor.client, anchor.clock) && resolve(anchor) !== COMMENTS) {
+      return false;
+    }
+    const ranges = fresh.get(struct.id.client) ?? [];
+    ranges.push([struct.id.clock, struct.id.clock + struct.length]);
+    fresh.set(struct.id.client, ranges);
+  }
+
+  for (const [client, ranges] of decoded.ds.clients) {
+    const structs = doc.store.clients.get(client);
+    for (const range of ranges) {
+      const end = range.clock + range.len;
+      for (let clock = range.clock; clock < end; ) {
+        const skip = freshEnd(client, clock);
+        if (skip) {
+          clock = skip;
+          continue;
+        }
+        if (!structs || structs.length === 0) return false;
+        let struct;
+        try {
+          struct = structs[Y.findIndexSS(structs, clock)];
+        } catch {
+          return false;
+        }
+        if (!struct || rootOf(struct) !== COMMENTS) return false;
+        clock = struct.id.clock + struct.length;
+      }
+    }
+  }
+
+  return true;
 }
 
 /** @type {Map<string, Room>} */
@@ -286,15 +373,18 @@ wss.on('connection', (conn, request) => {
 
       if (type === MESSAGE_SYNC) {
         // A viewer's socket may ask what the document is (step 1) but never
-        // tell it what to become (step 2 and update both apply changes). The
-        // client hides its editing UI as well; this is the half that holds
-        // when the client is not the one we shipped.
+        // tell it what to become (step 2 and update both apply changes) —
+        // unless what it is telling us is a comment, which a viewer is
+        // entitled to leave. The client hides its editing UI as well; this is
+        // the half that holds when the client is not the one we shipped.
         if (!mayEdit) {
           const peek = decoding.createDecoder(message);
           decoding.readVarUint(peek);
           if (decoding.readVarUint(peek) !== syncProtocol.messageYjsSyncStep1) {
-            console.warn(`[sync] dropped a write from a viewer on "${name}"`);
-            return;
+            if (!commentsOnly(decoding.readVarUint8Array(peek), room.doc)) {
+              console.warn(`[sync] dropped a write from a viewer on "${name}"`);
+              return;
+            }
           }
         }
         encoding.writeVarUint(encoder, MESSAGE_SYNC);

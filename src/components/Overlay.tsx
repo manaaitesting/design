@@ -5,7 +5,7 @@ import { useDoc, usePresence, useStore } from './Session';
 import { FlexHandles } from './FlexHandles';
 import { toScreen, toWorld, useUI } from '../state/ui';
 import { nearestEdge, snapCandidates, type SnapGuide } from '../document/snapping';
-import { type Doc, type SceneNode } from '../document/types';
+import { isInFlow, type Doc, type SceneNode } from '../document/types';
 import { gapsOf, smartRow } from '../document/arrange';
 
 export interface Rect {
@@ -13,6 +13,19 @@ export interface Rect {
   y: number;
   w: number;
   h: number;
+}
+
+/** The box around a set of measured boxes. */
+export function unionRect(boxes: Rect[]): Rect | null {
+  if (!boxes.length) return null;
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  return {
+    x,
+    y,
+    w: Math.max(...boxes.map((b) => b.x + b.w)) - x,
+    h: Math.max(...boxes.map((b) => b.y + b.h)) - y,
+  };
 }
 
 type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
@@ -27,6 +40,19 @@ const HANDLES: { id: HandleId; cx: number; cy: number; cursor: string }[] = [
   { id: 'sw', cx: 0, cy: 1, cursor: 'nesw-resize' },
   { id: 'w', cx: 0, cy: 0.5, cursor: 'ew-resize' },
 ];
+
+/**
+ * The colour the chrome around a layer is drawn in.
+ *
+ * Figma paints a main component, a component set and an instance purple and
+ * everything else blue, so the outline alone says whether the thing you are
+ * about to edit will propagate.
+ */
+function chromeOf(node: SceneNode | undefined): string {
+  return node && (node.isComponent || node.isComponentSet || node.instanceOf)
+    ? 'var(--color-select-component)'
+    : 'var(--color-select-line)';
+}
 
 /** The dimension pill shown under a box — shared with the draw preview. */
 export const SIZE_BADGE: React.CSSProperties = {
@@ -115,6 +141,8 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const entered = useUI((s) => s.entered);
   const lockedHint = useUI((s) => s.lockedHint);
   const guides = useUI((s) => s.guides);
+  const dropTarget = useUI((s) => s.dropTarget);
+  const dropSlot = useUI((s) => s.dropSlot);
   // point editing replaces the selection chrome with the anchors themselves,
   // exactly as Figma's does — two sets of handles would fight for the pointer
   const vectorEdit = useUI((s) => s.vectorEdit);
@@ -125,6 +153,20 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   // preview: the handles would chase a layer they cannot keep up with, since
   // the animation runs on the compositor and the overlay measures on render.
   const previewing = useUI((s) => s.motion.playing);
+  /**
+   * An armed tool owns the pointer, selection chrome included (C-27).
+   *
+   * Figma draws the outline of whatever is still selected while a drawing tool
+   * is up, but nothing in that chrome takes a press: you draw wherever you
+   * press, and the corner of the rectangle you have just made is exactly where
+   * the next one usually starts. Holding Space is the hand tool for as long as
+   * it is held, so it counts as armed too.
+   */
+  const tool = useUI((s) => s.tool);
+  const spacePan = useUI((s) => s.spacePan);
+  const armed = spacePan || (tool !== 'move' && tool !== 'scale');
+  /** what a piece of chrome puts in `pointerEvents` while a tool may be armed */
+  const grab = armed ? ('none' as const) : ('auto' as const);
   const presence = usePresence();
 
   const remoteIds = presence.flatMap((p) => p.selection);
@@ -139,11 +181,21 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   const slices = Object.values(doc)
     .filter((node) => node.type === 'slice' && node.visible)
     .map((node) => node.id);
+  /**
+   * A dev status is a flag on the canvas, and a flag has to be there when
+   * nothing is selected — that is the whole point of it. Sparse, like the
+   * slices above, so measuring them all costs nothing.
+   */
+  const flagged = Object.values(doc)
+    .filter((node) => node.devStatus && node.devStatus !== 'none' && node.visible)
+    .map((node) => node.id);
   const tracked = [...new Set([
     ...selection,
+    ...flagged,
     ...(hover ? [hover] : []),
     ...(entered ? [entered] : []),
     ...(lockedHint ? [lockedHint] : []),
+    ...(dropTarget ? [dropTarget] : []),
     ...remoteIds,
     ...boards,
     ...slices,
@@ -156,16 +208,13 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
   /** Screen-space union of the selected nodes. */
   const bounds = (() => {
     const boxes = selection.map((id) => rects[id]).filter(Boolean) as Rect[];
-    if (boxes.length < 2) return null;
-    const x = Math.min(...boxes.map((b) => b.x));
-    const y = Math.min(...boxes.map((b) => b.y));
-    return {
-      x,
-      y,
-      w: Math.max(...boxes.map((b) => b.x + b.w)) - x,
-      h: Math.max(...boxes.map((b) => b.y + b.h)) - y,
-    };
+    return boxes.length < 2 ? null : unionRect(boxes);
   })();
+
+  // a mixed selection has no one answer, so it falls back to the blue
+  const groupChrome = selection.every((id) => chromeOf(doc[id]) !== 'var(--color-select-line)')
+    ? 'var(--color-select-component)'
+    : 'var(--color-select-line)';
 
   /**
    * Figma's smart selection: three or more layers that read as a row.
@@ -468,7 +517,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           const near = nearestEdge(edge, candidates, 'x', tolerance);
           if (near) {
             w = Math.max(1, Math.round(ex > 0 ? near.at - origin.x : origin.x + startW - near.at));
-            guides.push({ axis: 'x', at: near.at, from: near.other.y, to: near.other.y + near.other.h });
+            guides.push({ kind: 'align', axis: 'x', at: near.at, from: near.other.y, to: near.other.y + near.other.h });
           }
         }
         if (ey) {
@@ -476,7 +525,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
           const near = nearestEdge(edge, candidates, 'y', tolerance);
           if (near) {
             h = Math.max(1, Math.round(ey > 0 ? near.at - origin.y : origin.y + startH - near.at));
-            guides.push({ axis: 'y', at: near.at, from: near.other.x, to: near.other.x + near.other.w });
+            guides.push({ kind: 'align', axis: 'y', at: near.at, from: near.other.x, to: near.other.x + near.other.w });
           }
         }
       }
@@ -500,7 +549,20 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         centre.y + (angle ? offX * Math.sin(rad) + offY * Math.cos(rad) : offY) - h / 2,
       );
 
-      const patch: Partial<SceneNode> = { w, h, wMode: 'fixed', hMode: 'fixed' };
+      // Figma's text sizing is three states and the handles move between them:
+      // a side handle chooses a column width and leaves the height to the copy
+      // (Auto height), and only the bottom or a corner pins that too (Fixed).
+      // Every other kind of layer is pinned in both directions by any handle,
+      // because there is nothing for its box to hug.
+      const patch: Partial<SceneNode> =
+        node.type === 'text'
+          ? {
+              w,
+              h,
+              ...(ex ? { wMode: 'fixed' as const } : null),
+              ...(ey ? { hMode: 'fixed' as const } : null),
+            }
+          : { w, h, wMode: 'fixed', hMode: 'fixed' };
       // only write a field that actually changed: a no-op write still pins it
       // as an override on a layer inside an instance
       const live = store.getSnapshot()[id];
@@ -576,6 +638,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
 
       {/* alignment guides, in Figma's red, drawn in screen space */}
       {guides.map((guide, index) => {
+        if (guide.kind === 'gap') return null;
         const start = toScreen(viewport, guide.axis === 'x' ? guide.at : guide.from, guide.axis === 'x' ? guide.from : guide.at);
         const end = toScreen(viewport, guide.axis === 'x' ? guide.at : guide.to, guide.axis === 'x' ? guide.to : guide.at);
         return (
@@ -590,6 +653,62 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               background: '#FF3B30',
             }}
           />
+        );
+      })}
+
+      {/* the spaces a spacing snap took, each measured — the bar has a serif at
+          either end so it reads as a span rather than as one more alignment */}
+      {guides.map((guide, index) => {
+        if (guide.kind !== 'gap') return null;
+        const horizontal = guide.axis === 'x';
+        const a = toScreen(viewport, horizontal ? guide.from : guide.at, horizontal ? guide.at : guide.from);
+        const b = toScreen(viewport, horizontal ? guide.to : guide.at, horizontal ? guide.at : guide.to);
+        const length = horizontal ? b.x - a.x : b.y - a.y;
+        return (
+          <div key={`gap-${index}`}>
+            <div
+              data-gap-guide={guide.axis}
+              style={{
+                position: 'absolute',
+                left: a.x,
+                top: a.y,
+                width: horizontal ? length : 1,
+                height: horizontal ? 1 : length,
+                background: '#FF3B30',
+              }}
+            />
+            {[a, b].map((end, side) => (
+              <div
+                key={side}
+                style={{
+                  position: 'absolute',
+                  left: horizontal ? end.x : end.x - 3,
+                  top: horizontal ? end.y - 3 : end.y,
+                  width: horizontal ? 1 : 7,
+                  height: horizontal ? 7 : 1,
+                  background: '#FF3B30',
+                }}
+              />
+            ))}
+            <span
+              data-gap-label={guide.axis}
+              style={{
+                position: 'absolute',
+                left: horizontal ? a.x + length / 2 : a.x + 6,
+                top: horizontal ? a.y - 9 : a.y + length / 2 - 8,
+                transform: horizontal ? 'translateX(-50%)' : undefined,
+                fontSize: 10,
+                fontWeight: 500,
+                color: '#fff',
+                background: '#FF3B30',
+                borderRadius: 3,
+                padding: '1px 5px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {Math.round(guide.to - guide.from)}
+            </span>
+          </div>
         );
       })}
 
@@ -625,6 +744,38 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         </div>
       )}
 
+      {/* the frame a release would drop into: heavier than the hover hint,
+          because it says the tree is about to change */}
+      {dropTarget && rects[dropTarget] && (
+        <div
+          style={{
+            position: 'absolute',
+            left: rects[dropTarget].x,
+            top: rects[dropTarget].y,
+            width: rects[dropTarget].w,
+            height: rects[dropTarget].h,
+            outline: '2px solid var(--color-select-line)',
+            outlineOffset: -1,
+          }}
+        />
+      )}
+
+      {/* …and where in its flow the layer would land, when it flows its
+          children — the outline alone cannot say between which two */}
+      {dropSlot && (
+        <div
+          data-drop-slot="true"
+          style={{
+            position: 'absolute',
+            left: dropSlot.x,
+            top: dropSlot.y,
+            width: dropSlot.w,
+            height: dropSlot.h,
+            background: 'var(--color-select-line)',
+          }}
+        />
+      )}
+
       {/* the container you are inside */}
       {entered && rects[entered] && !selection.includes(entered) && (
         <div
@@ -654,7 +805,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 top: r.y,
                 width: r.w,
                 height: r.h,
-                outline: '1px dashed var(--color-select-line)',
+                outline: `1px dashed ${chromeOf(n)}`,
                 outlineOffset: -0.5,
                 borderRadius: isFrame ? 0 : 2,
               }}
@@ -664,7 +815,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 ...SIZE_BADGE,
                 left: r.x + r.w / 2,
                 top: r.y + r.h + 6,
-                background: 'var(--color-select-line)',
+                background: chromeOf(n),
               }}
             >
               {Math.round(r.w / viewport.zoom)} × {Math.round(r.h / viewport.zoom)}
@@ -683,7 +834,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               top: bounds.y,
               width: bounds.w,
               height: bounds.h,
-              outline: '1.75px solid var(--color-select-line)',
+              outline: `1.75px solid ${groupChrome}`,
               outlineOffset: -0.875,
             }}
           />
@@ -696,7 +847,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               fontSize: 10,
               fontWeight: 500,
               color: '#fff',
-              background: 'var(--color-select-line)',
+              background: groupChrome,
               borderRadius: 3,
               padding: '1px 5px',
               whiteSpace: 'nowrap',
@@ -717,10 +868,10 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 width: 7,
                 height: 7,
                 background: '#fff',
-                border: '1px solid var(--color-select-line)',
+                border: `1px solid ${groupChrome}`,
                 borderRadius: 1,
                 cursor: handle.cursor,
-                pointerEvents: 'auto',
+                pointerEvents: grab,
               }}
             />
           ))}
@@ -751,7 +902,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                   background: 'var(--color-select-line)',
                   border: '1.5px solid #fff',
                   cursor: 'grab',
-                  pointerEvents: 'auto',
+                  pointerEvents: grab,
                 }}
               />
               {next && (
@@ -769,7 +920,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                     opacity: 0.55,
                     borderRadius: 2,
                     cursor: across ? 'ew-resize' : 'ns-resize',
-                    pointerEvents: 'auto',
+                    pointerEvents: grab,
                   }}
                 />
               )}
@@ -844,8 +995,9 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
               type="button"
               className="section-label"
               data-kind={node.type}
+              data-component={node.isComponent || node.isComponentSet || undefined}
               data-on={selection.includes(id) || undefined}
-              style={{ left: rect.x, top: rect.y - (node.type === 'section' ? 20 : 16) }}
+              style={{ left: rect.x, top: rect.y - (node.type === 'section' ? 20 : 16), pointerEvents: grab }}
               onPointerDown={(event) => {
                 event.stopPropagation();
                 // ⇧ on a title adds the board to the selection, as it does on
@@ -883,6 +1035,8 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
         const node = doc[id];
         if (!rect || !node || id === vectorEdit || id === editing) return null;
         const single = selection.length === 1;
+        const flowed = isInFlow(node, doc);
+        const chrome = chromeOf(node);
 
         // A turned layer is measured by the box *around* it. That box is not the
         // layer's own, but its middle is — a layer turns about its middle — so
@@ -906,7 +1060,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                 width: w,
                 height: h,
                 transform: turn,
-                outline: '1.75px solid var(--color-select-line)',
+                outline: `1.75px solid ${chrome}`,
                 outlineOffset: -0.875,
               }}
             />
@@ -924,7 +1078,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                   fontSize: 10,
                   fontWeight: 500,
                   color: '#fff',
-                  background: 'var(--color-select-line)',
+                  background: chrome,
                   borderRadius: 3,
                   padding: '1px 5px',
                   whiteSpace: 'nowrap',
@@ -968,7 +1122,7 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                           width: 18,
                           height: 18,
                           cursor: 'crosshair',
-                          pointerEvents: 'auto',
+                          pointerEvents: grab,
                         }}
                       />
                     )}
@@ -984,10 +1138,10 @@ export function Overlay({ containerRef }: { containerRef: RefObject<HTMLDivEleme
                         width: 7,
                         height: 7,
                         background: '#fff',
-                        border: '1px solid var(--color-select-line)',
+                        border: `1px solid ${chrome}`,
                         borderRadius: 1,
                         cursor: handle.cursor,
-                        pointerEvents: 'auto',
+                        pointerEvents: grab,
                       }}
                     />
                   </div>

@@ -192,9 +192,11 @@ function StyleChit({ kind, value }: { kind: string; value: unknown }) {
     );
   }
   if (kind === 'grid') {
+    // a style is a whole stack of grids; the chit wears the first one's colour
     const guides = value as SceneNode['guides'];
+    const first = Array.isArray(guides) ? guides[0] : guides;
     return (
-      <span style={{ width: 16, textAlign: 'center', color: guides?.color ?? 'currentColor' }}>▦</span>
+      <span style={{ width: 16, textAlign: 'center', color: first?.color ?? 'currentColor' }}>▦</span>
     );
   }
   return <span style={{ width: 16, textAlign: 'center' }}>◍</span>;

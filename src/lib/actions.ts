@@ -1,6 +1,7 @@
 'use client';
 
 import { nodeStyle, styleToCss } from '../document/css';
+import { applyToRange, plainText, runsOf, styleOfRange } from '../document/text';
 import type { Doc, FontSpec, SceneNode } from '../document/types';
 import { DEFAULT_FONT } from '../document/defaults';
 import type { DocStore } from '../document/store';
@@ -174,19 +175,87 @@ export function flip(store: DocStore, selection: string[], axis: 'h' | 'v'): voi
 }
 
 /**
+ * Figma's ⇧X: the fill colour and the stroke colour change places.
+ *
+ * The layer's paint may be a stack rather than one colour, and only the topmost
+ * visible solid in it has a colour a stroke can wear — so that is the one that
+ * travels, and it is put back into the same slot it came from. A layer with no
+ * stroke gains a one-pixel one in the colour its fill had, which is what Figma
+ * does and is the whole point of the key: it is how you outline a filled shape.
+ */
+export function swapFillAndStroke(store: DocStore, ids: string[]): boolean {
+  const doc = store.getSnapshot();
+  const swappable = ids.filter((id) => {
+    const n = doc[id];
+    return !!n && (n.fill !== null || !!solidIndex(n) || !!n.border);
+  });
+  if (!swappable.length) return false;
+
+  store.updateMany(swappable, (n) => {
+    const index = solidIndex(n);
+    const fillColor = index === null ? n.fill : n.fills![index].value;
+    const strokeColor = n.border?.color ?? null;
+
+    const patch: Partial<SceneNode> = {};
+    if (index === null) patch.fill = strokeColor;
+    else patch.fills = n.fills!.map((p, i) => (i === index ? { ...p, value: strokeColor ?? 'transparent' } : p));
+
+    patch.border = fillColor
+      ? { ...(n.border ?? DEFAULT_STROKE), color: fillColor }
+      : null;
+    return patch;
+  });
+  store.commit();
+  return true;
+}
+
+/** The paint a stroke can take its colour from: the top visible solid. */
+function solidIndex(node: SceneNode): number | null {
+  if (!node.fills?.length) return null;
+  for (let i = node.fills.length - 1; i >= 0; i--) {
+    const paint = node.fills[i];
+    if (paint.visible && paint.value.startsWith('#')) return i;
+  }
+  return null;
+}
+
+/** What a layer with no stroke gets when a fill colour arrives on it. */
+const DEFAULT_STROKE = { width: 1, color: '#000000', style: 'solid', position: 'inside' } as const;
+
+/**
+ * Figma's ⌥⌘K, which does not need the selection to be one layer.
+ *
+ * Several layers become one component, which means they are wrapped in a frame
+ * first — a component is a node, and eight icons are not. Reached from the
+ * keyboard, the menu and the palette, so it lives here rather than being
+ * guessed at three times.
+ */
+export function componentize(store: DocStore, ids: string[]): string | null {
+  if (!ids.length) return null;
+  if (ids.length === 1) return store.createComponent(ids[0]) ? ids[0] : null;
+  const wrapper = store.wrapInFlex(ids, false);
+  if (!wrapper) return null;
+  store.createComponent(wrapper);
+  store.commit();
+  return wrapper;
+}
+
+/** Figma's "Create multiple components" — one component per selected layer. */
+export function componentizeEach(store: DocStore, ids: string[]): string[] {
+  const made = ids.filter((id) => store.createComponent(id));
+  if (made.length) store.commit();
+  return made;
+}
+
+/**
  * Figma's text shortcuts, which act on the layer rather than on a run.
  *
  * ⌥⌘L / ⌥⌘T / ⌥⌘R / ⌥⌘J set the alignment and ⇧⌘< / ⇧⌘> step the size, and both
  * are reached from two places — the canvas with a text layer selected, and the
- * text editor with the caret inside one. They live here so there is one mapping
- * rather than two that can drift apart.
+ * text editor with the caret inside one. The mapping itself lives beside the
+ * rest of the key table, so the shortcuts panel and this cannot disagree.
  */
-export const TEXT_ALIGN_KEYS: Record<string, FontSpec['align']> = {
-  KeyL: 'left',
-  KeyT: 'center',
-  KeyR: 'right',
-  KeyJ: 'justify',
-};
+export { TEXT_ALIGN_KEYS } from './shortcuts';
 
 /** The text layers in a selection — the rest of it has no type to set. */
 function textNodes(store: DocStore, ids: string[]): string[] {
@@ -198,6 +267,40 @@ export function alignText(store: DocStore, ids: string[], align: FontSpec['align
   const texts = textNodes(store, ids);
   if (!texts.length) return false;
   store.updateMany(texts, (n) => ({ font: { ...(n.font ?? DEFAULT_FONT), align } }));
+  store.commit();
+  return true;
+}
+
+/**
+ * Figma's ⌘B / ⌘I / ⌘U / ⇧⌘X, with the layer selected rather than opened.
+ *
+ * In Figma you do not have to enter a text layer to embolden it — the marks act
+ * on the whole layer from the canvas, and on the selected characters once you
+ * are inside. This is the outer half; `TextEditor` has the inner one, and both
+ * go through `applyToRange` so a mark set from the canvas is the same mark the
+ * editor would have set.
+ *
+ * The layer is on when *all* of it is on, which is what makes the key a toggle:
+ * a layer with one bold word goes fully bold before it goes back to plain.
+ */
+export function toggleMark(
+  store: DocStore,
+  ids: string[],
+  mark: 'bold' | 'italic' | 'underline' | 'strike',
+): boolean {
+  const texts = textNodes(store, ids);
+  if (!texts.length) return false;
+  const doc = store.getSnapshot();
+
+  const every = texts.every((id) => {
+    const runs = runsOf(doc[id]);
+    return !!styleOfRange(runs, 0, plainText(runs).length)[mark];
+  });
+
+  store.updateMany(texts, (n) => {
+    const runs = runsOf(n);
+    return { runs: applyToRange(runs, 0, plainText(runs).length, { [mark]: every ? undefined : true }) };
+  });
   store.commit();
   return true;
 }

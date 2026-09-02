@@ -37,6 +37,10 @@ export function FlexHandles({ containerRef }: { containerRef: RefObject<HTMLDivE
   const viewport = useUI((s) => s.viewport);
   const editing = useUI((s) => s.editing);
   const vectorEdit = useUI((s) => s.vectorEdit);
+  // an armed tool owns the pointer, gap and padding grips included (C-27)
+  const tool = useUI((s) => s.tool);
+  const spacePan = useUI((s) => s.spacePan);
+  const armed = spacePan || (tool !== 'move' && tool !== 'scale');
   const [dragging, setDragging] = useState<{ target: Target; value: number } | null>(null);
   const [hovered, setHovered] = useState<0 | 1 | 2 | 3 | null>(null);
 
@@ -52,7 +56,7 @@ export function FlexHandles({ containerRef }: { containerRef: RefObject<HTMLDivE
   // measured together, so one layout pass covers the frame and its children
   const rects = useRects(id && flex ? [id, ...flowed] : [], containerRef);
 
-  if (!id || !node || !flex || readOnly || editing || vectorEdit) return null;
+  if (!id || !node || !flex || readOnly || editing || vectorEdit || armed) return null;
   const box = rects[id];
   if (!box) return null;
 

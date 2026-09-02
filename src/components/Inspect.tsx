@@ -16,6 +16,8 @@ import { toHtml, toJson, toReact } from '../export/toCode';
 import { toAndroidXml, toSwiftUI } from '../export/toNative';
 import { nodeStyle } from '../document/css';
 import { isInFlow, type Doc, type SceneNode } from '../document/types';
+import { measureAgainstParent } from '../lib/measure';
+import { useUI } from '../state/ui';
 
 /**
  * The handoff panel.
@@ -35,6 +37,7 @@ export function Inspect({ node }: { node?: SceneNode }) {
   const collections = useCollections();
   const fonts = useCustomFonts();
   const varNames = useVarNames();
+  const zoom = useUI((s) => s.viewport.zoom);
   const [format, setFormat] = useState<Format>('css');
   const [deep, setDeep] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -60,9 +63,20 @@ export function Inspect({ node }: { node?: SceneNode }) {
     }
   }, [node, doc, tokens, collections, varNames, format, deep]);
 
+  /**
+   * What is ready to build, wherever it is.
+   *
+   * Figma's Dev Mode answers "what should I build?" without anyone having to
+   * say which frame to look at, and a flag nothing lists cannot answer it. The
+   * list is here rather than in the layers panel because this is the panel a
+   * developer is already in.
+   */
+  const ready = Object.values(doc).filter((entry) => entry.devStatus === 'ready');
+
   if (!node) {
     return (
       <div className="scroll" style={{ flex: 1 }}>
+        {ready.length > 0 && <ReadyList ready={ready} />}
         <p className="fig-hint">
           Select a layer to inspect it. Everything here is the code the canvas is already rendering
           with — not a translation of it.
@@ -72,11 +86,12 @@ export function Inspect({ node }: { node?: SceneNode }) {
   }
 
   const style = nodeStyle(node, doc, varNames);
-  const spacing = gapsAround(node, doc);
+  const spacing = gapsAround(node, doc, zoom);
   const used = tokens.filter((token) => code.includes(`var(--${token.name})`));
 
   return (
     <div className="scroll" style={{ flex: 1 }}>
+      {ready.length > 0 && <ReadyList ready={ready} current={node.id} />}
       <FigSection title="Status">
         <div className="fig-row">
           <FigGroup
@@ -137,9 +152,9 @@ export function Inspect({ node }: { node?: SceneNode }) {
           <span>Type</span>
           <span>{node.type}</span>
           <span>Size</span>
-          <span>
-            {Math.round(node.w)} × {Math.round(node.h)}
-          </span>
+          {/* the laid-out size when the browser owns it, since that is the one
+              a developer is going to reproduce */}
+          <span>{spacing?.measured ? spacing.size : `${Math.round(node.w)} × ${Math.round(node.h)}`}</span>
           <span>Position</span>
           <span>
             {isInFlow(node, doc) ? 'laid out by its parent' : `${Math.round(node.x)}, ${Math.round(node.y)}`}
@@ -251,20 +266,55 @@ export function Inspect({ node }: { node?: SceneNode }) {
   );
 }
 
+/** Everything marked ready for dev, as a way into it. */
+function ReadyList({ ready, current }: { ready: SceneNode[]; current?: string }) {
+  const select = useUI((s) => s.select);
+  return (
+    <FigSection title={`Ready for dev · ${ready.length}`}>
+      <div className="fig-ready">
+        {ready.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            className="fig-ready-row"
+            data-ready={entry.id}
+            data-on={entry.id === current ? 'true' : undefined}
+            onClick={() => select([entry.id])}
+          >
+            {entry.name}
+          </button>
+        ))}
+      </div>
+    </FigSection>
+  );
+}
+
 /**
  * The gaps between a layer and its parent's edges.
  *
- * Read off the document rather than the DOM: these are the numbers a developer
- * writes down, and they should not change because the canvas is zoomed.
+ * The numbers a developer writes down, so they are in world units and do not
+ * change with the zoom — but where they come from depends on who owns the box.
+ * A layer the document positions is measured from the document. A layer in a
+ * flow, or one inside a frame sized by its own content, is positioned by the
+ * browser: `node.x` is then not where it is and `parent.w` is not how wide the
+ * parent is, and the panel was printing exactly the coordinates it refuses to
+ * show two rows above. Those are read back off the DOM, which is the same
+ * source the ⌥ ruler and the selection chrome already trust.
  */
-function gapsAround(node: SceneNode, doc: Doc) {
+function gapsAround(node: SceneNode, doc: Doc, zoom: number) {
   const parent = node.parent ? doc[node.parent] : null;
   if (!parent) return null;
+  const laidOut = isInFlow(node, doc) || parent.wMode === 'fit' || parent.hMode === 'fit';
+  const measured = laidOut ? measureAgainstParent(node.id, parent.id, zoom) : null;
+  const box = measured?.child ?? { x: node.x, y: node.y, w: node.w, h: node.h };
+  const outer = measured?.parent ?? { x: 0, y: 0, w: parent.w, h: parent.h };
   return {
-    top: Math.round(node.y),
-    left: Math.round(node.x),
-    right: Math.round(parent.w - (node.x + node.w)),
-    bottom: Math.round(parent.h - (node.y + node.h)),
+    measured: !!measured,
+    size: `${Math.round(box.w)} × ${Math.round(box.h)}`,
+    top: Math.round(box.y),
+    left: Math.round(box.x),
+    right: Math.round(outer.w - (box.x + box.w)),
+    bottom: Math.round(outer.h - (box.y + box.h)),
     padding: parent.flex ? parent.flex.padding.join(' ') : undefined,
     gap: parent.flex ? parent.flex.gap : undefined,
   };

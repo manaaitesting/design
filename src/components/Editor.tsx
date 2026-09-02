@@ -16,6 +16,7 @@ import { Present } from './Present';
 import { PromptBar } from './PromptBar';
 import { Resizer } from './Resizer';
 import { ShadersModal } from './ShadersModal';
+import { Shortcuts } from './Shortcuts';
 import { Timeline } from './Timeline';
 import { ToolRail, sampleColor } from './ToolRail';
 import { useCollections, useCustomFonts, useDoc, useStore, useTokens, useTokenVars } from './Session';
@@ -32,14 +33,19 @@ import { canEditPoints } from '../document/geometry';
 import { readNodes, writeNodes } from '../lib/clipboard';
 import {
   alignText,
+  componentize,
   copyAsPng,
   copyProperties,
   flip,
   pasteAt,
   pasteProperties,
   stepFontSize,
+  swapFillAndStroke,
   TEXT_ALIGN_KEYS,
+  toggleMark,
 } from '../lib/actions';
+import { measureChildren } from '../lib/measure';
+import { chordOf } from '../lib/shortcuts';
 import { download, safeFilename } from '../export/raster';
 import { toTailwind } from '../export/tailwind';
 
@@ -48,6 +54,9 @@ const TOOL_KEYS: Record<string, Tool> = {
   k: 'scale',
   h: 'pan',
   f: 'frame',
+  // Figma still ships the legacy Artboard key beside F, and its shortcut panel
+  // prints the tool as "Frame  F  A"
+  a: 'frame',
   r: 'rect',
   o: 'ellipse',
   l: 'line',
@@ -251,7 +260,9 @@ export function Editor({
     // for an empty file would mean an empty file never remembers where you
     // left it — which is exactly the file you are about to put something in.
     framed.current = true;
-    const fitted = fitView(doc, leftPanel, leftWidth, rightWidth);
+    // fitting magnifies now, but an opening view that greets you at 40× on a
+    // file holding one small layer reads as broken rather than as helpful
+    const fitted = fitView(doc, useUI.getState().page, leftPanel, leftWidth, rightWidth, 1);
     if (fitted) useUI.getState().setViewport(fitted);
   }, [doc, leftPanel, leftWidth, rightWidth, room, store]);
 
@@ -295,6 +306,20 @@ export function Editor({
       // Present runs its own keys; the editor's would fire underneath it
       if (ui.presenting) return;
 
+      /**
+       * Something in front of the canvas owns the keyboard while it is there.
+       *
+       * Export, Version history, Shaders and Rename cover the canvas and focus
+       * nothing, and an open context menu is on top of everything — so every
+       * canvas shortcut went on firing behind all five. ⌫ with the Export sheet
+       * open deleted the very layer the sheet was previewing; R armed a tool
+       * under an open menu. Escape is the way out of each, so it is the one key
+       * that still reaches the ladder below.
+       */
+      const covered =
+        ui.exportOpen || ui.shadersOpen || ui.renameOpen || !!ui.linkEditor || !!ui.contextMenu;
+      if (covered && event.key !== 'Escape') return;
+
       // ⇧⌘⏎ — play the prototype, as in Figma
       if (mod && event.shiftKey && event.key === 'Enter') {
         event.preventDefault();
@@ -323,15 +348,28 @@ export function Editor({
         ui.setPaletteOpen(!ui.paletteOpen);
         return;
       }
+      // ⌃⇧? — the shortcuts panel, on Figma's chord. `?` is ⇧/, so the key
+      // underneath is the slash and matching the character would need the shift
+      // taken back off it.
+      if (event.ctrlKey && event.shiftKey && !event.metaKey && event.code === 'Slash') {
+        event.preventDefault();
+        ui.setShortcutsOpen(!ui.shortcutsOpen);
+        return;
+      }
 
       if (event.key === 'Escape') {
-        if (ui.paletteOpen) ui.setPaletteOpen(false);
+        // the menu is on top of everything, so it is what Escape takes first —
+        // checked below vector editing, one press used to close both
+        if (ui.contextMenu) ui.setContextMenu(null);
+        else if (ui.paletteOpen) ui.setPaletteOpen(false);
+        else if (ui.shortcutsOpen) ui.setShortcutsOpen(false);
+        else if (ui.linkEditor) ui.setLinkEditor(null);
+        else if (ui.renameOpen) ui.setRenameOpen(false);
         else if (ui.vectorEdit) ui.setVectorEdit(null);
         else if (ui.exportOpen) ui.setExportOpen(false);
         else if (ui.versionsOpen) ui.setVersionsOpen(false);
         else if (ui.shadersOpen) ui.setShadersOpen(false);
         else if (ui.editing) ui.setEditing(null);
-        else if (ui.contextMenu) ui.setContextMenu(null);
         else if (ui.motion.frame) ui.openMotion(null);
         else if (ui.prompt) {
           ui.setPrompt(null);
@@ -408,9 +446,10 @@ export function Editor({
         if (framed) select([framed]);
         return;
       }
-      if (mod && event.altKey && event.code === 'KeyK' && selection.length === 1) {
+      if (mod && event.altKey && event.code === 'KeyK' && selection.length) {
         event.preventDefault();
-        store.createComponent(selection[0]);
+        const made = componentize(store, selection);
+        if (made) select([made]);
         return;
       }
       if (mod && event.altKey && BOOLEAN_KEYS[event.code] && selection.length > 1) {
@@ -549,6 +588,27 @@ export function Editor({
           return;
         }
       }
+      // ⌘B / ⌘I / ⌘U / ⇧⌘X — the text marks, from the canvas rather than from
+      // inside the layer, which is where Figma also puts them. They answer only
+      // on a text selection, so the keys stay free for everything else — and
+      // ⇧⌘X has to be caught here, because the ⌘X below never tested ⇧ and was
+      // cutting the layer to the clipboard instead of striking it through.
+      if (mod && !event.altKey && selection.length) {
+        const mark =
+          !event.shiftKey && event.code === 'KeyB'
+            ? 'bold'
+            : !event.shiftKey && event.code === 'KeyI'
+              ? 'italic'
+              : !event.shiftKey && event.code === 'KeyU'
+                ? 'underline'
+                : event.shiftKey && event.code === 'KeyX'
+                  ? 'strike'
+                  : null;
+        if (mark && toggleMark(store, selection, mark)) {
+          event.preventDefault();
+          return;
+        }
+      }
       // ⇧⌘< / ⇧⌘> — one point of type at a time. `<` is ⇧, so the key underneath
       // is the comma; matching the character would need the shift back off it.
       if (mod && event.shiftKey && !event.altKey && selection.length) {
@@ -629,6 +689,15 @@ export function Editor({
         flip(store, selection, event.code === 'KeyH' ? 'h' : 'v');
         return;
       }
+      // ⇧X — swap the fill and the stroke, which is the reason Figma moved
+      // Exclude off X and onto E. Checked before the ⌘X below, which does not
+      // test ⇧ and would otherwise cut the layer instead.
+      if (!mod && event.shiftKey && !event.altKey && event.code === 'KeyX' && selection.length) {
+        if (swapFillAndStroke(store, selection)) {
+          event.preventDefault();
+          return;
+        }
+      }
 
       // ── Clipboard ──────────────────────────────────────────────────────
       // The timeline's own selection takes the clipboard while it has one, in
@@ -691,11 +760,15 @@ export function Editor({
       }
 
       // ── Tools ──────────────────────────────────────────────────────────
-      if (!mod && event.shiftKey && SHIFT_TOOL_KEYS[event.key.toLowerCase()]) {
+      if (!mod && !event.altKey && event.shiftKey && SHIFT_TOOL_KEYS[event.key.toLowerCase()]) {
+        event.preventDefault();
         ui.setTool(SHIFT_TOOL_KEYS[event.key.toLowerCase()]);
         return;
       }
-      if (!mod && !event.shiftKey && TOOL_KEYS[event.key.toLowerCase()]) {
+      // ⌥ is never a tool key in Figma, and A is now one: without the guard
+      // ⌥A over an empty selection fell past the align branch and armed Frame
+      if (!mod && !event.altKey && !event.shiftKey && TOOL_KEYS[event.key.toLowerCase()]) {
+        event.preventDefault();
         ui.setTool(TOOL_KEYS[event.key.toLowerCase()]);
         return;
       }
@@ -766,10 +839,13 @@ export function Editor({
 
       // ⌫ belongs to the timeline while keyframes are selected there — the
       // panel removes them, and the layers they belong to stay where they are.
+      // It belongs to point editing for the whole time that is open: nothing in
+      // there may destroy the layer being edited.
       if (
         (event.key === 'Delete' || event.key === 'Backspace') &&
         selection.length &&
-        !ui.motion.selected.length
+        !ui.motion.selected.length &&
+        !ui.vectorEdit
       ) {
         event.preventDefault();
         store.remove(selection);
@@ -777,7 +853,25 @@ export function Editor({
         return;
       }
 
-      if (event.shiftKey && event.key.toLowerCase() === 'a' && selection.length) {
+      // ⌥⇧A takes auto layout back off, which is how Figma pairs it with ⇧A:
+      // you try a layout on and take it off again without going to the panel.
+      // Checked first — ⇧A never tested ⌥, so on a platform where ⌥ leaves the
+      // character alone it wrapped the frame in a second auto layout instead.
+      if (!mod && event.altKey && event.shiftKey && event.code === 'KeyA' && selection.length) {
+        const laid = selection.filter((id) => doc[id]?.flex);
+        if (laid.length) {
+          event.preventDefault();
+          // dropping the layout has to leave the children where they look, and
+          // only the browser knows where that is — the same measurement the
+          // inspector's own "no layout" makes
+          for (const id of laid) {
+            store.setAutoLayout(id, false, { measured: measureChildren(id, ui.viewport.zoom) });
+          }
+          store.commit();
+          return;
+        }
+      }
+      if (!event.altKey && event.shiftKey && event.key.toLowerCase() === 'a' && selection.length) {
         event.preventDefault();
         const id = store.autoLayoutSelection(selection);
         if (id) select([id]);
@@ -809,7 +903,15 @@ export function Editor({
       }
 
       // ── Nudge ──────────────────────────────────────────────────────────
-      if (event.key.startsWith('Arrow') && selection.length) {
+      // The timeline takes the arrows out of the canvas's hands in two cases,
+      // the same stand-down ⌫ and the clipboard already make: when keyframes
+      // are selected, because then the arrows move the keys — nudging the layer
+      // instead wrote a stray keyframe every time Record was armed — and when ⌥
+      // is held, which walks the playhead from key to key. A plain arrow with
+      // only layers selected still nudges the layer, and recording still
+      // records it, because that is what the panel is for.
+      const timelineHasTheArrows = !!ui.motion.frame && (ui.motion.selected.length > 0 || event.altKey);
+      if (event.key.startsWith('Arrow') && selection.length && !timelineHasTheArrows) {
         event.preventDefault();
 
         // A flowed child has no x/y to nudge, so the arrows move it along the
@@ -895,19 +997,21 @@ export function Editor({
         ui.zoomBy(1 / ZOOM.step);
         return;
       }
-      // the bare digits are Figma's opacity shortcuts, so these want a modifier
-      if (event.key === '0' && (mod || event.shiftKey)) {
+      // The bare digits are Figma's opacity shortcuts, so these want a modifier —
+      // and they match the physical key, because ⇧1 arrives as "!" and matching
+      // the character meant Figma's own ⇧1 / ⇧2 / ⇧0 did nothing at all here.
+      if (event.code === 'Digit0' && (mod || event.shiftKey)) {
         event.preventDefault();
         ui.zoomTo(1);
         return;
       }
-      if (event.key === '1' && (mod || event.shiftKey)) {
+      if (event.code === 'Digit1' && (mod || event.shiftKey)) {
         event.preventDefault();
-        const fitted = fitView(doc, leftPanel, ui.leftWidth, ui.rightWidth);
+        const fitted = fitView(doc, ui.page, leftPanel, ui.leftWidth, ui.rightWidth);
         if (fitted) ui.setViewport(fitted);
         return;
       }
-      if (event.key === '2' && (mod || event.shiftKey)) {
+      if (event.code === 'Digit2' && (mod || event.shiftKey)) {
         event.preventDefault();
         const bounds = selectionBounds(ui.selection, doc);
         const fitted = bounds && fitBounds(bounds, leftPanel, ui.leftWidth, ui.rightWidth);
@@ -916,8 +1020,24 @@ export function Editor({
       }
     };
 
+    /**
+     * What the shortcuts panel ticks.
+     *
+     * Registered after the handler above, so by the time it runs the handler has
+     * either claimed the key or not — and "claimed" is exactly the condition
+     * worth recording. Reading it here rather than in forty branches is what
+     * keeps the panel from having to be told about every one of them.
+     */
+    const learn = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) useUI.getState().markShortcut(chordOf(event));
+    };
+
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', learn);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', learn);
+    };
   }, [store, doc, leftPanel, tokenVars, tokens, collections, fonts]);
 
   return (
@@ -985,6 +1105,7 @@ export function Editor({
       <VersionHistory />
       <RenameDialog />
       <Palette />
+      <Shortcuts />
       <Present />
       <GlobalIconTooltips />
       </div>

@@ -188,11 +188,37 @@ export function interactionsOf(node: SceneNode | undefined): Interaction[] {
   return node?.interactions ?? [];
 }
 
+/**
+ * The artboards on a page, wherever they sit.
+ *
+ * A section is a way of organising a page's flows, not a way of taking boards
+ * out of the prototype — in Figma a frame inside one is still a destination, a
+ * flow starting point and a place a noodle can land. This walked
+ * `page.children` and so lost every board the moment it was put in a section:
+ * a noodle could still leave it, because the source side resolves through
+ * `topLevelOf`, but nothing could point at it.
+ */
+export function artboardsOn(doc: Doc, pageId: string): SceneNode[] {
+  const out: SceneNode[] = [];
+  for (const id of doc[pageId]?.children ?? []) {
+    const node = doc[id];
+    if (!node) continue;
+    if (node.type === 'frame') out.push(node);
+    // one level: Figma does not nest sections, and a frame inside a frame is a
+    // component of a screen rather than a screen
+    else if (node.type === 'section') {
+      for (const child of node.children) {
+        const inner = doc[child];
+        if (inner?.type === 'frame') out.push(inner);
+      }
+    }
+  }
+  return out;
+}
+
 /** Every frame you can navigate to: the artboards on this page. */
 export function destinationsOn(doc: Doc, pageId: string): SceneNode[] {
-  return (doc[pageId]?.children ?? [])
-    .map((id) => doc[id])
-    .filter((node): node is SceneNode => !!node && node.type === 'frame');
+  return artboardsOn(doc, pageId);
 }
 
 /** The artboard a layer belongs to — where a connection starts from. */
@@ -217,7 +243,10 @@ export function connectionsOn(doc: Doc, pageId: string): Connection[] {
     const node = doc[id];
     if (!node) return;
     for (const interaction of interactionsOf(node)) {
-      const to = interaction.action === 'navigate' ? interaction.destination : null;
+      // every action that points somewhere gets a line, not only navigate:
+      // an overlay or a scroll-to that Present honours was invisible on the
+      // canvas, which made those flows unreadable without opening the panel
+      const to = needsDestination(interaction.action) ? interaction.destination : null;
       if (to && doc[to]) out.push({ from: id, to, interaction });
     }
     for (const child of node.children) walk(child);
@@ -234,9 +263,8 @@ export interface Flow {
 
 /** Flow starting points, in document order — the list Present plays from. */
 export function flowsOn(doc: Doc, pageId: string): Flow[] {
-  return (doc[pageId]?.children ?? [])
-    .map((id) => doc[id])
-    .filter((node): node is SceneNode => !!node?.flowStart)
+  return artboardsOn(doc, pageId)
+    .filter((node) => !!node.flowStart)
     .map((node) => ({ id: node.id, name: node.flowStart || 'Flow 1' }));
 }
 

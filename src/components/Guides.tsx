@@ -1,5 +1,6 @@
 'use client';
 
+import { withAlpha } from '../document/css';
 import type { GuideSpec } from '../document/types';
 import { useUI } from '../state/ui';
 
@@ -10,10 +11,13 @@ import { useUI } from '../state/ui';
  * columns you measure against are not columns you ship.
  */
 export function Guides({ guides }: { guides: GuideSpec }) {
-  // two switches, as Figma has them: the frame carries one, and the view menu
-  // turns every frame's off at once while you look at the design without them
+  // two switches, as Figma has them: each grid on the frame carries its own eye,
+  // and the view menu turns every frame's off at once while you look at the
+  // design without them
   const shown = useUI((state) => state.view.layoutGuides);
   if (!guides.visible || !shown) return null;
+
+  const paint = withAlpha(guides.color, guides.opacity ?? 1);
 
   const base: React.CSSProperties = {
     position: 'absolute',
@@ -28,7 +32,7 @@ export function Guides({ guides }: { guides: GuideSpec }) {
       <div
         style={{
           ...base,
-          backgroundImage: `linear-gradient(to right, ${guides.color} 1px, transparent 1px), linear-gradient(to bottom, ${guides.color} 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(to right, ${paint} 1px, transparent 1px), linear-gradient(to bottom, ${paint} 1px, transparent 1px)`,
           backgroundSize: `${size}px ${size}px`,
         }}
       />
@@ -58,10 +62,10 @@ export function Guides({ guides }: { guides: GuideSpec }) {
           key={i}
           style={
             stretch
-              ? { flex: '1 1 0', background: guides.color }
+              ? { flex: '1 1 0', background: paint }
               : {
                   flex: 'none',
-                  background: guides.color,
+                  background: paint,
                   [isColumns ? 'width' : 'height']: Math.max(1, guides.width ?? 64),
                 }
           }

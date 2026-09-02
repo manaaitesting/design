@@ -176,6 +176,42 @@ test('the menu closes others, the rest, and all of them', async ({ page }) => {
   await expect(page).toHaveURL(/\/files$/);
 });
 
+/**
+ * The tab menu is the same menu as the canvas's.
+ *
+ * It used to be a second implementation drawn at raw pointer coordinates, so a
+ * right-click near the right edge — where the tab you just opened lives — hung
+ * its rows off the window, and Escape fell through to the canvas's own chain
+ * and cleared the selection instead of closing it.
+ */
+test('the tab menu stays on screen at the edge, and Escape closes it and nothing else', async ({ page }) => {
+  await open(page, DEMO);
+  const picked = await page.evaluate(() => {
+    const nodes = window.paperlike!.doc();
+    const id = Object.keys(nodes).find((key) => nodes[key].parent) ?? null;
+    if (id) window.paperlike!.ui.getState().select([id]);
+    return id;
+  });
+  expect(picked).toBeTruthy();
+
+  // narrow enough that the tab is inside a menu's width of the right edge,
+  // which is where every tab ends up once a few files are open
+  await page.setViewportSize({ width: 380, height: 800 });
+  const strip = (await tab(page, 'Vinyl Sundays').boundingBox())!;
+  await page.mouse.click(strip.x + strip.width - 4, strip.y + strip.height / 2, { button: 'right' });
+
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  const box = (await menu.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(380);
+
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  // the canvas's own Escape chain used to run instead, and take the selection
+  expect(await page.evaluate(() => window.paperlike!.ui.getState().selection)).toEqual([picked]);
+});
+
 test('⌘\\ takes the strip away with the rest of the chrome', async ({ page }) => {
   await open(page, SCRATCH);
   await expect(page.locator('.fig-topbar')).toBeVisible();

@@ -203,6 +203,49 @@ test('the card becomes an Android layout with its own numbers', () => {
 });
 
 /**
+ * A link on a range of characters is an anchor.
+ *
+ * `linked()` reads the layer's own `link` and nothing else, so a run that
+ * carried one came out as a blue span — visibly a link and clickable by
+ * nobody. The words in the middle of a sentence are where a link usually is.
+ */
+test('a link on a run exports as an anchor around exactly those characters', () => {
+  const doc: Doc = {
+    [ROOT_ID]: makeNode(ROOT_ID, 'page', null, { children: ['line'] }),
+    line: makeNode('line', 'text', ROOT_ID, {
+      name: 'Consent',
+      x: 0,
+      y: 0,
+      w: 320,
+      h: 20,
+      text: 'read our Terms first',
+      runs: [
+        { text: 'read our ' },
+        { text: 'Terms', link: 'https://example.com/terms' },
+        { text: ' first' },
+      ],
+      font: {
+        family: 'Inter',
+        size: 14,
+        weight: 400,
+        lineHeight: 1.4,
+        letterSpacing: 0,
+        align: 'left',
+        color: '#101828',
+      },
+    }),
+  };
+
+  const html = toHtml('line', doc, [], [], []);
+
+  expect(html).toContain('<a href="https://example.com/terms"');
+  expect(html).toMatch(/<a [^>]*>[^<]*<span[^>]*>Terms<\/span><\/a>/);
+  // and the words either side of it are outside the anchor
+  expect(html.match(/<a /g)?.length).toBe(1);
+  expect(html).not.toMatch(/<a[^>]*>[^<]*read our/);
+});
+
+/**
  * Text on a path exports as the SVG the canvas drew, not as a picture of it.
  *
  * This is the assertion that says the feature kept the invariant: the glyphs in

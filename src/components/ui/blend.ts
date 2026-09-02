@@ -32,6 +32,29 @@ export const BLEND_MODES: BlendMode[] = [
   { value: 'luminosity', label: 'Luminosity' },
 ];
 
+/**
+ * A group's extra mode, and its default.
+ *
+ * Pass through is the absence of a stacking context: a Multiply child inside
+ * the group blends against whatever is behind the group. Choosing Normal
+ * instead isolates it, so the child blends only against its siblings. Only a
+ * container can be either, which is why this is not in the list above — a
+ * rectangle offering "Pass through" would be offering nothing.
+ */
+export const PASS_THROUGH: BlendMode = { value: 'pass-through', label: 'Pass through' };
+
+export function blendModes(container: boolean): BlendMode[] {
+  if (!container) return BLEND_MODES;
+  const [normal, ...rest] = BLEND_MODES;
+  return [PASS_THROUGH, { ...normal, divider: true }, ...rest];
+}
+
+/** Neither of the two quiet modes composites the layer against anything. */
+export function blends(value: string): boolean {
+  return value !== 'normal' && value !== PASS_THROUGH.value;
+}
+
 export function blendLabel(value: string): string {
+  if (value === PASS_THROUGH.value) return PASS_THROUGH.label;
   return BLEND_MODES.find((mode) => mode.value === value)?.label ?? 'Normal';
 }

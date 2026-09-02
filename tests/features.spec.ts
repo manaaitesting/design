@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-import { doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { FILE, doc, dragBy, makeNode, nodeNamed, openEditor, removeNodes, select, selection } from './helpers';
 
 /**
  * The Figma-parity work: shapes, booleans, masks, point editing, the scale
@@ -306,10 +306,13 @@ test('a frame set to another variable mode publishes that mode’s values', asyn
 
   const modes = await page.evaluate((frame) => {
     const store = window.paperlike!.store;
-    const collection = store.listCollections()[0];
-    // in the collection whose mode the frame is about to override — an earlier
-    // test may have left another collection first in the list
-    const token = store.addToken({ name: 'probe-surface', type: 'color', value: '#FFFFFF', collection: collection.id });
+    // The default collection by name, not by position. A token created without
+    // one belongs to the default, and the suite shares a document that other
+    // tests have added collections to — `[0]` was whichever of them sorted
+    // first, and the mode was then set on a collection the token is not in.
+    const collections = store.listCollections();
+    const collection = collections.find((entry) => entry.id === 'default') ?? collections[0];
+    const token = store.addToken({ name: 'probe-surface', type: 'color', value: '#FFFFFF' });
     const dark = store.addMode(collection.id, 'Dark')!;
     store.setTokenValue(token, dark, '#101010');
     store.setNodeMode(frame, collection.id, dark);
@@ -332,6 +335,56 @@ test('a frame set to another variable mode publishes that mode’s values', asyn
     store.removeToken(state.token);
     store.removeMode(state.collection, state.dark);
   }, modes as unknown as { token: string; collection: string; dark: string });
+});
+
+/**
+ * Text sizing is three states in Figma — Auto width, Auto height, Fixed — and
+ * the handles are how you move between them. Every handle used to write both
+ * axes fixed, so setting a column width by dragging the side of a text also
+ * pinned its height, and the next sentence typed into it overflowed the box
+ * instead of growing it.
+ */
+test("a text's side handle sets a column width and leaves the height to the copy", async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  const id = await makeNode(page, 'text', {
+    name: 'Column',
+    x: 400,
+    y: 400,
+    w: 120,
+    h: 24,
+    wMode: 'fit',
+    hMode: 'fit',
+    text: 'hello brave new world',
+  });
+  await select(page, [id]);
+
+  const side = await page.locator('[data-handle="e"]').boundingBox();
+
+  await dragBy(page, { x: side!.x + side!.width / 2, y: side!.y + side!.height / 2 }, { x: 80, y: 0 });
+  const after = (await doc(page))[id];
+  expect([after.wMode, after.hMode]).toEqual(['fixed', 'fit']);
+
+  // the bottom is what pins the height, and it leaves the width alone
+  const bottom = await page.locator('[data-handle="s"]').boundingBox();
+  await dragBy(page, { x: bottom!.x + bottom!.width / 2, y: bottom!.y + bottom!.height / 2 }, { x: 0, y: 40 });
+  expect((await doc(page))[id].hMode).toBe('fixed');
+  await removeNodes(page, [id]);
+});
+
+test('a text dragged out with the T tool keeps the width you dragged', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setTool('text'));
+  await page.mouse.move(700, 640);
+  await page.mouse.down();
+  await page.mouse.move(900, 700);
+  await page.mouse.up();
+  await page.keyboard.press('Escape');
+
+  const nodes = await doc(page);
+  const drawn = Object.values(nodes).find((n) => n.type === 'text' && Math.round(n.w) === 200);
+  expect(drawn).toBeTruthy();
+  // the drag chose a column: the width is kept, the height still follows the copy
+  expect([drawn!.wMode, drawn!.hMode]).toEqual(['fixed', 'fit']);
+  await removeNodes(page, [drawn!.id]);
 });
 
 test.describe('rich text', () => {
@@ -394,6 +447,220 @@ test.describe('rich text', () => {
       selection?.removeAllRanges();
       selection?.addRange(range);
     }, [from, to] as const);
+
+  /** A text layer with the given type spec, and the caret in it. */
+  const seedTyped = async (
+    page: import('@playwright/test').Page,
+    text: string,
+    font: Record<string, unknown>,
+  ) => {
+    const board = (await nodeNamed(page, 'Fixture Board'))!;
+    return page.evaluate(
+      ([parent, body, spec]) => {
+        const store = window.paperlike!.store;
+        const id = store.create('text', parent as string, {
+          name: 'Typed',
+          x: 20,
+          y: 120,
+          w: 300,
+          h: 120,
+          wMode: 'fixed',
+          hMode: 'fixed',
+          text: body as string,
+          font: {
+            family: 'Inter, system-ui, sans-serif',
+            size: 16,
+            weight: 400,
+            lineHeight: 1.4,
+            letterSpacing: 0,
+            align: 'left',
+            color: '#111111',
+            ...(spec as Record<string, unknown>),
+          },
+        });
+        store.commit();
+        return id;
+      },
+      [board.id, text, font] as const,
+    );
+  };
+
+  /**
+   * Editing is in place, so nothing about the block may move when the caret
+   * appears. It used to: the editor replaced the rendered list with one flat
+   * span per run, so the bullets and the paragraph gaps vanished on the first
+   * double-click — and because the model counts a line break the DOM does not,
+   * the offsets have to survive the real blocks too.
+   */
+  test('entering a bulleted layer keeps its bullets, its gaps and its offsets', async ({ page }) => {
+    const id = await seedTyped(page, 'One\nTwo\nThree', { list: 'bullet', paragraphSpacing: 12 });
+    await enter(page, id);
+
+    const editable = page.locator('[contenteditable]');
+    await expect(editable.locator('ul > li')).toHaveCount(3);
+    const gap = await editable
+      .locator('li')
+      .nth(1)
+      .evaluate((el) => getComputedStyle(el).marginTop);
+    expect(gap).toBe('12px');
+
+    // the second item, selected as the browser reports it — a block boundary is
+    // a character in the model and none in the DOM
+    await page.evaluate(() => {
+      const item = document.querySelectorAll('[contenteditable] li')[1];
+      const range = document.createRange();
+      range.selectNodeContents(item);
+      const live = window.getSelection();
+      live?.removeAllRanges();
+      live?.addRange(range);
+    });
+    await page.keyboard.press('Meta+b');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.bold ? '*' : ''}`))
+      .toEqual(['One\n', 'Two*', '\nThree']);
+    await removeNodes(page, [id]);
+  });
+
+  test('a truncated layer shows every line while you are editing it', async ({ page }) => {
+    const id = await seedTyped(page, 'One\nTwo\nThree', { maxLines: 1 });
+    const clamped = await page
+      .locator(`[data-node-id="${id}"]`)
+      .evaluate((el) => getComputedStyle(el).webkitLineClamp);
+    expect(clamped).toBe('1');
+
+    await enter(page, id);
+    const editing = await page
+      .locator('[contenteditable]')
+      .evaluate((el) => [getComputedStyle(el).webkitLineClamp, getComputedStyle(el).overflow]);
+    expect(editing).toEqual(['none', 'visible']);
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * ⌘K did nothing at all with the caret in the text: the editable stops every
+   * key before the window handler sees it, so the only way to link was with the
+   * layer selected, which linked every character in it. A footer's consent line
+   * or a card's "Learn more" mid-sentence could not be expressed.
+   */
+  test('⌘K links the selected characters, and nothing either side of them', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    await selectRange(page, 6, 11);
+    await page.keyboard.press('Meta+k');
+
+    const address = page.locator('.fig-range-bar input[type="url"]');
+    await expect(address).toBeVisible();
+    await address.fill('https://example.com/brave');
+    await address.press('Enter');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.link ? '→' : ''}`))
+      .toEqual(['hello ', 'brave→', ' new world']);
+    // the layer itself is not a link, which is what ⌘K used to make it
+    expect((await doc(page))[id].link ?? null).toBe(null);
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * A list style belongs to the paragraphs it is applied to, not to the layer.
+   * It used to live on `FontSpec`, so turning bullets on wrapped every line of
+   * the layer in an `<li>` — a heading with three bullets under it had to be
+   * two text layers aligned by hand.
+   */
+  test('bullets apply to the selected paragraphs, leaving the heading alone', async ({ page }) => {
+    const id = await seedTyped(page, 'Heading\nOne\nTwo', {});
+    await enter(page, id);
+    await selectRange(page, 8, 15);
+    await page.locator('.fig-range-bar button[title="Bulleted list"]').click();
+
+    const editable = page.locator('[contenteditable]');
+    await expect(editable.locator('ul > li')).toHaveCount(2);
+    await expect(editable.locator('> div')).toHaveCount(1);
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * Tab was not claimed at all while editing, so the browser's default ran:
+   * focus left the contentEditable, `onBlur` fired, and the edit was committed
+   * and closed. Reaching for it to nest a sub-bullet ended the session.
+   */
+  test('⇥ nests the list item it is in, and does not end the edit', async ({ page }) => {
+    const id = await seedTyped(page, 'One\nTwo', { list: 'bullet' });
+    await enter(page, id);
+    await selectRange(page, 5, 5);
+    await page.keyboard.press('Tab');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}@${run.indent ?? 0}`))
+      .toEqual(['One\n@0', 'Two@1']);
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().editing)).toBe(id);
+    // the nested item is a list of its own, stepped in from its parent
+    await expect(page.locator('[contenteditable] ul')).toHaveCount(2);
+
+    await page.keyboard.press('Shift+Tab');
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.some((run) => run.indent))
+      .toBeFalsy();
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * ⏎ starts a paragraph and ⇧⏎ breaks a line inside one. The model used to
+   * have a single delimiter, so paragraph spacing opened up between every line
+   * and every line of a bulleted layer became its own bullet — an address
+   * block or a two-line list item could not be written at all.
+   */
+  test('⇧⏎ breaks the line inside the paragraph rather than starting one', async ({ page }) => {
+    const id = await seedTyped(page, 'OneTwo', {});
+    await enter(page, id);
+    await selectRange(page, 3, 3);
+    await page.keyboard.press('Shift+Enter');
+
+    await expect.poll(async () => (await doc(page))[id].text).toBe('One\u2028Two');
+    await removeNodes(page, [id]);
+  });
+
+  test('a soft break is a line in the paragraph, not a bullet and not a gap', async ({ page }) => {
+    const id = await seedTyped(page, 'One\u2028Two\nThree', {
+      list: 'bullet',
+      paragraphSpacing: 12,
+    });
+
+    // two bullets, not three: the ⇧⏎ line rides inside the first item
+    const items = page.locator(`[data-node-id="${id}"] li`);
+    await expect(items).toHaveCount(2);
+    await expect(items.first().locator('br')).toHaveCount(1);
+    const gaps = await items.evaluateAll((els) => els.map((el) => getComputedStyle(el).marginTop));
+    expect(gaps).toEqual(['0px', '12px']);
+    await removeNodes(page, [id]);
+  });
+
+  /**
+   * Figma's Text panel belongs to the selected characters whenever there are
+   * any — that is how a price gets a small currency symbol — so the size field
+   * has to write the range and read it back, Mixed included, rather than
+   * restyling the whole layer under the highlight.
+   */
+  test('the type panel sizes the selected characters, and says Mixed over two sizes', async ({ page }) => {
+    const id = await seed(page);
+    await enter(page, id);
+    await selectRange(page, 6, 11);
+
+    const size = page.locator('.fig .fig-input[title="Size"] input');
+    await size.fill('40');
+    await size.press('Enter');
+
+    await expect
+      .poll(async () => (await doc(page))[id].runs?.map((run) => `${run.text}${run.size ?? ''}`))
+      .toEqual(['hello ', 'brave40', ' new world']);
+    // the layer's own size is what the rest of the sentence still reads at
+    expect((await doc(page))[id].font?.size).toBe(16);
+
+    await selectRange(page, 0, 21);
+    await expect(size).toHaveValue('Mixed');
+    await removeNodes(page, [id]);
+  });
 
   test('the bar over a selection bolds exactly that range', async ({ page }) => {
     const id = await seed(page);
@@ -1614,6 +1881,34 @@ test.describe('view options', () => {
     await removeNodes(page, [id]);
   });
 
+  test('outlines draws text as hollow glyphs rather than erasing it', async ({ page }) => {
+    const id = await makeNode(page, 'text', {
+      name: 'Readable', x: 40, y: 1280, w: 200, h: 40, text: 'Still legible', fill: '#111111',
+    });
+    const stroke = () =>
+      page.evaluate((id) => {
+        const el = document.querySelector<HTMLElement>(`[data-canvas-root] [data-node-id="${id}"]`);
+        const style = getComputedStyle(el!);
+        return { width: style.webkitTextStrokeWidth, color: style.color };
+      }, id);
+    expect((await stroke()).width).toBe('0px');
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await page.keyboard.press('Escape');
+
+    // the fill goes, but the letterforms stay — the mode exists to tell you
+    // which box is which, and empty boxes cannot
+    const outlined = await stroke();
+    expect(outlined.color).toBe('rgba(0, 0, 0, 0)');
+    expect(parseFloat(outlined.width)).toBeGreaterThan(0);
+
+    await openView(page);
+    await page.getByRole('option', { name: /Outlines/ }).click();
+    await page.keyboard.press('Escape');
+    await removeNodes(page, [id]);
+  });
+
   test('the zoom field takes a number and goes there', async ({ page }) => {
     await openView(page);
     await page.getByLabel('Zoom', { exact: true }).fill('150');
@@ -1747,6 +2042,28 @@ test('the Measure tool latches the readout that ⌥ gives you', async ({ page })
   expect(await page.evaluate(() => window.paperlike!.ui.getState().measuring)).toBe(false);
 
   await page.locator('.fig-tab', { hasText: 'Design' }).last().click();
+});
+
+test('⌥ measures from the whole selection, and marks the edge it read', async ({ page }) => {
+  await page.evaluate(() => window.paperlike!.ui.getState().setViewport({ x: 0, y: 0, zoom: 1 }));
+  const a = await makeNode(page, 'rect', { name: 'MeasA', x: 100, y: 100, w: 50, h: 50, fill: '#4CC3F0' });
+  const b = await makeNode(page, 'rect', { name: 'MeasB', x: 300, y: 100, w: 50, h: 50, fill: '#4CC3F0' });
+  const c = await makeNode(page, 'rect', { name: 'MeasC', x: 500, y: 400, w: 60, h: 60, fill: '#F2637F' });
+  await select(page, [a, b]);
+  await page.evaluate(() => window.paperlike!.ui.getState().setMeasuring(true));
+
+  const box = (await page.locator(`[data-node-id="${c}"]`).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+  // the selection ends at 350, not at 150 where its first member ends
+  await expect(page.getByText('150', { exact: true })).toBeVisible();
+  await expect(page.getByText('350', { exact: true })).toHaveCount(0);
+  // and the hovered layer is nowhere near the line, so a dashed run says which
+  // of its edges the number was taken from
+  await expect(page.locator('[data-measure="extension"]').first()).toBeVisible();
+
+  await page.evaluate(() => window.paperlike!.ui.getState().setMeasuring(false));
+  await removeNodes(page, [a, b, c]);
 });
 
 /**
@@ -2477,5 +2794,255 @@ test.describe('flex handles', () => {
     await expect(page.locator('.fig-flex-gap')).toHaveCount(0);
     await expect(page.locator('.fig-flex-pad')).toHaveCount(0);
     await removeNodes(page, [plain]);
+  });
+});
+
+/**
+ * The file that never arrives.
+ *
+ * The editor's own openEditor helper waits for the document, so nothing in the
+ * suite had ever looked at what the canvas does before it lands — which is
+ * where the whole page used to render over an empty document and refuse every
+ * gesture without saying a word.
+ */
+test('a document that never arrives says so instead of offering an empty canvas', async ({
+  page,
+}) => {
+  // The socket opens and then says nothing: a sync server that is up but
+  // wedged, and a first load on a connection that has stalled, look the same
+  // from here. Only the file's own socket — intercepting every ws: takes the
+  // dev server's hot-reload channel with it, and the page never hydrates.
+  await page.routeWebSocket(new RegExp(`/${FILE.split('/').pop()}\\?`), () => {});
+  await page.goto(FILE);
+
+  await expect(page.getByText('Cannot reach the sync server')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('[data-canvas-root]')).toHaveCount(0);
+});
+
+test('an image the browser cannot decode is refused rather than placed', async ({ page }) => {
+  // A .heic dragged out of Photos is the common one: it carries an image mime,
+  // so the type and size guards both wave it through and only the decode is
+  // left to say no.
+  const chooser = page.waitForEvent('filechooser');
+  await page.keyboard.press('Shift+Meta+k');
+  await (await chooser).setFiles({
+    name: 'Undecodable.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('this is not a png'),
+  });
+
+  await expect(page.getByText(/Undecodable\.png could not be decoded/)).toBeVisible();
+  await expect(page.locator('[data-canvas-root]')).not.toHaveAttribute('data-placing', 'true');
+  expect(await nodeNamed(page, 'Undecodable')).toBeUndefined();
+});
+
+/**
+ * Comments.
+ *
+ * A remark is about something, and the something moves. These go through the
+ * real comment tool rather than the store, because what is being checked is
+ * where the pin ends up on screen.
+ */
+test.describe('comments', () => {
+  /** Leaves a comment by clicking at a screen point, as a reviewer does. */
+  async function leaveComment(page: Page, at: { x: number; y: number }, body: string) {
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('comment'));
+    await page.mouse.click(at.x, at.y);
+    await page.getByPlaceholder('Leave a comment…').fill(body);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.fig-pin')).toHaveCount(1);
+  }
+
+  const clearComments = (page: Page) =>
+    page.evaluate(() => {
+      const store = window.paperlike!.store;
+      for (const comment of store.listComments()) store.removeComment(comment.id);
+    });
+
+  test('a pin travels with the layer it was left on', async ({ page }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'this crop is tight');
+
+    const before = (await page.locator('.fig-pin').boundingBox())!;
+    await page.evaluate((id) => window.paperlike!.store.update(id, { x: 140 }), cover.id);
+
+    await expect
+      .poll(async () => Math.round((await page.locator('.fig-pin').boundingBox())!.x - before.x))
+      .toBe(100);
+
+    await clearComments(page);
+  });
+
+  test('a pin left on empty canvas stays where it was dropped', async ({ page }) => {
+    const board = (await nodeNamed(page, 'Fixture Board'))!;
+    const box = (await page.locator(`[data-node-id="${board.id}"]`).boundingBox())!;
+    // well clear of the board, so nothing is under the click
+    await leaveComment(page, { x: box.x + box.width + 200, y: box.y + 40 }, 'nothing here');
+
+    const anchored = await page.evaluate(
+      () =>
+        window.paperlike!.store.listComments(window.paperlike!.ui.getState().page)[0]?.anchor ??
+        null,
+    );
+    expect(anchored).toBeNull();
+
+    await clearComments(page);
+  });
+
+  test('an agreement is a reaction on the message, not another reply', async ({ page }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'shall we ship this crop?');
+
+    await page.locator('.fig-pin').click();
+    await page.getByTitle('React').click();
+    await page.locator('.fig-react-pick > button', { hasText: '👍' }).click();
+    await expect(page.locator('.fig-react-chip[data-mine]')).toHaveText('👍 1');
+
+    // it cost the thread nothing: still one message
+    const stored = await page.evaluate(() => window.paperlike!.store.listComments()[0]);
+    expect(stored.replies).toHaveLength(0);
+    expect(Object.keys(stored.reactions ?? {})).toEqual(['👍']);
+
+    // and clicking it again takes it back
+    await page.locator('.fig-react-chip[data-mine]').click();
+    await expect(page.locator('.fig-react-chip[data-mine]')).toHaveCount(0);
+
+    await clearComments(page);
+  });
+
+  test('a mention is a person the picker resolved, not a prefix of a name', async ({ page }) => {
+    // typed but never resolved: the prefix match used to light this pin up for
+    // everyone whose name begins with an a
+    await leaveComment(page, { x: 900, y: 250 }, 'ask @a about the crop');
+    await expect(page.locator('.fig-pin[data-mine]')).toHaveCount(0);
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setTool('comment'));
+    await page.mouse.click(1000, 250);
+    const box = page.getByPlaceholder('Leave a comment…');
+    await box.fill('@a');
+    await page.locator('.fig-mention-option', { hasText: 'Ada' }).click();
+    await expect(box).toHaveValue('@Ada ');
+    await box.fill('@Ada does this crop work?');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator('.fig-pin')).toHaveCount(2);
+    await expect(page.locator('.fig-pin[data-mine]')).toHaveCount(1);
+
+    await clearComments(page);
+  });
+
+  test('the panel lists a thread on another page, and a click goes to it', async ({ page }) => {
+    const away = await page.evaluate(() => window.paperlike!.store.addPage('Elsewhere'));
+    await page.evaluate(
+      (id) =>
+        window.paperlike!.store.addComment({
+          page: id,
+          x: 40,
+          y: 40,
+          authorId: 'ada',
+          authorName: 'Ada',
+          authorColor: '#BDEE63',
+          body: 'the hero on page two is still the old one',
+        }),
+      away,
+    );
+
+    await page.getByRole('button', { name: 'Comments', exact: true }).click();
+    const row = page.locator('.fig-thread', { hasText: 'the hero on page two' });
+    await expect(row).toBeVisible();
+    await row.click();
+    expect(await page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(away);
+
+    await page.evaluate(() => window.paperlike!.ui.getState().setPage('root'));
+    await page.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    await clearComments(page);
+  });
+
+  test('a resolved thread is still reachable once the comment tool is put down', async ({
+    page,
+  }) => {
+    const cover = (await nodeNamed(page, 'Cover'))!;
+    const box = (await page.locator(`[data-node-id="${cover.id}"]`).boundingBox())!;
+    await leaveComment(page, { x: box.x + 60, y: box.y + 60 }, 'the crop is tight');
+
+    await page.locator('.fig-pin').click();
+    await page.getByRole('button', { name: 'Resolve', exact: true }).click();
+    await expect(page.locator('.fig-pin')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Comments', exact: true }).click();
+    await expect(page.locator('.fig-thread')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Resolved', exact: true }).click();
+    await expect(page.locator('.fig-thread', { hasText: 'the crop is tight' })).toBeVisible();
+
+    await clearComments(page);
+  });
+});
+
+/**
+ * Presence is scoped to a page.
+ *
+ * Every page in a file draws into the same world space, so until awareness
+ * carried a page id a peer two pages away left a named pointer wandering over
+ * artwork they were not even looking at, and Follow — which exists for exactly
+ * the review where someone walks between pages — copied their viewport and left
+ * you staring at empty canvas.
+ */
+test.describe('presence across pages', () => {
+  /** A second tab in the same file: a real peer, with its own awareness state. */
+  async function peer(context: BrowserContext): Promise<Page> {
+    const other = await context.newPage();
+    await other.goto(FILE);
+    await other.waitForFunction(() => !!window.paperlike, null, { timeout: 20_000 });
+    await other.waitForFunction(() => !!window.paperlike!.doc().root);
+    return other;
+  }
+
+  const leave = (other: Page) =>
+    other.evaluate(() => {
+      const id = window.paperlike!.store.addPage('Elsewhere');
+      window.paperlike!.ui.getState().setPage(id);
+      return id;
+    });
+
+  test('a cursor on another page does not draw on yours', async ({ page, context }) => {
+    const other = await peer(context);
+    try {
+      // beside you, on the page you are both on
+      await other.mouse.move(700, 500);
+      await expect(page.getByText('Ada', { exact: true })).toBeVisible();
+
+      const away = await leave(other);
+      await other.mouse.move(720, 520);
+      await expect(page.getByText('Ada', { exact: true })).toHaveCount(0);
+
+      await other.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    } finally {
+      await other.close();
+    }
+  });
+
+  test('following someone who walks to another page takes you with them', async ({
+    page,
+    context,
+  }) => {
+    const other = await peer(context);
+    try {
+      await other.mouse.move(700, 500);
+      await page.getByTitle('Follow Ada').click();
+      await expect(page.getByText('Following Ada')).toBeVisible();
+
+      const away = await leave(other);
+      await expect.poll(() => page.evaluate(() => window.paperlike!.ui.getState().page)).toBe(away);
+
+      await page.evaluate(() => {
+        window.paperlike!.ui.getState().setFollowing(null);
+        window.paperlike!.ui.getState().setPage('root');
+      });
+      await other.evaluate((id) => window.paperlike!.store.removePage(id), away);
+    } finally {
+      await other.close();
+    }
   });
 });

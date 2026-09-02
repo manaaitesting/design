@@ -34,7 +34,7 @@ function ZoomMenu({ zoom }: { zoom: number }) {
   const items: { label: string; tag: string; divider?: boolean; run: () => void }[] = [
     { label: 'Zoom in', tag: '⌘+', run: () => useUI.getState().zoomBy(ZOOM.step) },
     { label: 'Zoom out', tag: '⌘−', run: () => useUI.getState().zoomBy(1 / ZOOM.step) },
-    { label: 'Zoom to fit', tag: '⇧1', divider: true, run: () => frame(contentBounds(doc)) },
+    { label: 'Zoom to fit', tag: '⇧1', divider: true, run: () => frame(contentBounds(doc, useUI.getState().page)) },
     {
       label: 'Zoom to selection',
       tag: '⇧2',
@@ -177,6 +177,7 @@ function Avatar({
   color,
   title,
   active,
+  away,
   onClick,
 }: {
   name: string;
@@ -184,6 +185,8 @@ function Avatar({
   title: string;
   /** ringed while you are following them, as Figma rings the person you follow */
   active?: boolean;
+  /** they are in the file but on another page — Figma dims them */
+  away?: boolean;
   onClick?: () => void;
 }) {
   const Tag = onClick ? 'button' : 'div';
@@ -205,6 +208,7 @@ function Avatar({
         display: 'grid',
         placeItems: 'center',
         boxShadow: active ? `0 0 0 2px #fff, 0 0 0 4px ${color}` : '0 0 0 2px #fff',
+        opacity: away ? 0.4 : undefined,
         marginLeft: -4,
         fontSize: 11,
         flex: 'none',
@@ -221,6 +225,7 @@ export function Presence() {
   const others = usePresence();
   const doc = useDoc();
   const viewport = useUI((s) => s.viewport);
+  const page = useUI((s) => s.page);
   const [copied, setCopied] = useState(false);
   const following = useUI((s) => s.following);
   const setFollowing = useUI((s) => s.setFollowing);
@@ -262,20 +267,26 @@ export function Presence() {
             }
             onClick={() => setSpotlight(!spotlight)}
           />
-          {others.map((p) => (
-            <Avatar
-              key={p.clientId}
-              name={p.identity.name}
-              color={p.identity.color}
-              active={following === p.clientId}
-              title={
-                following === p.clientId
-                  ? `Following ${p.identity.name} — click to stop`
-                  : `Follow ${p.identity.name}`
-              }
-              onClick={() => setFollowing(following === p.clientId ? null : p.clientId)}
-            />
-          ))}
+          {others.map((p) => {
+            const elsewhere = !!p.page && p.page !== page;
+            return (
+              <Avatar
+                key={p.clientId}
+                name={p.identity.name}
+                color={p.identity.color}
+                active={following === p.clientId}
+                away={elsewhere}
+                title={
+                  following === p.clientId
+                    ? `Following ${p.identity.name} — click to stop`
+                    : elsewhere
+                      ? `Follow ${p.identity.name} — on ${doc[p.page]?.name ?? 'another page'}`
+                      : `Follow ${p.identity.name}`
+                }
+                onClick={() => setFollowing(following === p.clientId ? null : p.clientId)}
+              />
+            );
+          })}
         </div>
 
         {readOnly && (

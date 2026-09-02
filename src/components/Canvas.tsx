@@ -15,7 +15,7 @@ import {
 import { withAlpha } from '../document/css';
 import { Annotations } from './Annotations';
 import { PixelPreview } from './PixelPreview';
-import { CommentComposer, Comments } from './Comments';
+import { anchorIn, CommentComposer, Comments } from './Comments';
 import { CursorChat } from './CursorChat';
 import { FollowLayer } from './Follow';
 import { Measure } from './Measure';
@@ -23,7 +23,7 @@ import { Rulers } from './Rulers';
 import { VectorEdit } from './VectorEdit';
 import { CanvasMotion } from './MotionStyle';
 import { useDoc, useSession, useStore, useTokenVars } from './Session';
-import type { DocStore } from '../document/store';
+import type { Comment, DocStore } from '../document/store';
 import { ZOOM, toScreen, toWorld, useUI, type Tool } from '../state/ui';
 import { descendants, isInFlow, ROOT_ID, type Doc, type NodeType, type SceneNode } from '../document/types';
 import { snap, snapCandidates } from '../document/snapping';
@@ -130,6 +130,7 @@ export function Canvas() {
   const prototyping = useUI((s) => s.inspectorTab === 'prototype');
   const setEntered = useUI((s) => s.setEntered);
   const setGuides = useUI((s) => s.setGuides);
+  const setDropTarget = useUI((s) => s.setDropTarget);
   const rulers = useUI((s) => s.rulers);
   const pixelPreview = useUI((s) => s.view.pixelPreview);
   const vectorEdit = useUI((s) => s.vectorEdit);
@@ -145,7 +146,7 @@ export function Canvas() {
   /** in-progress pen path, in world coordinates */
   const [pen, setPen] = useState<Anchor[]>([]);
   const [penCursor, setPenCursor] = useState<[number, number] | null>(null);
-  const [composing, setComposing] = useState<{ x: number; y: number } | null>(null);
+  const [composing, setComposing] = useState<{ x: number; y: number; anchor?: Comment['anchor'] } | null>(null);
 
   const pageId = useUI((s) => s.page);
   const page = doc[pageId] ?? doc[ROOT_ID];
@@ -437,12 +438,29 @@ export function Canvas() {
     [store, page, doc, select, setTool],
   );
 
-  // Reset on tool change only — folding this into the key-handler effect below
-  // would re-run it on every point and loop, since [] is a new array each time.
+  /**
+   * Leaving the pen finishes the path rather than throwing it away.
+   *
+   * Figma's pen has the layer on the document from the first segment, so
+   * picking up another tool leaves what you drew standing. Here the anchors
+   * live in React state until they are committed, and a tool change used to
+   * drop them on the floor with no undo to reach them — the same for Escape
+   * below. Both finish now. Anything shorter than two points is not a path and
+   * is dropped, which is what `commitPen` already decides.
+   */
+  const penRef = useRef<Anchor[]>([]);
+  penRef.current = pen;
   useEffect(() => {
     if (tool === 'pen') return;
-    setPen((points) => (points.length ? [] : points));
-    setPenCursor((cursor) => (cursor ? null : cursor));
+    const drawn = penRef.current;
+    if (drawn.length >= 2) commitPen(drawn, false);
+    else {
+      setPen((points) => (points.length ? [] : points));
+      setPenCursor((cursor) => (cursor ? null : cursor));
+    }
+    // `commitPen` sets the tool, which would re-enter this effect; the ref is
+    // how the finish reads the path without making the effect chase it
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool]);
 
   useEffect(() => {
@@ -455,6 +473,8 @@ export function Canvas() {
         // Figma keeps what you have drawn: Escape ends the path where it is
         // rather than throwing it away, and a single point is nothing to keep
         event.preventDefault();
+        // Escape ends the path, as ⏎ does — in Figma it stops drawing, it does
+        // not undraw. Only an empty one goes away with nothing left behind.
         if (pen.length >= 2) commitPen(pen, false);
         else {
           setPen([]);
@@ -469,6 +489,30 @@ export function Canvas() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tool, pen, commitPen, setTool]);
+
+  /**
+   * Outlines the frame a release here would drop into, while you are still
+   * holding the layer.
+   *
+   * Reparenting is decided at pointer-up and rewrites the tree silently, so
+   * without this the only way to learn that a card adopted the layer is to
+   * move the card later and find the layer coming with it. A target the layer
+   * is already inside says nothing, so it draws nothing.
+   */
+  const markDropTarget = (e: PointerEvent, ids: string[], snapshot: Doc) => {
+    const skip = new Set(ids.flatMap((id) => [id, ...descendants(id, snapshot)]));
+    const found = containerAt(e.clientX, e.clientY, snapshot, skip);
+    const next = found && found !== snapshot[ids[0]]?.parent ? found : null;
+    const target = next ? snapshot[next] : null;
+    const slot = target?.flex ? flowSlotAt(target, ids, e.clientX, e.clientY) : null;
+    const line =
+      slot && target
+        ? flowSlotRect(target, ids, slot.position, rootRef.current!.getBoundingClientRect())
+        : null;
+    const now = useUI.getState();
+    if (now.dropTarget === next && sameRect(now.dropSlot, line)) return;
+    setDropTarget(next, line);
+  };
 
   // ── Pointer interactions ───────────────────────────────────────────────
   const onPointerDown = (event: React.PointerEvent) => {
@@ -511,7 +555,13 @@ export function Canvas() {
     }
 
     if (tool === 'comment') {
-      setComposing({ x: Math.round(start.x), y: Math.round(start.y) });
+      // a remark is about something: the pin holds the layer under the click,
+      // and where in it, so it travels when that layer does
+      setComposing({
+        x: Math.round(start.x),
+        y: Math.round(start.y),
+        anchor: anchorIn(hitStack(event.clientX, event.clientY, doc)[0], event.clientX, event.clientY),
+      });
       return;
     }
 
@@ -535,7 +585,12 @@ export function Canvas() {
     }
 
     if (tool === 'pen') {
-      const point = { x: Math.round(start.x), y: Math.round(start.y) };
+      // ⇧ holds the next point to 45° from the last one, which is how every
+      // straight and diagonal run gets drawn. `constrain45` is the same one the
+      // line and arrow tools use, twenty lines below.
+      const held =
+        event.shiftKey && pen.length ? constrain45(pen[pen.length - 1], start) : start;
+      const point = { x: Math.round(held.x), y: Math.round(held.y) };
       // clicking back on the first point closes the shape
       if (pen.length > 2) {
         const first = pen[0];
@@ -550,12 +605,18 @@ export function Canvas() {
       // way every pen tool works: release without moving and it stays a corner.
       drag(store, event, (e) => {
         const world = toWorld(vp, e.clientX - rect.left, e.clientY - rect.top);
-        const dx = world.x - point.x;
-        const dy = world.y - point.y;
+        const pulled = e.shiftKey ? constrain45(point, world) : world;
+        const dx = pulled.x - point.x;
+        const dy = pulled.y - point.y;
         if (Math.hypot(dx, dy) * vp.zoom < 3) return;
         setPen((anchors) =>
           anchors.map((anchor, i) =>
-            i === index ? { ...anchor, out: [dx, dy], in: [-dx, -dy] } : anchor,
+            i === index
+              ? // ⌥ breaks the mirror, so the segment leaving the point can head
+                // somewhere else than the one arriving at it — the same trade
+                // `moveHandle` makes in point editing
+                { ...anchor, out: [dx, dy], in: e.altKey ? anchor.in : [-dx, -dy] }
+              : anchor,
           ),
         );
       });
@@ -664,8 +725,9 @@ export function Canvas() {
         },
         () => {
           stopModifiers();
-          const size = box && box.w > 4 && box.h > 4
-            ? box
+          const drawn = !!box && box.w > 4 && box.h > 4;
+          const size = drawn
+            ? box!
             : { x: origin.x, y: origin.y, w: drawType === 'text' ? 120 : 100, h: drawType === 'text' ? 24 : 100 };
 
           // the press decides which frame the shape lands in — unless Space
@@ -686,7 +748,15 @@ export function Canvas() {
             // a new text layer starts empty, as Figma's does: the first keys
             // are its content, and one left empty is thrown away on the way out
             ...(drawType === 'text'
-              ? { wMode: 'fit' as const, hMode: 'fit' as const, text: '' }
+              ? {
+                  // A text dragged out is a column: Figma keeps the width you
+                  // chose and leaves the height to the copy. Clicking still
+                  // gives an auto-width layer that grows as you type. Either
+                  // way it starts empty: the first keys are its content.
+                  wMode: drawn ? ('fixed' as const) : ('fit' as const),
+                  hMode: 'fit' as const,
+                  text: '',
+                }
               : null),
           });
           setDraft(null);
@@ -950,6 +1020,7 @@ export function Canvas() {
           if (!shifted && Math.hypot(e.clientX - event.clientX, e.clientY - event.clientY) < 3) return;
           shifted = true;
           const snapshot = store.getSnapshot();
+          markDropTarget(e, kids, snapshot);
           const parent = snapshot[parentId];
           if (!parent?.flex) return;
           // outside the frame this is a drop, not a reorder — the release
@@ -964,6 +1035,7 @@ export function Canvas() {
           store.moveMany(kids, parentId, slot.index);
         },
         (e) => {
+          setDropTarget(null);
           if (!shifted) {
             if (untoggle) toggle(targetId);
             return;
@@ -1048,9 +1120,11 @@ export function Canvas() {
           const origin = origins.get(n.id)!;
           return { x: place(origin.x + dx), y: place(origin.y + dy) };
         });
+        markDropTarget(e, movers, snapshot);
       },
       (e) => {
         setGuides([]);
+        setDropTarget(null);
         // a click that never moved is a selection, not a drop
         if (!moved) {
           if (heldFrame && !event.shiftKey) {
@@ -1152,7 +1226,10 @@ export function Canvas() {
         if (tool === 'pen' && pen.length) {
           const rect = rootRef.current!.getBoundingClientRect();
           const world = toWorld(useUI.getState().viewport, e.clientX - rect.left, e.clientY - rect.top);
-          setPenCursor([world.x, world.y]);
+          // the ghost segment is held to 45° too, or ⇧ would only take effect
+          // at the moment of the press and the preview would have been lying
+          const held = e.shiftKey ? constrain45(pen[pen.length - 1], world) : world;
+          setPenCursor([held.x, held.y]);
         }
         const stack = hitStack(e.clientX, e.clientY, doc);
         const preview = resolveClick(stack, doc, entered, e.metaKey || e.ctrlKey ? 'deep' : 'normal', useUI.getState().selection);
@@ -1346,7 +1423,7 @@ export function Canvas() {
       {vectorEdit && <VectorEdit containerRef={rootRef} />}
       {prototyping && <Connections containerRef={rootRef} />}
       <Annotations containerRef={rootRef} />
-      <Comments />
+      <Comments containerRef={rootRef} />
       {composing && <CommentComposer at={composing} onDone={() => setComposing(null)} />}
       <Cursors containerRef={rootRef} />
       <FollowLayer containerRef={rootRef} />
@@ -1530,6 +1607,40 @@ function flowSlotAt(
   const index =
     position < others.length ? parent.children.indexOf(others[position]) : parent.children.length;
   return { position, index };
+}
+
+interface SlotRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const sameRect = (a: SlotRect | null, b: SlotRect | null) =>
+  a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+
+/**
+ * The line where a flowed drop would land, in the canvas element's own pixels.
+ *
+ * `flowSlotAt` answers with a position in the list; this is that position drawn
+ * — the leading edge of the child that would be pushed along, or the trailing
+ * edge of the last one when the layer goes on the end.
+ */
+function flowSlotRect(
+  parent: SceneNode,
+  exclude: string[],
+  position: number,
+  base: DOMRect,
+): SlotRect | null {
+  const others = parent.children.filter((id) => !exclude.includes(id));
+  if (!others.length) return null;
+  const last = position >= others.length;
+  const anchor = others[last ? others.length - 1 : position];
+  const rect = document.querySelector<HTMLElement>(`[data-node-id="${anchor}"]`)?.getBoundingClientRect();
+  if (!rect) return null;
+  return parent.flex?.direction === 'row'
+    ? { x: (last ? rect.right : rect.left) - base.left - 1, y: rect.top - base.top, w: 2, h: rect.height }
+    : { x: rect.left - base.left, y: (last ? rect.bottom : rect.top) - base.top - 1, w: rect.width, h: 2 };
 }
 
 /**

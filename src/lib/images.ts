@@ -33,10 +33,20 @@ export async function readImageFile(file: File): Promise<LoadedImage> {
     reader.readAsDataURL(file);
   });
 
-  const size = await new Promise<{ width: number; height: number }>((resolve) => {
+  const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-    img.onerror = () => resolve({ width: 240, height: 160 });
+    // A file the browser cannot decode — a truncated download, a renamed
+    // something-else, a HEIC dragged out of Photos — carries an image mime and
+    // clears every guard above. Refusing it here is the only place left: a
+    // default size instead put it on the canvas as an empty box that paints
+    // nothing and is indistinguishable from a rectangle drawn badly.
+    img.onerror = () =>
+      reject(
+        new Error(
+          `${file.name || 'That file'} could not be decoded — try re-exporting it as PNG or JPG.`,
+        ),
+      );
     img.src = src;
   });
 

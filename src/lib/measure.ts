@@ -31,3 +31,28 @@ export function measureChildren(parentId: string, zoom: number): Record<string, 
   }
   return out;
 }
+
+/**
+ * Where the browser actually put one layer, relative to its parent.
+ *
+ * `measureChildren` reads a whole frame at once, which is what dropping auto
+ * layout needs. Reading one layer is what a readout needs, and it must work for
+ * a layer whose parent is itself sized by its content — so the parent's box is
+ * measured too rather than taken from the document.
+ */
+export function measureAgainstParent(
+  id: string,
+  parentId: string,
+  zoom: number,
+): { child: Box; parent: Box } | null {
+  const child = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+  const parent = document.querySelector<HTMLElement>(`[data-node-id="${parentId}"]`);
+  if (!child || !parent) return null;
+  const c = child.getBoundingClientRect();
+  const p = parent.getBoundingClientRect();
+  if (!c.width && !c.height) return null;
+  return {
+    child: { x: (c.left - p.left) / zoom, y: (c.top - p.top) / zoom, w: c.width / zoom, h: c.height / zoom },
+    parent: { x: 0, y: 0, w: p.width / zoom, h: p.height / zoom },
+  };
+}

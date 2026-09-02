@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Icon } from './ui/Icons';
 import { FigIcon } from './ui/FigIcon';
 import {
@@ -26,6 +26,7 @@ import { StyleBadge, StylePicker } from './StylePicker';
 import type { Style } from '../document/store';
 import { VariableMenu, variableLabel } from './VariablePicker';
 import { Presence } from './Presence';
+import { CommentsPanel } from './Comments';
 import { Inspect } from './Inspect';
 import {
   useCollections,
@@ -67,6 +68,7 @@ import {
   type FontFace,
 } from '../lib/fonts';
 import { FontPicker } from './FontPicker';
+import { applyToRange, runsOf, styleOfRange, type RunPatch } from '../document/text';
 import { TypeSettings } from './TypeSettings';
 import { ADJUST_LABEL, isNeutral, NO_ADJUST, type ImageAdjust } from '../document/adjust';
 import { DEFAULT_FONT, DEFAULT_GUIDES, TYPE_LABEL } from '../document/defaults';
@@ -94,6 +96,7 @@ import {
   type NumericField,
   type Constraint,
   type EndCap,
+  type ConstraintSpec,
   type LineStyle,
   type FontSpec,
   type Paint,
@@ -105,6 +108,8 @@ import {
   DEVICES,
   type BooleanOp,
   type PrototypeDevice,
+  type GuideSpec,
+  guidesOf,
 } from '../document/types';
 import { FRAME_PRESETS } from '../document/presets';
 import { viewCentre } from '../lib/view';
@@ -243,10 +248,21 @@ export function Inspector() {
         >
           Inspect
         </button>
+        <button
+          type="button"
+          className="fig-tab"
+          data-on={tab === 'comments'}
+          title="Comments  C"
+          onClick={() => setTab('comments')}
+        >
+          Comments
+        </button>
       </div>
 
       {tab === 'prototype' ? (
         <PrototypeTab node={node} />
+      ) : tab === 'comments' ? (
+        <CommentsPanel />
       ) : tab === 'inspect' ? (
         <Inspect node={node} />
       ) : (
@@ -285,7 +301,7 @@ export function Inspector() {
               {node.shader && <ShaderSection node={node} set={set} />}
               {node.type !== 'shader' && <FillSection node={node} nodes={nodes} set={set} />}
               <StrokeSection node={node} nodes={nodes} set={set} />
-              <EffectsSection node={node} set={set} />
+              <EffectsSection node={node} nodes={nodes} set={set} />
               <SelectionColors />
               {node.type === 'frame' && <GuidesSection node={node} set={set} />}
               {node.type === 'frame' && <VideoSection node={node} set={set} />}
@@ -980,7 +996,11 @@ function PrototypeTab({ node }: { node?: SceneNode }) {
 
   const flows = flowsOn(doc, pageId);
   const frames = destinationsOn(doc, pageId);
-  const isFrame = node?.type === 'frame' && doc[node.parent ?? '']?.type === 'page';
+  // a board in a section is still a board: it can start a flow and carry a
+  // timeline, and only the prototype surface ever thought otherwise
+  const parentOfNode = node?.parent ? doc[node.parent] : null;
+  const isFrame =
+    node?.type === 'frame' && (parentOfNode?.type === 'page' || parentOfNode?.type === 'section');
   const interactions = interactionsOf(node);
 
   return (
@@ -3048,24 +3068,142 @@ function ConstraintsRow({ node, set }: { node: SceneNode; set: Setter }) {
   return (
     <>
       <FigLabel>Constraints</FigLabel>
-      <div className="fig-row" style={{ marginTop: 0 }}>
-        <FigSelect
-          value={spec.h}
-          options={options('h')}
-          glyph="H"
-          title="Horizontal constraint"
-          onChange={(h) => set({ constraints: { ...spec, h } })}
-        />
-        <FigSelect
-          value={spec.v}
-          options={options('v')}
-          glyph="V"
-          title="Vertical constraint"
-          onChange={(v) => set({ constraints: { ...spec, v } })}
-        />
+      <div className="fig-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 0' }}>
+          <FigSelect
+            value={spec.h}
+            options={options('h')}
+            glyph="H"
+            title="Horizontal constraint"
+            onChange={(h) => set({ constraints: { ...spec, h } })}
+          />
+          <FigSelect
+            value={spec.v}
+            options={options('v')}
+            glyph="V"
+            title="Vertical constraint"
+            onChange={(v) => set({ constraints: { ...spec, v } })}
+          />
+        </div>
+        <ConstraintsWidget spec={spec} onChange={(constraints) => set({ constraints })} />
         <span style={{ width: 24, flex: 'none' }} />
       </div>
     </>
+  );
+}
+
+/**
+ * Figma's constraint diagram, and the way most people set a constraint: the
+ * layer as a small rectangle inside its parent, a pin bar on each side and a
+ * centre line on each axis. A bar pins that edge, both opposing bars stretch,
+ * and a centre line centres — which is every constraint but Scale, and Scale is
+ * what the two dropdowns beside it are still for. It reads the current state at
+ * a glance, which two closed dropdowns cannot.
+ */
+function ConstraintsWidget({
+  spec,
+  onChange,
+}: {
+  spec: ConstraintSpec;
+  onChange: (next: ConstraintSpec) => void;
+}) {
+  const pinned = (value: Constraint, side: 'start' | 'end') => value === side || value === 'stretch';
+  const toggle = (axis: 'h' | 'v', side: 'start' | 'end') => {
+    const value = spec[axis];
+    const start = side === 'start' ? !pinned(value, 'start') : pinned(value, 'start');
+    const end = side === 'end' ? !pinned(value, 'end') : pinned(value, 'end');
+    onChange({
+      ...spec,
+      [axis]: start && end ? 'stretch' : start ? 'start' : end ? 'end' : 'center',
+    });
+  };
+
+  const ink = (on: boolean) => (on ? 'var(--fig-blue)' : 'rgba(0,0,0,0.28)');
+  const hit: CSSProperties = {
+    position: 'absolute',
+    border: 0,
+    padding: 0,
+    background: 'transparent',
+    cursor: 'default',
+    display: 'grid',
+    placeItems: 'center',
+  };
+
+  const bar = (axis: 'h' | 'v', side: 'start' | 'end', label: string, box: CSSProperties) => {
+    const on = pinned(spec[axis], side);
+    const across = axis === 'h';
+    return (
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={on}
+        title={label}
+        style={{ ...hit, ...box }}
+        onClick={() => toggle(axis, side)}
+      >
+        <span
+          style={{
+            width: across ? 11 : 2,
+            height: across ? 2 : 11,
+            borderRadius: 1,
+            background: ink(on),
+          }}
+        />
+      </button>
+    );
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label="Constraints"
+      style={{
+        position: 'relative',
+        width: 56,
+        height: 56,
+        flex: 'none',
+        borderRadius: 5,
+        background: 'var(--fig-field)',
+      }}
+    >
+      <span
+        style={{
+          position: 'absolute',
+          left: 17,
+          top: 17,
+          width: 22,
+          height: 22,
+          borderRadius: 2,
+          border: '1px solid rgba(0,0,0,0.28)',
+        }}
+      />
+      {bar('h', 'start', 'Pin left', { left: 0, top: 21, width: 16, height: 14 })}
+      {bar('h', 'end', 'Pin right', { right: 0, top: 21, width: 16, height: 14 })}
+      {bar('v', 'start', 'Pin top', { top: 0, left: 21, width: 14, height: 16 })}
+      {bar('v', 'end', 'Pin bottom', { bottom: 0, left: 21, width: 14, height: 16 })}
+      {/* the two centre lines cross, so they share four pixels in the middle;
+          everywhere else each one is the only thing under the pointer */}
+      <button
+        type="button"
+        aria-label="Center vertically"
+        aria-pressed={spec.v === 'center'}
+        title="Center vertically"
+        style={{ ...hit, left: 17, top: 26, width: 22, height: 4 }}
+        onClick={() => onChange({ ...spec, v: 'center' })}
+      >
+        <span style={{ width: 22, height: 2, background: ink(spec.v === 'center') }} />
+      </button>
+      <button
+        type="button"
+        aria-label="Center horizontally"
+        aria-pressed={spec.h === 'center'}
+        title="Center horizontally"
+        style={{ ...hit, left: 26, top: 17, width: 4, height: 22 }}
+        onClick={() => onChange({ ...spec, h: 'center' })}
+      >
+        <span style={{ width: 2, height: 22, background: ink(spec.h === 'center') }} />
+      </button>
+    </div>
   );
 }
 
@@ -3422,7 +3560,11 @@ function AppearanceSection({
             <Icon.Lock open={!node.locked} />
           </FigButton>
           {node.type !== 'text' && <CornerSettings node={node} set={set} />}
-          <FigBlendMenu value={node.blend} onChange={(blend) => set({ blend })} />
+          <FigBlendMenu
+            value={node.blend}
+            container={node.type === 'frame' || node.type === 'section'}
+            onChange={(blend) => set({ blend })}
+          />
         </>
       }
     >
@@ -3999,12 +4141,15 @@ function FontStyleMenu({
   node,
   font,
   face,
+  mixed,
   onChange,
   onAxes,
 }: {
   node: SceneNode;
   font: FontSpec;
   face: FontFace | undefined;
+  /** the selected characters do not agree on a cut */
+  mixed?: boolean;
   onChange: (weight: number, italic: boolean) => void;
   onAxes: () => void;
 }) {
@@ -4033,7 +4178,7 @@ function FontStyleMenu({
         }}
       >
         <span className="fig-value" data-variable={boundTo ? 'true' : undefined}>
-          {boundTo ?? styleLabel(font.weight, font.italic)}
+          {boundTo ?? (mixed ? 'Mixed' : styleLabel(font.weight, font.italic))}
         </span>
         <span className="fig-caret">
           <Icon.Caret />
@@ -4109,7 +4254,7 @@ function FontSizeField({
   onChange,
 }: {
   node: SceneNode;
-  value: number;
+  value: number | 'mixed';
   onChange: (size: number) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -4154,7 +4299,7 @@ function FontSizeField({
             <li>
               <button type="button" className="fig-menu-item" data-current="true" onClick={() => setOpen(false)}>
                 <span className="fig-menu-mark">✓</span>
-                {value}
+                {value === 'mixed' ? 'Mixed' : value}
               </button>
             </li>
             {FONT_SIZES.map((size, index) => (
@@ -4176,12 +4321,80 @@ function FontSizeField({
   );
 }
 
+/**
+ * The type properties a single run may carry.
+ *
+ * These are the ones Figma's Text panel applies to the selected characters;
+ * everything else in the section — alignment, truncation, the list style — is a
+ * property of the text object and stays layer-wide even with a range
+ * highlighted, because there is nowhere else for it to live.
+ */
+const RANGE_KEYS = [
+  'family',
+  'weight',
+  'italic',
+  'size',
+  'letterSpacing',
+  'lineHeight',
+  'case',
+] as const;
+
 function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
   const store = useStore();
   const custom = useCustomFonts();
   const uploaded = useMemo(() => customFamilies(custom), [custom]);
-  const font = node.font ?? DEFAULT_FONT;
-  const patch = (delta: Partial<typeof font>) => set({ font: { ...font, ...delta } });
+  const editing = useUI((s) => s.editing);
+  const editingRange = useUI((s) => s.editingRange);
+
+  /**
+   * With characters selected inside the layer, this panel is theirs.
+   *
+   * Figma's Text section acts on the selection whenever there is one — that is
+   * how a pull quote gets one word in a display face — so the fields read the
+   * range's style layered over the layer's, say "Mixed" where the range
+   * disagrees, and write through the runs instead of through `font`.
+   */
+  const range = editing === node.id ? editingRange : null;
+  const over = range ? styleOfRange(runsOf(node), range.start, range.end) : null;
+  const base = node.font ?? DEFAULT_FONT;
+  // a key the range disagrees about is left out of `styleOfRange` altogether,
+  // which is exactly the question "is this mixed?"
+  const mixed = (key: keyof RunPatch) => !!over && !(key in over);
+  const font: FontSpec = over
+    ? {
+        ...base,
+        family: over.family ?? base.family,
+        // ⌘B writes a mark rather than a number, so the two say the same thing
+        weight: over.weight ?? (over.bold ? 700 : base.weight),
+        italic: over.italic ?? base.italic,
+        size: over.size ?? base.size,
+        letterSpacing: over.letterSpacing ?? base.letterSpacing,
+        lineHeight: over.lineHeight ?? base.lineHeight,
+        case: over.case ?? base.case,
+      }
+    : base;
+
+  const patch = (delta: Partial<FontSpec>) => {
+    if (!range) {
+      set({ font: { ...font, ...delta } });
+      return;
+    }
+    const run: RunPatch = {};
+    const rest: Partial<FontSpec> = {};
+    for (const [key, value] of Object.entries(delta)) {
+      if ((RANGE_KEYS as readonly string[]).includes(key)) {
+        (run as Record<string, unknown>)[key] = value;
+      } else {
+        (rest as Record<string, unknown>)[key] = value;
+      }
+    }
+    // a run carrying an explicit weight has no use for ⌘B's mark as well
+    if (run.weight !== undefined) run.bold = undefined;
+    if (Object.keys(rest).length) set({ font: { ...base, ...rest } });
+    if (Object.keys(run).length) {
+      store.update(node.id, { runs: applyToRange(runsOf(node), range.start, range.end, run) });
+    }
+  };
   const [settings, setSettings] = useState(false);
   const [fontError, setFontError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -4197,6 +4410,7 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
       <div className="fig-row">
         <FontPicker
           value={font.family}
+          mixed={mixed('family')}
           onUpload={() => fileRef.current?.click()}
           onChange={(family) => {
             ensureFont(family, uploaded);
@@ -4235,6 +4449,7 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
           node={node}
           font={font}
           face={face}
+          mixed={mixed('weight') || mixed('italic')}
           onAxes={() => setSettings(true)}
           onChange={(weight, italic) =>
             patch({
@@ -4246,13 +4461,17 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
             })
           }
         />
-        <FontSizeField node={node} value={font.size} onChange={(size) => patch({ size })} />
+        <FontSizeField
+          node={node}
+          value={mixed('size') ? 'mixed' : font.size}
+          onChange={(size) => patch({ size })}
+        />
       </div>
       <div className="fig-row">
         <VarField
           node={node}
           field="lineHeight"
-          value={Math.round(font.lineHeight * font.size)}
+          value={mixed('lineHeight') || mixed('size') ? 'mixed' : Math.round(font.lineHeight * font.size)}
           glyph={<Icon.LineHeight />}
           min={0}
           title="Line height"
@@ -4261,7 +4480,7 @@ function TypographySection({ node, set }: { node: SceneNode; set: Setter }) {
         <VarField
           node={node}
           field="letterSpacing"
-          value={Math.round(font.letterSpacing * 100)}
+          value={mixed('letterSpacing') ? 'mixed' : Math.round(font.letterSpacing * 100)}
           glyph={<Icon.Letter />}
           suffix="%"
           title="Letter spacing"
@@ -4443,7 +4662,7 @@ function pageColors(doc: Doc, page: string, tokens: Token[] = []): string[] {
       add(effect.color);
       add(effect.color2);
     }
-    add(node.guides?.color);
+    for (const guide of guidesOf(node)) add(guide.color);
   }
   return [...seen].slice(0, 40);
 }
@@ -4872,12 +5091,12 @@ function StrokeSection({
         <>
           <FigPaintRow
             color={stroke.color}
-            alpha={1}
+            alpha={stroke.opacity ?? 1}
             mixed={mixedPaint}
             onColor={(color) => set({ border: { ...stroke, color } })}
-            onAlpha={() => undefined}
-            onVisible={() => set({ border: { ...stroke, width: stroke.width ? 0 : 1 } })}
-            visible={stroke.width > 0}
+            onAlpha={(opacity) => set({ border: { ...stroke, opacity } })}
+            onVisible={() => set({ border: { ...stroke, visible: stroke.visible === false } })}
+            visible={stroke.visible !== false}
             onRemove={() => set({ border: null })}
           />
           <div style={{ display: 'flex', gap: 8 }}>
@@ -5019,108 +5238,133 @@ function ShaderSection({ node, set }: { node: SceneNode; set: Setter }) {
 // ── Guides / Video ───────────────────────────────────────────────────────
 
 function GuidesSection({ node, set }: { node: SceneNode; set: Setter }) {
-  const guides = node.guides;
+  const guides = guidesOf(node);
+  // a frame with no grids left holds null rather than an empty list, so the
+  // section reads empty and a grid style still round-trips through it
+  const write = (next: GuideSpec[]) => set({ guides: next.length ? next : null });
+  const patch = (index: number, delta: Partial<GuideSpec>) =>
+    write(guides.map((guide, i) => (i === index ? { ...guide, ...delta } : guide)));
+
   return (
     <FigSection
       title="Layout guide"
-      empty={!guides}
-      onAdd={() => set({ guides: { ...DEFAULT_GUIDES } })}
-      onRemove={() => set({ guides: null })}
+      empty={!guides.length}
+      // no onRemove, so the + stays: a frame carries a stack of grids — columns
+      // and an 8px baseline, as often as not — and each is removed by its own row
+      onAdd={() => write([...guides, { ...DEFAULT_GUIDES, id: newId() }])}
       actions={
-        <>
-          {/* Figma keeps this one in the header whether or not the frame has a
-              guide: applying a style is how you give it one. */}
-          <StylePicker slot="grid" node={node} />
-          {guides && (
-            <FigButton
-              title={guides.visible ? 'Hide grid' : 'Show grid'}
-              onClick={() => set({ guides: { ...guides, visible: !guides.visible } })}
-            >
-              <Icon.Eye off={!guides.visible} />
-            </FigButton>
-          )}
-        </>
+        // Figma keeps this one in the header whether or not the frame has a
+        // guide: applying a style is how you give it one.
+        <StylePicker slot="grid" node={node} />
       }
     >
       <StyleBadge node={node} slot="grid" />
-      {guides && (
+      {guides.map((guide, index) => (
+        <GuideBlock
+          key={guide.id ?? index}
+          guide={guide}
+          onChange={(delta) => patch(index, delta)}
+          onRemove={() => write(guides.filter((_, i) => i !== index))}
+        />
+      ))}
+    </FigSection>
+  );
+}
+
+/** One layout grid: its type, its measurements, and its own paint row. */
+function GuideBlock({
+  guide,
+  onChange,
+  onRemove,
+}: {
+  guide: GuideSpec;
+  onChange: (delta: Partial<GuideSpec>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <>
+      <div className="fig-row">
+        <FigGroup
+          value={guide.type}
+          onChange={(type) => onChange({ type })}
+          options={[
+            { value: 'columns', label: 'Columns', title: 'Columns' },
+            { value: 'rows', label: 'Rows', title: 'Rows' },
+            { value: 'grid', label: 'Grid', title: 'Grid' },
+          ]}
+        />
+      </div>
+      {guide.type === 'grid' ? (
+        <div className="fig-row">
+          <FigField value={guide.size} glyph={<Icon.Gap />} min={1} title="Size" onChange={(size) => onChange({ size })} />
+          <span style={{ flex: '1 1 0' }} />
+          <span style={{ width: 24, flex: 'none' }} />
+        </div>
+      ) : (
         <>
           <div className="fig-row">
-            <FigGroup
-              value={guides.type}
-              onChange={(type) => set({ guides: { ...guides, type } })}
+            <FigSelect
+              value={guide.align ?? 'stretch'}
               options={[
-                { value: 'columns', label: 'Columns', title: 'Columns' },
-                { value: 'rows', label: 'Rows', title: 'Rows' },
-                { value: 'grid', label: 'Grid', title: 'Grid' },
+                { value: 'stretch', label: 'Stretch' },
+                { value: 'start', label: guide.type === 'columns' ? 'Left' : 'Top' },
+                { value: 'center', label: 'Center' },
+                { value: 'end', label: guide.type === 'columns' ? 'Right' : 'Bottom' },
               ]}
+              title="Type"
+              onChange={(align) => onChange({ align })}
             />
+            <FigField
+              value={guide.count}
+              glyph="N"
+              min={1}
+              max={48}
+              title="Count"
+              onChange={(count) => onChange({ count })}
+            />
+            <span style={{ width: 24, flex: 'none' }} />
           </div>
-          {guides.type === 'grid' ? (
-            <div className="fig-row">
-              <FigField value={guides.size} glyph={<Icon.Gap />} min={1} title="Size" onChange={(size) => set({ guides: { ...guides, size } })} />
-              <span style={{ flex: '1 1 0' }} />
-              <span style={{ width: 24, flex: 'none' }} />
-            </div>
-          ) : (
-            <>
-              <div className="fig-row">
-                <FigSelect
-                  value={guides.align ?? 'stretch'}
-                  options={[
-                    { value: 'stretch', label: 'Stretch' },
-                    { value: 'start', label: guides.type === 'columns' ? 'Left' : 'Top' },
-                    { value: 'center', label: 'Center' },
-                    { value: 'end', label: guides.type === 'columns' ? 'Right' : 'Bottom' },
-                  ]}
-                  title="Type"
-                  onChange={(align) => set({ guides: { ...guides, align } })}
-                />
-                <FigField
-                  value={guides.count}
-                  glyph="N"
-                  min={1}
-                  max={48}
-                  title="Count"
-                  onChange={(count) => set({ guides: { ...guides, count } })}
-                />
-                <span style={{ width: 24, flex: 'none' }} />
-              </div>
-              <div className="fig-row">
-                {/* Stretch is described by its margin; the others by a width.
-                    Figma shows whichever one the type actually uses. */}
-                {(guides.align ?? 'stretch') === 'stretch' ? (
-                  <FigField
-                    value={guides.margin}
-                    glyph={<Icon.PadH />}
-                    min={0}
-                    title="Margin"
-                    onChange={(margin) => set({ guides: { ...guides, margin } })}
-                  />
-                ) : (
-                  <FigField
-                    value={guides.width ?? 64}
-                    glyph="W"
-                    min={1}
-                    title={guides.type === 'columns' ? 'Column width' : 'Row height'}
-                    onChange={(width) => set({ guides: { ...guides, width } })}
-                  />
-                )}
-                <FigField
-                  value={guides.gutter}
-                  glyph={<Icon.Gap />}
-                  min={0}
-                  title="Gutter"
-                  onChange={(gutter) => set({ guides: { ...guides, gutter } })}
-                />
-                <span style={{ width: 24, flex: 'none' }} />
-              </div>
-            </>
-          )}
-          <FigPaintRow color={guides.color} alpha={1} onColor={(color) => set({ guides: { ...guides, color } })} />
+          <div className="fig-row">
+            {/* Stretch is described by its margin; the others by a width.
+                Figma shows whichever one the type actually uses. */}
+            {(guide.align ?? 'stretch') === 'stretch' ? (
+              <FigField
+                value={guide.margin}
+                glyph={<Icon.PadH />}
+                min={0}
+                title="Margin"
+                onChange={(margin) => onChange({ margin })}
+              />
+            ) : (
+              <FigField
+                value={guide.width ?? 64}
+                glyph="W"
+                min={1}
+                title={guide.type === 'columns' ? 'Column width' : 'Row height'}
+                onChange={(width) => onChange({ width })}
+              />
+            )}
+            <FigField
+              value={guide.gutter}
+              glyph={<Icon.Gap />}
+              min={0}
+              title="Gutter"
+              onChange={(gutter) => onChange({ gutter })}
+            />
+            <span style={{ width: 24, flex: 'none' }} />
+          </div>
         </>
       )}
-    </FigSection>
+      <FigPaintRow
+        color={guide.color}
+        alpha={guide.opacity ?? 1}
+        onColor={(color) => onChange({ color })}
+        onAlpha={(opacity) => onChange({ opacity })}
+        visible={guide.visible}
+        onVisible={() => onChange({ visible: !guide.visible })}
+        onRemove={onRemove}
+      />
+    </>
   );
 }
 

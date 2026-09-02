@@ -1,6 +1,6 @@
 'use client';
 
-import { backgroundOf, imageSizing, shapePaint, type ShapeStroke } from '../document/css';
+import { backgroundOf, imageSizing, shapePaint, withAlpha, type ShapeStroke } from '../document/css';
 import { booleanClips, decoratedEnds, endCapPath, END_CAP_BOX } from '../document/geometry';
 import { booleanOutlinePath } from '../document/boolean';
 import { ShaderSurface } from './ShaderSurface';
@@ -274,9 +274,9 @@ function BooleanStroke({
 
 function strokeOf(node: SceneNode): ShapeStroke | null {
   const border = node.border;
-  if (!border || border.width <= 0) return null;
+  if (!border || border.visible === false || border.width <= 0) return null;
   return {
-    color: border.color,
+    color: withAlpha(border.color, border.opacity ?? 1),
     width: border.width,
     dash: border.dash ? `${border.dash} ${border.gap ?? border.dash}` : null,
     cap: border.cap ?? 'butt',

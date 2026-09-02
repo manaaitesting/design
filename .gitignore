@@ -13,3 +13,6 @@ playwright-report/
 
 # generated design canvas bundle
 paperlike-editor.html
+
+# workflow agents get worktrees of their own in here
+.claude/worktrees/

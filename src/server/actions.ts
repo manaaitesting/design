@@ -6,13 +6,16 @@ import {
   canEdit,
   currentUser,
   endSession,
+  guestIdentity,
   hashPassword,
+  issueSyncToken,
   roleOf,
   startSession,
   verifyPassword,
 } from './auth';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openRoom } from './queries';
 import {
   createFile,
   createUser,
@@ -23,6 +26,7 @@ import {
   getFileFor,
   getLibraryComponent,
   listLibrary,
+  listMembers,
   publishComponent,
   renameFile,
   restoreFile,
@@ -39,6 +43,7 @@ import {
   unpublishComponent,
 } from './db';
 import { newId } from '../lib/id';
+import { safeNext } from '../lib/next';
 
 const COLORS = ['#BDEE63', '#5B8DEF', '#F2637F', '#F5A623', '#9B7BF0', '#27C4A6', '#EF6C3E', '#4CC3F0'];
 const ADJECTIVES = ['Refined', 'Quiet', 'Amber', 'Northern', 'Folded', 'Bright', 'Soft', 'Open'];
@@ -65,7 +70,8 @@ export async function signUp(_prev: FormState, form: FormData): Promise<FormStat
   const id = newId();
   createUser({ id, email, name, color: pick(COLORS), passwordHash: hashPassword(password) });
   await startSession(id);
-  redirect('/files');
+  // the file link that sent them here, if there was one — see `safeNext`
+  redirect(safeNext(form.get('next')) ?? '/files');
 }
 
 export async function signIn(_prev: FormState, form: FormData): Promise<FormState> {
@@ -78,7 +84,7 @@ export async function signIn(_prev: FormState, form: FormData): Promise<FormStat
     return { error: 'Email or password is incorrect.' };
   }
   await startSession(user.id);
-  redirect('/files');
+  redirect(safeNext(form.get('next')) ?? '/files');
 }
 
 export async function signOut(): Promise<void> {
@@ -310,6 +316,23 @@ export async function setLinkRoleAction(fileId: string, role: '' | 'editor' | 'v
   revalidatePath('/files');
 }
 
+/**
+ * A fresh handshake token for a room you are still allowed into.
+ *
+ * The one baked into the page at render time lives an hour, which is shorter
+ * than a working afternoon, so the session asks for another when the sync
+ * server refuses the old one. `null` is the honest answer to "your access has
+ * gone" — the session stops there rather than retrying against a door that is
+ * now shut.
+ */
+export async function refreshSyncTokenAction(room: string): Promise<string | null> {
+  const user = await currentUser();
+  const access = openRoom(room, user?.id ?? null);
+  if (!access.ok) return null;
+  const identity = user ?? (await guestIdentity());
+  return issueSyncToken(identity.id, room, access.role);
+}
+
 // ── Folders ──────────────────────────────────────────────────────────────
 //
 // A folder is a way of looking at your own file list, so every one of these is
@@ -347,6 +370,25 @@ export async function moveFileAction(fileId: string, folderId: string): Promise<
   if (!user) redirect('/signin');
   moveFileToFolder(fileId, user.id, folderId || null);
   revalidatePath('/files');
+}
+
+/**
+ * Who is in this file, for the comment composer's @-picker.
+ *
+ * Presence only knows who is here *now*, and a mention is most often for
+ * someone who is not — so the picker needs the membership, not the room.
+ */
+export async function listMembersAction(
+  fileId: string,
+): Promise<{ id: string; name: string; color: string }[]> {
+  const user = await currentUser();
+  if (!user) return [];
+  if (!getFileFor(fileId, user.id)) return [];
+  return listMembers(fileId).map((member) => ({
+    id: member.id,
+    name: member.name,
+    color: member.color,
+  }));
 }
 
 // ── The shared library ───────────────────────────────────────────────────

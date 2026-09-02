@@ -47,6 +47,14 @@ update it at the end of every session.** It outlives compaction; nothing else he
   sweep turned up rather than for anything Figma publishes. **17 rows: 16 parity,
   1 partial** (`MO-02`, eleven properties against Figma's longer list). All
   seventeen are in `d85ee70`.
+- **Fourth sweep — 2026-08-31, eighth pass.** Fourteen readers over fourteen
+  surfaces, each claim then handed to a separate reader whose job was to refute
+  it: **102 claims, 88 survived, 14 refuted.** The implementation was fanned out
+  the same way, one git worktree and one dev server per cluster, so each could
+  run the real suite before merging. See "Phase 1 — fourth sweep" below for the
+  rows and for the three things the fan-out itself turned up. `C-27` is closed,
+  and one row nobody was looking for — ⇧1 / ⇧2 / ⇧0 doing nothing at all —
+  came out of writing the shortcuts panel's table down.
 - **226 parity, 7 deliberate, 1 partial (`MO-02`), 1 missing (`C-27`).** The two
   rows that were `partial` before the third sweep were argued rather than fixed,
   twice, and the user overruled that both times — correctly. See the session log.
@@ -818,3 +826,224 @@ V-07, and the four approximate adjustments. All six README limits stand.
   mixing parent-local x/y with a world-space anchor for anything nested. Suite
   366 → 377. The flaky `tabs.spec.ts:98` was fixed only after it had been
   reported in the previous update — never silently.
+
+
+---
+
+# Phase 1 — fourth sweep (2026-08-31, eighth pass): a wide audit and its answer
+
+## How this one was run
+
+The first three sweeps were read by one pair of eyes at a time, which is why
+each of them found a surface the last had not walked. This one fanned out
+instead: fourteen readers, one per surface, each told to establish what
+Paperlike does by reading source and running tests and never by reading the
+README — and each told to read this ledger first so it would not re-report a
+row already closed. Every claim any of them made was then handed to a separate
+reader whose only job was to **refute** it, defaulting to refuted when unsure.
+
+**102 claims, 88 survived refutation, 14 were thrown away.** The fourteen were
+thrown away for the reasons the process is for: the capability existed under
+another name, a test already covered it, the cited lines did not say what the
+claim said they said, or Figma does not in fact behave the way the claim
+assumed.
+
+The implementation was fanned out the same way — clusters of rows worked in
+parallel, each in its own git worktree with its own dev server and its own
+Playwright lane, so every cluster could run the real suite rather than promising
+to. Each cluster merged back only after its own full run was green, and the
+merged tree was run again after every merge.
+
+## What the fan-out cost, and what it caught
+
+Three things are worth recording, because they are the argument for doing it
+this way and the argument against doing it carelessly.
+
+1. **A clean merge is not a working merge.** `fitView` grew a `page` argument in
+   the canvas-chrome cluster while the context-menu cluster added a "Zoom to
+   fit" row that called the old signature. Git merged both without a murmur;
+   the typecheck caught it immediately. Nothing but running the checks on the
+   merged tree would have.
+2. **Two guards that were the same idea, written twice.** The keyboard cluster
+   made modals own the keyboard; the context-menu cluster made an open menu own
+   it. Both landed in the same five lines of `Editor`. They are one condition
+   now, and the comment says what it covers.
+3. **The shared document is a fixture only while every test treats it as one.**
+   Two tests failed after the second merge and neither was a regression:
+   `features.spec.ts`'s variable-mode test took `listCollections()[0]` as the
+   default collection, which stopped being true once other tests had added four
+   collections to the document; the new page-drag test read the two rows at the
+   top of the pages list, which had gone from twelve pages to one. Both are the
+   same lesson `tabs.spec.ts:98` has been recording since the first sweep.
+
+## Two rows nobody found by looking for them
+
+- **C-27**, the one row the third sweep left open, is closed. An armed tool now
+  owns the pointer, selection chrome included, in `Overlay` and `FlexHandles`
+  alike — the handles stay drawn, as Figma draws them, and stop taking presses.
+- **⇧1, ⇧2 and ⇧0 did nothing.** Figma's Zoom to fit, Zoom to selection and
+  Zoom to 100%. The branches matched `event.key`, and ⇧1 arrives as `!`. Found
+  while writing the shortcuts panel down, which is the argument for writing a
+  table of what you claim to support: only ⌘1 / ⌘2 / ⌘0 had ever worked. The
+  same exercise turned up the whole table written in the wrong modifier order,
+  caught by a test that compares each row's printed glyphs against its id.
+
+## The rows
+
+### auto-layout
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `hug-fill-size-readout` | W and H always report the laid-out size. Set a frame to Hug and the fields track the content live as you type into it — greyed to say the layout owns  | The Design panel's W and H print the stored number for a hug or fill layer instead of the size the browser actually laid out, so the panel and the selection's own size badge — both on screen | wrong | **open** |
+| `grid-child-span-and-cell` | In grid auto layout a selected child gets a "Grid position" block: column start + column span, row start + row span. You can also drag a child into a  | Grid auto layout auto-flows every child into the next free 1×1 cell — a selected child has no column/row start or span, cannot be dragged into a chosen cell, and no cell can be left empty —  | missing | **open** |
+| `grid-track-sizing` | Each column and each row of a grid auto layout carries its own sizing: Fixed (px), Hug contents, or Fill. You click a track's handle on canvas or its  | Grid auto layout has no per-track sizing: every column and row is emitted as a hard-coded `minmax(0, 1fr)`, so Figma's Fixed/Hug/Fill per track — a 240px sidebar beside a filling content col | missing | **open** |
+| `grid-canvas-handles` | Selecting a grid auto-layout frame gives you the same direct manipulation as a stack: the padding bands on all four sides, and draggable gutters betwe | A grid auto-layout frame gets zero on-canvas layout chrome — `FlexHandles` bails out on `mode === 'grid'` before it draws anything, so the four padding bands (whose geometry is already mode- | partial | **open** |
+| `negative-gap` | Auto-layout gap goes negative — that is how stacked avatars, overlapping cards and shingled lists are built. It is the reason Figma ships the "Canvas  | Negative auto-layout spacing is writable (gutter drag clamps only at -999) and Paperlike even ships the Canvas-stacking control that exists only to arbitrate the resulting overlap, but the v | wrong | **open** |
+| `baseline-on-vertical` | "Text baseline alignment" is only available on a horizontal auto layout — the control is disabled otherwise, because a baseline is a cross-axis rule a | The Advanced-layout "Text baseline alignment" toggle stays enabled on vertical and grid frames, where Figma disables it: on a column it overwrites the frame's cross-axis alignment with `alig | wrong | **open** |
+
+### canvas-chrome
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `cc-zoom-to-selection-capped-at-100` | ⇧2 fills the viewport with the selection whatever its size — a 24px icon goes to several hundred percent. Same for N / ⇧N walking the boards: a small  | Every "fit" in Paperlike — ⇧2 zoom-to-selection, ⇧1 zoom-to-fit, N/⇧N frame walking, `?node=` deep links, the zoom menu, and "go to main component" — is hard-clamped to a maximum of 100% by  | wrong | `f41ff4c` |
+| `cc-no-drop-target-highlight` | While you drag, the frame that will receive the layer is highlighted live — Figma outlines it, so you know before you release whether you are dropping | Dragging a layer into a frame it is not already inside gives zero pre-release feedback: the receiving frame is resolved only at pointer-up (`containerAt` at Canvas.tsx:1038 and :948, both in | missing | `7aeb8d1` |
+| `cc-snap-guides-no-distances` | Smart guides are two things: alignment lines, and *measurements*. As you drag, Figma draws red numbers on the gaps to the neighbouring layers, and sna | Snapping is alignment-only: a drag draws a bare red line with no distance label and never snaps a gap to match the adjacent gap, so spacing a row by hand is done entirely by eye — the equal- | partial | `475afc0` |
+| `cc-component-instance-colour` | Selection chrome is colour-coded by what you picked: purple (#9747FF) outline, name label and handles for a main component, a component set and an ins | No canvas chrome reads `isComponent`/`instanceOf`/`isComponentSet`, so a main component, an instance and a plain frame draw identical #0a7ad4 blue hover outline, selection outline, name labe | missing | `dad96de` |
+| `cc-zoom-to-fit-wrong-page` | ⇧1 fits the content of the page you are looking at. | Zoom to fit measures Page 1 instead of the page you are on — on any other page ⇧1 (Editor.tsx:878-882) and the zoom menu's "Zoom to fit" (Presence.tsx:37) fly you to Page 1's bounds over emp | wrong | `72376a2` |
+| `cc-measure-from-first-only` | ⌥-hover measures from the whole selection's bounding box to the hovered layer, and where the two do not overlap on the cross axis Figma draws dashed e | ⌥-measure ignores everything but `selection[0]` and pins its readout to that one layer's centre, so a multi-selection reports a distance from an arbitrary member while the chrome shows the g | partial | `47aafeb` |
+| `cc-outlines-view-erases-text` | Outlines view strips fills and effects and draws everything as its geometry — including text, which renders as hollow glyph outlines. You can still re | Outlines view (⌥⇧O) forces `color: transparent !important` on every canvas node, so text layers turn into unreadable empty boxes instead of Figma's hollow glyph outlines — destroying the one | wrong | `13d22dd` |
+
+### collab-comments
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `cm-viewer-comment-dropped` | A viewer ("can view" access) can leave and reply to comments; comment traffic is not part of the edit permission. The comment persists and everyone el | A view-only member is given the comment tool and the composer accepts their text — the pin renders and no error appears — but because comments live in the same Y.Doc as the nodes and the syn | wrong | `9a11afc` |
+| `pr-presence-has-no-page` | Cursors, selection halos and avatars are scoped to the page the other person is on; the avatar of someone on another page is dimmed/labelled, and clic | Presence carries no page id: a peer working on another page still draws a live named cursor and chat bubble over your page at their world coordinates, their avatar is indistinguishable from  | missing | `582cc22` |
+| `cm-pin-not-anchored` | A pin dropped over an object anchors to that object (and to a position within it). Move, resize or reflow the frame and the pin follows; the thread ke | A comment pin is stored as a bare page-space point with no node reference, so moving, resizing or reparenting the layer it was left on leaves the pin behind pointing at empty canvas — even t | missing | `d64c5ef` |
+| `cm-no-thread-list` | A comments sidebar lists every thread in the file with author, snippet and time; it filters (open / resolved / mine / unread), sorts, and clicking a t | Comment threads are reachable only as pins drawn at their world coordinates, so a thread that is off-screen, on another page, or resolved has no entry point at all: Paperlike has no comments | missing | `f42211c` |
+| `vh-no-named-versions` | ⌥⌘S saves a named version with a title and description; the history panel groups auto-saves under named checkpoints and shows who made each one, so yo | You cannot deliberately save a version in Paperlike: history is a read-only shelf of the sync server's timer snapshots, so there is no ⌥⌘S "save a named checkpoint" with a title and descript | missing | `89372a8` |
+| `vh-restore-drops-pages` | Restoring a version makes the whole file look like that version — every page, in place. | Restore re-inserts only the children of the hard-coded root page and always pastes them back into that same page: a snapshot's pages 2..n are silently discarded, a snapshot whose work lives  | wrong | `0cb0663` |
+| `cm-no-reactions` | Any message in a thread takes emoji reactions, and reacting is how most "yes, agreed" traffic is handled without adding a reply; the reaction chips sh | A Paperlike comment thread has no per-message affordance whatsoever — no emoji reactions, so every "agreed" has to be spent as a full reply that pushes the thread longer, and the only button | missing | `eb864ae` |
+| `cm-mentions-untyped` | Typing `@` opens a picker of people with access; the mention becomes a real reference to a user, notifies them, and can grant access. | Typing `@` in a comment or reply offers no picker of the file's members — mentions stay plain text matched by `namesMe`, whose `me.toLowerCase().startsWith(name)` clause makes any prefix (`@ | partial | `cb0e011` |
+
+### components-variables
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `cv-nested-instance-identity` | An instance of a component that itself contains instances keeps those nested instances alive. Selecting the inner one (⌘-click, or the layers tree) gi | Placing an instance of a component that contains an instance flattens the inner one into a plain frame — no Instance panel, no swap, no Reset/Detach, no properties, no component glyph in the | wrong | **open** |
+| `cv-one-variant-property` | A component set carries any number of variant properties — Size × State × Type — and the panel shows one control per property, so an instance is confi | A component set is permanently stuck with the one "Property 1" that Combine-as-variants seeds from layer names: nothing in the UI can add a second variant axis (the Add-property menu omits ` | missing | **open** |
+| `vr-alias-no-ui` | A variable's value in any mode can be another variable. That is the entire semantic-token workflow: `surface/default` → `grey/100` in Light and `grey/ | Variable aliasing exists only in the resolver: nothing in the app or the MCP surface can set `Token.alias`, and the field hangs off the token rather than off a mode, so the one case that mat | partial | **open** |
+| `vr-string-variables-inert` | String variables bind to a text layer's content. It is the headline use of modes — one frame, an English mode and a German mode — and they also drive  | A string variable cannot drive a text layer's content — the Figma localization story (one frame, an English mode and a German mode) is impossible here — and a text token's scope editor silen | partial | **open** |
+| `lib-variables-styles-not-published` | A library publishes components, styles and variable collections together, and enabling the library in another file brings the tokens the components ar | Publishing to the shared library carries node JSON only - no variable collections and no styles - so an imported component's colour picked from a variable arrives as the literal string `var( | wrong | **open** |
+| `vr-number-mode-desync` | A frame set to a mode resolves every bound value in that mode — the rendered box, the W/H the panel reports, snapping and alignment all agree, because | A number variable resolves per-mode only through CSS, never in the model: `syncVariables` writes the default mode's number (store.ts:866) while the frame's `modeVars` draws the mode's, so in | wrong | **open** |
+
+### context-menus
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `ctx-one-menu-for-everything` | Figma builds a different menu per target. Right-clicking empty canvas gives a short menu (~8 rows: Paste here, Show/hide UI, Show/hide comments, Show/ | Right-clicking the canvas builds the same 39-row list whether or not anything is under the pointer (`ContextMenu.tsx:451-731`, one unconditional `items.push` at :470): with nothing selected  | wrong | `a2dea8b` |
+| `ctx-duplicate-mask-row` | One mask row, reading 'Use as mask' or 'Remove mask' depending on state, bound to ⌃⌘M. | The layer context menu draws the mask toggle twice — one row above 'Flatten' and another below 'Create section' — same ⌃⌘M, same disabled rule, same `store.toggleMask` call, so a masked sele | wrong | `c13274b` |
+| `ctx-text-edit-menu` | Right-clicking while a text layer is in edit mode gives a text-scoped menu: Cut / Copy / Paste operating on the selected characters, plus the type com | Right-clicking inside a text layer that is in edit mode opens the whole-layer object menu instead of a character-range menu, so 'Copy' copies the layer rather than the selected words and 'De | missing | `c45b6e2` |
+| `ctx-create-multiple-components` | With several layers selected, right-click offers both Create component (⌥⌘K — wraps the selection in one component) and Create multiple components (on | Componentising a multi-selection has no correct path: the context-menu row greys out at 2+ layers and ⌥⌘K goes dead (both gated on `selection.length === 1`), while the command palette's iden | partial | `552c65f` |
+| `ctx-keyboard-nav` | An open context menu owns the keyboard: ↑/↓ move the highlight, → opens a submenu and ← closes it, Enter runs the highlighted item, Home/End jump, typ | The right-click menu neither takes the keyboard nor blocks it: nothing focuses the panel on open and it handles no key but Escape, while Editor's global keydown never checks `ui.contextMenu` | missing | `d9b5cec` |
+| `ctx-file-tab-menu` | Every Figma menu is the same component — clamped to the viewport, dismissed by Escape, keyboard-navigable, with shortcut labels. | The file-tab context menu is a second menu implementation that neither clamps to the viewport nor answers Escape: it is drawn at raw `clientX/clientY` as a 168px-wide `position: fixed` box,  | wrong | `ca099df` |
+
+### empty-error-states
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `sync-token-expires-silently` | A session that loses authorisation is re-established transparently, or Figma tells you plainly and asks you to reload before you lose work. It never l | Once the one-hour sync token expires, the very next socket drop is permanent and silent: the server closes 4401, y-websocket treats 4400-4499 as a terminal close and stops reconnecting for g | wrong | `e7c140e` |
+| `signin-next-ignored` | Opening a file link while signed out takes you to sign-in and then straight into that file. If you have no access, you get a "Request access" page nam | Opening a shared file link while signed out sends you to /signin with the destination in `?next=`, but nothing ever reads that param — sign-in and sign-up both hard-code `redirect('/files')` | wrong | `6cf4d8c` |
+| `file-browser-no-pending-state` | The file browser paints skeleton cards while a view loads, and creating a file shows immediate progress before the editor opens. | "New file", Duplicate, Delete and Sign out are plain server-action submit buttons that stay in their resting state for the whole round trip — New file writes a row then redirects into /f/[ro | partial | `a99933a` |
+| `sync-never-arrives` | Opening a file shows a loading state until the document is in hand, and a file that cannot reach the server puts a persistent bar across the top ("Rec | A file whose sync never lands still renders the whole editor: `Booting` clears after one effect tick unrelated to the socket, the seed that creates the only page runs solely inside `provider | missing | `b5334c9` |
+| `delete-file-unconfirmed` | Deleting a file moves it to Trash, shows a toast with an Undo, and the file is restorable for 30 days. Deleting a project/folder asks first and says w | The file card's Delete destroys an owned file — its DB row, every collaborator's access, and the CRDT snapshot — on one unconfirmed click of a button sitting flush against Duplicate, with no | missing | `61502ae` |
+| `no-404-or-error-page` | A file you cannot open shows a branded page that says so and offers Request access or Back to files. A client crash shows a "Something went wrong" dia | A signed-in user who opens a deleted file, a revoked share link or a mistyped file id gets Next's stock black-on-white "404 · This page could not be found" — no Paperlike chrome, no link bac | missing | `1c1a7c2` |
+| `image-decode-fails-silently` | A file it cannot decode is refused outright with "Couldn't import image" — nothing is added to the canvas. | A file the browser cannot decode — most commonly a .heic dragged from macOS Photos, which passes the `image/` mime guard — is silently placed as an empty 240x160 image layer instead of being | wrong | `54c3e1d` |
+
+### export-devmode
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `svg-foreignobject-not-vector` | SVG export writes real SVG: <path>, <rect>, <text> (or outlined glyph paths), with options for "Outline text", "Simplify stroke" and "Include 'id' att | Every user-facing SVG export (Export dialog Save, batch export settings, Copy as SVG) emits one `<foreignObject>` wrapping serialised XHTML, so the file renders only in a browser and opens b | wrong | **open** |
+| `export-size-constraints` | The size field of an export row accepts `0.5x`–`4x`, a percentage (`150%`), and absolute constraints typed as `512w` or `1024h`, which pin one dimensi | Export size is a closed 0.5/1/2/3/4x dropdown with no typed entry — no `150%`, and no `512w`/`1024h` constraint that pins one dimension — so an exact-pixel asset (favicon, app icon, og:image | missing | **open** |
+| `export-dialog-detached-from-layer` | ⇧⌘E acts on the export settings already on the selected layers and exports all of them; the panel and the dialog are one system. With nothing selected | ⇧⌘E opens an export dialog wired to global UI state instead of the selection's own `exports` rows, so a layer configured with three export settings shows none of them, only `selection[0]` is | wrong | **open** |
+| `inspect-spacing-stale-xy` | Dev Mode reports the real laid-out distance from a layer to its parent's edges, and hovering a sibling gives the distance between the two. | The Inspect tab's Spacing "To parent" row (and the Size row above it) computes distances from stored `node.x/y` and `parent.w/h` for layers whose box the browser owns — every auto-layout chi | wrong | `ca8f520` |
+| `annotation-property-pins` | An annotation carries a note plus pinned properties (fill, corner radius, typography, auto layout, a variable…), which render live values in the pin a | An annotation can only be free text: there is no way to pin a property (fill, corner radius, typography, auto layout, a variable) so the note carries the design's live value, and the `label` | partial | **open** |
+| `devstatus-invisible-and-unindexed` | Marking a section or frame ready for dev shows a persistent badge, marks everything inside it, is on the right-click menu, and populates a Dev Mode li | "Ready for dev" is a leaf flag with no reach: it can only be set on the one selected node from the Inspect tab, never propagates from a section to the frames inside it (as Figma's does), its | wrong | `ca8f520` |
+
+### inspector-design
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `stroke-paint-row-dead-opacity` | A stroke is a paint like any other: the row carries swatch + hex + opacity %, and the picker's Opacity slider moves it. The eye beside it hides the st | The Stroke row is the only paint row in the Inspector that stores neither alpha nor a visible flag: its Opacity % input and the picker's Opacity slider render live and throw every value away | wrong | `1568c48` |
+| `effects-ignore-multi-selection` | With several layers selected whose effects differ, the Effects section says so — the same "Click + to replace mixed content" treatment Fill gets — rat | Effects is the one inspector section never given the selection: on a multi-selection it renders the first layer's effect list with no Mixed notice, and every edit — a blur nudge, an eye togg | wrong | `75003c2` |
+| `scrub-ignores-modifiers` | Scrubbing a numeric label is modifier-aware: plain drag steps by 1, ⇧-drag by 10, ⌘/⌥-drag by 0.1. It is how you cross 400px of width without letting  | Label-scrubbing a numeric field ignores ⇧: the drag steps by `step` no matter what is held, while the same field's arrow keys three lines away do honour ⇧ for ×10 — so ⇧ means "faster" when  | partial | `7728e78` |
+| `blend-pass-through` | A group's or frame's blend dropdown opens with "Pass through" above the divider, and it is the default. Choosing "Normal" instead isolates the group:  | A group or frame's blend menu has no "Pass through" — it opens on "Normal", which is a lie: no code path ever puts `isolation: isolate` (or any other stacking-context trigger) on a plain fra | missing | `94449b4` |
+| `one-layout-grid-per-frame` | Layout grid is a stacked list: a frame commonly carries a 12-column grid *and* an 8px square baseline grid, or columns plus rows. Each has its own typ | A frame can carry at most one layout grid — `guides` is a scalar, so Figma's stacked list (a 12-column grid *and* an 8px square grid, each with its own colour and eye) is unreachable, and gr | missing | `52ab28e` |
+| `constraints-widget` | The Constraints row is a 56px square diagram: the layer as a small rectangle inside its parent, with four pin bars and a vertical/horizontal centre li | Constraints is dropdowns-only: ConstraintsRow draws no pin diagram, so Figma's primary way to set pinning — clicking the four pin bars on a small frame square — has no equivalent, even thoug | partial | `6bc3ba4` |
+
+### keyboard
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `kbd-text-marks-only-in-edit-mode` | Select a text layer with the move tool and press ⌘B — the whole layer goes bold. You do not have to enter the text first. Same for ⌘I, ⌘U and ⇧⌘X. | With a text layer merely selected on canvas, ⌘B / ⌘I / ⌘U silently do nothing, and ⇧⌘X — Figma's strikethrough — falls through to the unguarded cut branch and deletes the layer to the clipbo | partial | `85a515e` |
+| `kbd-modal-shortcut-leak` | A modal (Export settings, Version history, Rename, plugin modals) owns the keyboard while it is up. Pressing R, ⌫ or ⌘D behind an open Export sheet do | Export, Version history and Shaders open as full-screen overlays that focus nothing and stop no keys, so canvas shortcuts keep firing behind them — ⌫ with the Export sheet up deletes the ver | wrong | `d0d542e` |
+| `kbd-shortcuts-help-panel` | ⌃⇧? (also Help → Keyboard shortcuts) opens a persistent bottom-docked panel with tabbed categories — Essential, Tools, View, Zoom, Text, Shape, Select | Paperlike only teaches a binding next to a command you already found — the ⌘/ palette's 22 hints and the context menu's ~35 — so the keys that belong to no menu item (the tool letters, ⌘0/⇧1 | missing | `45dbcc7` |
+| `kbd-shift-x-swap-fill-stroke` | ⇧X swaps the selection's fill colour with its stroke colour — one of the handful of bindings that is genuinely faster than the panel, and the reason F | Swap fill and stroke (Figma's ⇧X) exists nowhere in Paperlike — not on the key map, not in the context menu, not in the command palette, not as a control between the Inspector's adjacent Fil | missing | `4ff0ce9` |
+| `kbd-alt-shift-a-remove-auto-layout` | ⇧A adds auto layout, ⌥⇧A removes it. The pair is how you try a layout on and take it back off without going to the panel. | No keyboard path removes auto layout: Editor.tsx:754 catches ⇧A without an altKey guard, so ⌥⇧A does nothing on macOS and on Windows/Linux wraps the frame in a second auto-layout frame — whi | missing | `de59c35` |
+| `kbd-frame-tool-on-a` | Frame is bound to both F and A — A is the legacy Artboard key and Figma still ships it; the shortcut panel lists "Frame  F  A". | Bare `A`, Figma's surviving legacy Artboard alias for the Frame tool, is dead in Paperlike — it is absent from `TOOL_KEYS`, every other `A` binding demands a modifier, so the key falls throu | missing | `ed75f0e` |
+
+### motion-timeline
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `inspector-blind-to-playhead` | In Figma Motion the properties panel is the keyframe editor. With the timeline open the right-hand fields read the value *at the playhead*, an animate | With a timeline open, the design panel is the one thing in the editor that is not playhead-aware: its fields keep reading the stored document (`Inspector.tsx:2407-2418`, `:3347-3357`) while  | wrong | **open** |
+| `no-keyboard-time-navigation` | Arrow keys step the playhead in time, shift jumps further, Home/End go to the ends, and with keyframes selected the arrows move the selected keyframes | The motion timeline has no keyboard at all for time: the playhead moves only by dragging a 24px ruler strip or clicking rewind (Timeline.tsx:1001, 500-518, 769-777; globals.css:3641-3646) —  | missing | `72fcdb9` |
+| `layer-rows-are-dead-space` | The layer row in the timeline aggregates every keyframe on that layer, and the layer collapses so a busy timeline stays readable — you see where thing | A timeline layer row is inert chrome: it neither aggregates the layer's keyframes nor collapses, so every animated layer permanently spends a blank 24px strip plus one 24px row per track ins | missing | `d9032db` |
+| `chip-tooltip-blames-the-fill` | A property that cannot be animated explains itself for the reason it is actually unavailable. | Every disabled Motion property chip shows the gradient-fill explanation, so hovering the greyed Stroke chip on a layer that simply has no stroke (or the Blur chip on a layer whose effects li | wrong | `72fcdb9` |
+| `no-timeline-context-menu` | Right-clicking a keyframe opens a menu: Copy / Paste / Delete, and the easing presets. That menu is how most people ever discover keyframe easing; the | Right-click anywhere in the timeline both opens the browser's native menu and silently mutates the timeline — the lane handlers never check `event.button`, so a right-press on a keyframe res | missing | `d9032db` |
+
+### panels-ux
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `native-title-tooltips` | Toolbar and panel tooltips are drawn by the app: a dark pill after a short deliberate delay, the command name in one weight and its shortcut set apart | Paperlike has no tooltip component at all — all 367 hover hints across 28 chrome components are the browser's native `title`, so a shortcut arrives after the OS's ~1s delay as one unstyled s | partial | **open** |
+| `palette-command-coverage` | ⌘/ is a fuzzy search over *every* command in the app — the menu bar, the right-click menu, plugins, everything — and it opens showing your recently us | Quick actions indexes only 30 hand-written commands, and Paperlike has no menu bar — so roughly two dozen commands that exist only in the right-click menu (Detach instance, Move to page, Ras | partial | **open** |
+| `assets-no-previews` | The Assets panel shows each component as a rendered preview in a grid by default, with a grid/list toggle in the header. You pick a component by recog | The Assets panel is text-only: every component is a 24px `fig-layer` row of purple glyph + name, with no thumbnail in any mode, no grid/list toggle beside the search field, and no hover prev | partial | **open** |
+| `layers-drag-no-autoscroll` | Holding a dragged layer near the top or bottom edge of the layers list scrolls the list under the pointer, accelerating as you push further into the e | A layers-panel drag never scrolls the list, so a drop target that was off-screen when the press started is unreachable — and the two things that would rescue it both fail: releasing past the | missing | `349e5d6` |
+| `pages-no-reorder` | The Pages list is drag-reorderable: press a page row, drag it up or down, an insertion line follows, and dropping moves the page. Page order is the fi | A page's position is fixed the moment it is created — no store operation moves an entry within the `pages` Y.Array and the page rows have no drag, so a new page is pinned to the bottom of th | missing | `349e5d6` |
+| `pages-search-dead` | The magnifier in the Pages header opens a filter field over the pages list and narrows it as you type — the same interaction the Layers header's magni | The Pages header's magnifier is dead chrome — it renders with a "Search pages" tooltip and no onClick, so a file with many pages has no way to filter the list, while the Layers header direct | wrong | `349e5d6` |
+
+### prototype-present
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `proto-frames-in-sections-invisible` | Sections are a first-class way to organise flows on a page, and a frame inside one is still a full prototype citizen: it appears in the Navigate-to de | The whole prototype surface is keyed to `page.children`, so putting a board in a section drops it from the Destination menu, the Flows list, the noodle drop target, the Prototype tab's Flow- | missing | **open** |
+| `proto-hover-press-never-revert` | Both triggers are momentary: While hovering runs the action on enter and *undoes* it when the cursor leaves; While pressing runs it on press and undoe | "While hovering" and "While pressing" are dispatched identically to "Mouse enter" and "Mouse down" — `fire()` calls one-way `go()` and no handler restores the prior overlay, frame or variant | wrong | **open** |
+| `proto-overlay-ignores-transition` | An overlay animates in with the transition you chose — Move in from the bottom for a sheet, Dissolve for a modal — with direction, duration and easing | Overlays open, swap and close instantly no matter what Animation the Prototype panel wrote: Present's three overlay branches return before ever calling setMove, and `.fig-overlay` has no CSS | wrong | **open** |
+| `proto-noodles-inert` | A prototype connection is an object: hover highlights it, click selects it (and reveals that interaction in the Prototype panel), Delete removes it, a | Prototype noodles are inert decoration: the connection layer is `pointerEvents: 'none'` and each link's path/endpoint has no hit target, hover, click, endpoint re-drag or Delete — the only w | missing | **open** |
+| `proto-noodles-navigate-only` | The canvas draws a connection for every action that points somewhere: Open overlay and Swap overlay get noodles to their target frame, Scroll to gets  | In the Prototype tab the canvas draws a noodle only for `navigate` — an Open overlay, Swap overlay or Scroll to interaction that Present actually honours leaves the hotspot completely unmark | partial | **open** |
+| `present-no-scaling-controls` | The presentation view has a scaling menu (Fit to screen, Fill screen, Actual size, Scale down to fit width) with ⇧1 / ⇧0 shortcuts, and it remembers t | Presentation view has no scaling control of any kind — the stage scale is hard-clamped to `Math.min(1, fit)`, so a frame smaller than the window is always drawn at 1:1 and there is no Fit /  | missing | **open** |
+
+### text-engine
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `type-panel-ignores-selection` | While you are editing a text layer, the whole right-hand Text panel acts on the selected characters: font family, style/weight, size, line height, let | With a range selected inside a text layer, the right-hand Typography panel still reads and writes `node.font`, so choosing a family, weight, size, line-height or letter-spacing there restyle | partial | `b3840b7` |
+| `list-is-layer-wide-no-indent` | A list style is applied to the selected paragraphs, so one text layer can hold a heading line, three bullets and a closing line. Tab indents the curre | Bulleting is a whole-layer switch, not a paragraph one: `list` lives on `FontSpec`, so turning on bullets wraps every `\n`-separated line of the layer in an `<li>` — a heading and its three  | missing | `55ed4d3` |
+| `edit-mode-reflows-the-text` | Editing is in place and WYSIWYG: bullets stay bulleted, paragraph spacing stays, a truncated layer shows its full text while you edit and re-clamps wh | Double-clicking a text layer swaps the rendered block for a flat run of spans, so bullets, numbering, paragraph spacing and the path all disappear the instant the caret appears — and a trunc | wrong | `23144a9` |
+| `text-resize-pins-both-axes` | Text sizing is three states — Auto width, Auto height, Fixed — and the handles move between them: dragging a *side* handle on an auto-width text conve | Text handles carry no auto-width/auto-height rule: every handle drag writes `wMode: 'fixed', hMode: 'fixed'` unconditionally (Overlay.tsx:517) though the grabbed handle's own axes are alread | wrong | `8167c6a` |
+| `link-is-layer-only` | ⌘K with characters selected inside a text layer puts the link on exactly those characters — "read our Terms" inside a sentence. The linked run renders | ⌘K inside a text edit does nothing at all — TextEditor's `onKeyDown` stops propagation before the window-level handler ever sees it — so the only way to link is with the layer selected, whic | partial | `c0303e2` |
+| `no-paragraph-vs-line-break` | ⏎ starts a new paragraph; ⇧⏎ inserts a line break *within* the paragraph. Paragraph spacing applies only between paragraphs, and a list item can hold  | Text has only one break character: ⇧⏎ and ⏎ both end up as a plain `\n`, so every line is a paragraph — paragraph spacing is inserted between *every* line and every line becomes its own bull | missing | `7164053` |
+
+### vector-pen
+
+| id | what Figma does | what this did | verdict | closed by |
+|----|-----------------|---------------|---------|-----------|
+| `vec-cmd-backspace-deletes-layer` | ⌘⌫ is "Delete and heal selection" — with a vector point selected in edit mode it removes the point and closes the gap, and it never touches the layer  | Any ⌫/Delete that VectorEdit's capture handler declines to consume — ⌘⌫ (Figma's "Delete and heal selection") or a plain ⌫ with no anchors selected, which is the state the instant edit mode  | wrong | `fa33abe` |
+| `vec-pen-path-discarded` | The vector layer exists from the first segment — it appears in the Layers panel while you are still clicking, and every point you place is on the docu | Escape and any tool switch silently delete the whole in-progress pen path instead of finishing it as Figma does, and because the anchors live only in React state and never in the document, u | wrong | `fa33abe` |
+| `vec-no-arrow-or-per-end-caps` | The cap dropdown includes the arrow caps beside None/Round/Square, and in vector edit mode with a single endpoint selected the stroke panel shows Star | Stroke caps are one layer-level None/Round/Square value, so no path can carry an arrowhead and the two ends of an open path can never differ; the only arrowhead is the `arrow` node type, who | missing | **open** |
+| `vec-pen-ignores-shift-and-alt` | ⇧ while placing the next point constrains it to 45° from the previous one — how straight and diagonal runs get drawn. ⌥ while dragging a point's handl | The pen tool never constrains: ⇧ while placing the next point does nothing, so every straight horizontal, vertical or diagonal run has to be eyeballed — even though `constrain45` sits twenty | missing | `fa33abe` |
+| `vec-no-vector-network` | A vector network lets any number of segments meet at one node, so a plus, a Y, a wireframe box or a lettering skeleton is one editable path. The paint | Paths are subpath lists, not a vector network: no anchor can carry a third segment (the pen only grows from `isEndpoint`s, `joinAnchors` only welds two loose ends), and the paint bucket can  | missing | **open** |
+| `vec-outline-stroke-ignores-cap-join-dash` | Outline stroke produces exactly the shape that was on screen: butt ends stay square-ended, square caps keep their overhang, mitred corners keep their  | Outline stroke (⇧⌘O) re-draws every path with a round pen, so a shape's mitred corners — Paperlike's own rendering default — round off, square caps lose their overhang, and a dashed stroke c | wrong | **open** |
+| `vec-no-pencil` | The pen button is a flyout with Pencil (⇧P) under it: you drag freehand and Figma fits a smoothed bezier path to the stroke. Figma Draw added more of  | Nothing in Paperlike turns a pointer drag into geometry: the only path-creation route in the app is the pen's one-anchor-per-click placement (`Canvas.tsx:520-545`), so a user cannot sketch a | missing | **open** |

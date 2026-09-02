@@ -2,18 +2,23 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from './Session';
-import { useUI } from '../state/ui';
+import { textActions, useUI } from '../state/ui';
 import { alignText, stepFontSize, TEXT_ALIGN_KEYS } from '../lib/actions';
 import {
   applyToRange,
   diffText,
   isPlain,
+  LINE_BREAK,
+  listBoxStyle,
+  paragraphsIn,
   plainText,
   replaceRange,
+  runSegments,
   runStyle,
   styleAt,
   runsOf,
   styleOfRange,
+  textGroups,
   type RunPatch,
   type TextRun,
 } from '../document/text';
@@ -36,12 +41,16 @@ import type { SceneNode } from '../document/types';
 export function TextEditor({ node, style }: { node: SceneNode; style: CSSProperties }) {
   const store = useStore();
   const setEditing = useUI((s) => s.setEditing);
+  const setEditingRange = useUI((s) => s.setEditingRange);
+  const setLinkEditor = useUI((s) => s.setLinkEditor);
   const editorRef = useRef<HTMLDivElement>(null);
   /** the runs as they stand — the DOM is a view of this, not the other way round */
   const runs = useRef<TextRun[]>(runsOf(node));
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
   /** bumping this re-seeds the DOM from the model, after a styling change */
   const [generation, setGeneration] = useState(0);
+  /** whether the range bar is asking for a link's address */
+  const [linking, setLinking] = useState(false);
 
   /**
    * The spans are built by hand rather than rendered.
@@ -56,16 +65,76 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
   useLayoutEffect(() => {
     const el = editorRef.current;
     if (!el) return;
+    let index = 0;
+    const paint = (run: TextRun) => {
+      const span = document.createElement('span');
+      span.dataset.run = String(index++);
+      Object.assign(span.style, runStyle(run, node.font) as Record<string, string>);
+      span.textContent = run.text;
+      return span;
+    };
+
+    // a soft break is a <br> inside the paragraph; an empty paragraph gets one
+    // too, because a block with no height cannot be clicked into
+    const fill = (line: TextRun[]): Node[] => {
+      const out: Node[] = [];
+      runSegments(line).forEach((segment, at) => {
+        if (at) out.push(document.createElement('br'));
+        for (const run of segment) out.push(paint(run));
+      });
+      return out.length ? out : [document.createElement('br')];
+    };
+
+    // The same groups the canvas draws: editing is in place, so a bulleted list
+    // has to stay bulleted and a paragraph gap has to stay open while the caret
+    // is in it, or the text jumps the moment you double-click it.
+    const groups = textGroups(runs.current, node.font);
+    const spacing = node.font?.paragraphSpacing ?? 0;
+    if (!groups) {
+      el.replaceChildren(...fill(runs.current));
+      return;
+    }
+
     el.replaceChildren(
-      ...runs.current.map((run, index) => {
-        const span = document.createElement('span');
-        span.dataset.run = String(index);
-        Object.assign(span.style, runStyle(run, node.font) as Record<string, string>);
-        span.textContent = run.text;
-        return span;
+      ...groups.flatMap((group): HTMLElement[] => {
+        const lines = group.lines.map((line) => {
+          const box = document.createElement(group.list ? 'li' : 'div');
+          if (line.gap && spacing) box.style.marginTop = `${spacing}px`;
+          box.replaceChildren(...fill(line.runs));
+          return box;
+        });
+        if (!group.list) return lines;
+        const list = document.createElement(group.list);
+        if (group.start && group.start > 1) list.setAttribute('start', String(group.start));
+        Object.assign(
+          list.style,
+          listBoxStyle(node.font, group.indent) as Record<string, string>,
+        );
+        list.replaceChildren(...lines);
+        return [list];
       }),
     );
   }, [generation, node.font]);
+
+  /**
+   * A styling change that came from outside — the type panel acting on the
+   * selected characters — has to land in the editor's own copy of the runs, or
+   * the next keystroke would write the stale copy back over it. The comparison
+   * is against the model rather than the array's identity because the document
+   * is rebuilt from Yjs on every write, so nothing survives by reference.
+   */
+  useLayoutEffect(() => {
+    const incoming = runsOf(node);
+    if (JSON.stringify(incoming) === JSON.stringify(runs.current)) return;
+    runs.current = incoming;
+    setGeneration((value) => value + 1);
+  }, [node.runs, node.text]);
+
+  // the panel needs to know what is selected; publishing it here is what makes
+  // the Text section act on the characters rather than on the layer
+  useEffect(() => {
+    setEditingRange(selection.end > selection.start ? selection : null);
+  }, [selection, setEditingRange]);
 
   // Focus, and put the caret where a click landed — Figma's |, not a
   // select-all. The focus is taken synchronously, in the layout effect, while
@@ -166,10 +235,64 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
    * the only answer that is never a no-op, and a shortcut that silently does
    * nothing is worse than one that is missing.
    */
-  const targetRange = () =>
-    selection.end > selection.start
-      ? { start: selection.start, end: selection.end }
+  /**
+   * Where the caret is *now*.
+   *
+   * `selection` is a render behind: it is set from `selectionchange`, and a key
+   * pressed in the same frame as the click that moved the caret would act on
+   * where the caret was. The DOM always knows, so it is asked.
+   */
+  const liveRange = (): { start: number; end: number } => {
+    const el = editorRef.current;
+    const live = window.getSelection();
+    if (!el || !live || live.rangeCount === 0) return selection;
+    const range = live.getRangeAt(0);
+    if (!el.contains(range.startContainer)) return selection;
+    return {
+      start: offsetOf(el, range.startContainer, range.startOffset),
+      end: offsetOf(el, range.endContainer, range.endOffset),
+    };
+  };
+
+  const targetRange = () => {
+    const range = liveRange();
+    return range.end > range.start
+      ? range
       : { start: 0, end: plainText(runs.current).length };
+  };
+
+  /** Puts a string in at the caret, through the model rather than the DOM. */
+  const insert = (text: string) => {
+    const { start, end } = liveRange();
+    runs.current = replaceRange(runs.current, start, end, text);
+    store.update(node.id, { runs: runs.current, text: plainText(runs.current) });
+    setGeneration((value) => value + 1);
+    const caret = start + text.length;
+    requestAnimationFrame(() => restore(editorRef.current, caret, caret));
+  };
+
+  /**
+   * Applies a patch to every paragraph the selection touches.
+   *
+   * A list mark and an indent are properties of a whole line rather than of a
+   * range of characters, so the commands that set them widen whatever the caret
+   * has to the lines it lands in — which is also why they read the line's own
+   * style rather than being handed a fixed patch.
+   */
+  const applyToLines = (patch: (style: RunPatch) => RunPatch) => {
+    const { start, end } = liveRange();
+    let next = runs.current;
+    for (const line of paragraphsIn(next, start, end)) {
+      if (line.end <= line.start) continue;
+      const style = styleOfRange(next, line.start, line.end);
+      next = applyToRange(next, line.start, line.end, patch(style));
+    }
+    if (next === runs.current) return;
+    runs.current = next;
+    store.update(node.id, { runs: next, text: plainText(next) });
+    setGeneration((value) => value + 1);
+    requestAnimationFrame(() => restore(editorRef.current, start, end));
+  };
 
   const applyStyle = (patch: RunPatch) => {
     const { start, end } = targetRange();
@@ -217,8 +340,37 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
     requestAnimationFrame(() => restore(editorRef.current, caret, caret));
   };
 
+  // The right-click menu over a caret is drawn by `ContextMenu`, but its
+  // commands have to run in here for the same reason ⌘B does. Re-registered on
+  // every render so the closures see the range the caret is on now.
+  useEffect(() => {
+    textActions.mark = (key) => {
+      const span = targetRange();
+      const on = styleOfRange(runs.current, span.start, span.end)[key];
+      applyStyle({ [key]: on ? undefined : true });
+    };
+    textActions.pastePlain = () => void pastePlain();
+    return () => {
+      textActions.mark = null;
+      textActions.pastePlain = null;
+    };
+  });
+
   const current = styleOfRange(runs.current, selection.start, selection.end);
   const hasRange = selection.end > selection.start;
+  // the list style of the line the caret is in — a paragraph that says nothing
+  // of its own wears the layer's
+  const line = paragraphsIn(runs.current, selection.start, selection.end)[0];
+  const list =
+    (line ? styleOfRange(runs.current, line.start, line.end).list : undefined) ??
+    node.font?.list ??
+    'none';
+  // Truncation is a view of the text rather than the text itself, and keeping
+  // the clamp on while you edit hides the very lines you are typing. `display`
+  // comes off with it because the clamp is what made the box a `-webkit-box`.
+  const clamp = node.font?.maxLines
+    ? { display: undefined, WebkitBoxOrient: undefined, WebkitLineClamp: undefined, overflow: undefined }
+    : null;
 
   return (
     <>
@@ -232,7 +384,7 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
         data-gramm_editor="false"
         data-enable-grammarly="false"
         // an empty layer still needs somewhere to draw the caret
-        style={{ ...style, minWidth: '1ch', minHeight: '1em', outline: 'none', cursor: 'text', caretColor: 'var(--color-select-line)' }}
+        style={{ ...style, ...clamp, minWidth: '1ch', minHeight: '1em', outline: '1.5px solid var(--color-select)', cursor: 'text', caretColor: 'var(--color-select-line)' }}
         // the DOM inside is the browser's while it is being edited; see above
         onKeyDown={(event) => {
           event.stopPropagation();
@@ -241,6 +393,29 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
             (event.currentTarget as HTMLElement).blur();
             return;
           }
+          // ⏎ starts a paragraph and ⇧⏎ breaks the line inside one. Both are
+          // claimed rather than left to the browser, which spells them with
+          // whichever of a <div> and a <br> it feels like and gives the model no
+          // way to tell the two apart afterwards.
+          if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            event.preventDefault();
+            insert(event.shiftKey ? LINE_BREAK : '\n');
+            return;
+          }
+
+          // Tab nests the list item and Shift+Tab brings it back out. It has to
+          // be claimed whatever it finds: left to the browser it moves the focus
+          // out of the editable, which commits the edit and closes it.
+          if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            event.preventDefault();
+            const by = event.shiftKey ? -1 : 1;
+            applyToLines((style) => {
+              const level = Math.max(0, Math.round(style.indent ?? 0) + by);
+              return { indent: level || undefined };
+            });
+            return;
+          }
+
           const mod = event.metaKey || event.ctrlKey;
           if (!mod) return;
 
@@ -268,6 +443,17 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
             const { start, end } = selection;
             layer();
             requestAnimationFrame(() => restore(editorRef.current, start, end));
+            return;
+          }
+
+          // ⌘K links the characters, which is what it does in Figma. The
+          // window-level handler that links the whole layer never sees this key
+          // — everything typed into the editable stops here — so with no range
+          // to link it is called directly rather than left to fail silently.
+          if (!event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
+            event.preventDefault();
+            if (selection.end > selection.start) setLinking(true);
+            else setLinkEditor(node.id);
             return;
           }
 
@@ -300,7 +486,7 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
           applyStyle({ [mark]: on ? undefined : true });
         }}
         onInput={(event) => {
-          const after = (event.currentTarget as HTMLElement).innerText ?? '';
+          const after = readText(event.currentTarget as HTMLElement);
           const before = plainText(runs.current);
           if (after === before) return;
           const { start, end, inserted } = diffText(before, after);
@@ -312,11 +498,13 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
         onBlur={(event) => {
           // Clicking the range bar moves focus out of the editable, and ending
           // the edit there would close the very bar that was clicked. Focus
-          // going *into* the bar is not leaving.
+          // going *into* the bar is not leaving — nor is going into the right
+          // panel, whose type controls act on the selection and would otherwise
+          // end the edit they were reaching for.
           const next = event.relatedTarget as HTMLElement | null;
-          if (next?.closest?.('.fig-range-bar')) return;
+          if (next?.closest?.('.fig-range-bar, .fig')) return;
 
-          const text = (event.currentTarget as HTMLElement).innerText ?? '';
+          const text = readText(event.currentTarget as HTMLElement);
           const before = plainText(runs.current);
           if (text !== before) {
             const { start, end, inserted } = diffText(before, text);
@@ -343,7 +531,17 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
         }}
       />
 
-      {hasRange && <RangeBar node={node} current={current} onApply={applyStyle} />}
+      {hasRange && (
+        <RangeBar
+          node={node}
+          current={current}
+          list={list}
+          linking={linking}
+          onApply={applyStyle}
+          onList={(kind) => applyToLines(() => ({ list: kind }))}
+          onLinking={setLinking}
+        />
+      )}
     </>
   );
 }
@@ -358,11 +556,21 @@ export function TextEditor({ node, style }: { node: SceneNode; style: CSSPropert
 function RangeBar({
   node,
   current,
+  list,
+  linking,
   onApply,
+  onList,
+  onLinking,
 }: {
   node: SceneNode;
   current: RunPatch;
+  /** the list style of the paragraph the selection starts in */
+  list: NonNullable<RunPatch['list']>;
+  /** the address field is open, because ⌘K or the link button asked for it */
+  linking: boolean;
   onApply: (patch: RunPatch) => void;
+  onList: (kind: NonNullable<RunPatch['list']>) => void;
+  onLinking: (open: boolean) => void;
 }) {
   const rect = document.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)?.getBoundingClientRect();
   if (!rect) return null;
@@ -412,6 +620,23 @@ function RangeBar({
         S
       </button>
       <span className="fig-range-sep" />
+      <button
+        type="button"
+        data-on={list === 'bullet' || undefined}
+        title="Bulleted list"
+        onClick={() => onList(list === 'bullet' ? 'none' : 'bullet')}
+      >
+        •
+      </button>
+      <button
+        type="button"
+        data-on={list === 'number' || undefined}
+        title="Numbered list"
+        onClick={() => onList(list === 'number' ? 'none' : 'number')}
+      >
+        1.
+      </button>
+      <span className="fig-range-sep" />
       <input
         type="color"
         title="Colour"
@@ -428,6 +653,31 @@ function RangeBar({
           onApply({ size: event.target.value ? Number(event.target.value) : undefined })
         }
       />
+      <button
+        type="button"
+        data-on={current.link ? 'true' : undefined}
+        title="Link  ⌘K"
+        onClick={() => onLinking(!linking)}
+      >
+        ⧉
+      </button>
+      {linking && (
+        <input
+          type="url"
+          autoFocus
+          title="Address"
+          placeholder="https://"
+          defaultValue={current.link ?? ''}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+              const href = (event.currentTarget as HTMLInputElement).value.trim();
+              onApply({ link: href || undefined });
+              onLinking(false);
+            } else if (event.key === 'Escape') onLinking(false);
+          }}
+        />
+      )}
       <button
         type="button"
         title="Clear formatting"
@@ -452,46 +702,108 @@ function RangeBar({
   );
 }
 
+/** The elements that end a line: a paragraph, a list item, whatever the browser drops in. */
+const BLOCK = new Set(['DIV', 'P', 'LI']);
+
 /**
- * A DOM position as a character offset in the element's text.
+ * Walks the editable in document order, counting characters as the model does.
  *
  * The model speaks in offsets and the browser speaks in nodes; this is the only
- * place the two have to be introduced to each other.
+ * place the two have to be introduced to each other. A line break is one
+ * character in the model and none at all in the DOM — it is a `<div>`, an
+ * `<li>` or a `<br>` — so the walk pays for each boundary as it crosses it,
+ * which is what lets the editor draw real paragraphs and lists without the
+ * offsets sliding under it.
+ *
+ * `onText` is told where each text node starts and stops the walk by returning
+ * true; `onChild` is told where each position *between* children falls, which
+ * is how a selection anchored on an element rather than in its text is read.
  */
-function offsetOf(root: HTMLElement, container: Node, offset: number): number {
-  let total = 0;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let current = walker.nextNode();
-  while (current) {
-    if (current === container) return total + offset;
-    total += current.textContent?.length ?? 0;
-    current = walker.nextNode();
-  }
-  // a position on an element rather than in a text node: count what precedes it
-  if (container === root) {
-    let counted = 0;
-    for (let i = 0; i < offset && i < root.childNodes.length; i++) {
-      counted += root.childNodes[i].textContent?.length ?? 0;
+function walkText(
+  root: HTMLElement,
+  onText: (node: Text, from: number) => boolean | void,
+  onChild?: (parent: Node, index: number, at: number) => void,
+): string {
+  let out = '';
+  // a block owes a newline only once something is already in front of it
+  let emitted = false;
+  let done = false;
+
+  const step = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node as Text;
+      if (onText(text, out.length)) done = true;
+      out += text.data;
+      if (text.data.length) emitted = true;
+      return;
     }
-    return counted;
-  }
-  return total;
+    if (node.nodeName === 'BR') {
+      // the lone <br> that gives an empty block a height is furniture, not a
+      // break — the browser puts one there too, for the same reason
+      if (node.parentNode?.childNodes.length !== 1) {
+        out += LINE_BREAK;
+        emitted = true;
+      }
+      return;
+    }
+    const element = node as HTMLElement;
+    const block = BLOCK.has(element.nodeName);
+    if (block && emitted) out += '\n';
+    for (let i = 0; i < element.childNodes.length; i++) {
+      onChild?.(element, i, out.length);
+      if (done) return;
+      step(element.childNodes[i]);
+    }
+    onChild?.(element, element.childNodes.length, out.length);
+    if (block) emitted = true;
+  };
+
+  step(root);
+  return out;
+}
+
+/**
+ * The editable's text, as the model spells it.
+ *
+ * `innerText` cannot be used for this: it renders a soft break and a paragraph
+ * break as the same `\n`, so a ⇧⏎ would turn back into a ⏎ on the very next
+ * keystroke. Reading the DOM with the same walk the offsets use keeps the two
+ * apart, and keeps the reading and the positions from ever disagreeing.
+ */
+function readText(root: HTMLElement): string {
+  return walkText(root, () => false);
+}
+
+/** A DOM position as a character offset in the element's text. */
+function offsetOf(root: HTMLElement, container: Node, offset: number): number {
+  let answer: number | null = null;
+  const text = walkText(
+    root,
+    (text, from) => {
+      if (text !== container) return false;
+      answer = from + offset;
+      return true;
+    },
+    (parent, index, at) => {
+      if (answer === null && parent === container && index === offset) answer = at;
+    },
+  );
+  return answer ?? text.length;
 }
 
 /** Puts a selection back after the spans have been rebuilt. */
 function restore(root: HTMLElement | null, start: number, end: number): void {
   if (!root) return;
   const at = (offset: number): { node: Node; offset: number } | null => {
-    let total = 0;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let current = walker.nextNode();
-    while (current) {
-      const length = current.textContent?.length ?? 0;
-      if (offset <= total + length) return { node: current, offset: offset - total };
-      total += length;
-      current = walker.nextNode();
-    }
-    return current ? { node: current, offset: 0 } : null;
+    let found: { node: Node; offset: number } | null = null;
+    let last: { node: Node; offset: number } | null = null;
+    walkText(root, (text, from) => {
+      last = { node: text, offset: text.data.length };
+      if (offset > from + text.data.length) return false;
+      found = { node: text, offset: offset - from };
+      return true;
+    });
+    return found ?? last;
   };
 
   const from = at(start);

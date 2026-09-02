@@ -104,6 +104,15 @@ export interface MotionUI {
    * resolution the keyframes need rather than the one the window has.
    */
   zoom: number;
+  /**
+   * The layers whose tracks are folded away.
+   *
+   * A timeline of eight layers at three tracks each is thirty-two rows in a
+   * panel that stops growing at thirteen, so the layers you are not working on
+   * have to be foldable — and a folded layer still shows where its keys are,
+   * on its own summary row.
+   */
+  collapsed: string[];
 }
 
 export interface UIState {
@@ -173,6 +182,17 @@ export interface UIState {
   /** id of the text node currently being edited in place */
   editing: string | null;
   setEditing: (id: string | null) => void;
+
+  /**
+   * The characters selected inside that layer.
+   *
+   * The type panel needs it: in Figma the Text section acts on the selected
+   * characters whenever there are any, so the panel has to be able to see a
+   * range the editor owns. It is published here rather than read off the DOM
+   * because the selection survives the click that moves focus into the panel.
+   */
+  editingRange: { start: number; end: number } | null;
+  setEditingRange: (range: { start: number; end: number } | null) => void;
 
   /**
    * The vector whose points are being edited, and which of them are selected.
@@ -285,8 +305,8 @@ export interface UIState {
    * canvas draws prototype connections whenever Prototype is showing, exactly
    * as Figma does.
    */
-  inspectorTab: 'design' | 'prototype' | 'inspect';
-  setInspectorTab: (tab: 'design' | 'prototype' | 'inspect') => void;
+  inspectorTab: 'design' | 'prototype' | 'inspect' | 'comments';
+  setInspectorTab: (tab: 'design' | 'prototype' | 'inspect' | 'comments') => void;
 
   /** the frame Present is playing, or null when it is closed */
   presenting: string | null;
@@ -308,6 +328,7 @@ export interface UIState {
   setMotionZoom: (zoom: number) => void;
   /** what the panel has selected, for the easing menu, ⌫ and ⌘C */
   selectKeyframes: (selected: SelectedKey[]) => void;
+  toggleMotionLayer: (id: string) => void;
   /** the keyframes ⌘C put down, kept per session rather than in the document */
   motionClipboard: CopiedKey[];
   copyKeyframes: (keys: CopiedKey[]) => void;
@@ -316,6 +337,17 @@ export interface UIState {
   /** the device the *viewer* has picked for this run; the page holds the default */
   device: PrototypeDevice;
   setDevice: (device: PrototypeDevice) => void;
+
+  /**
+   * How the presentation fits its frame to the window.
+   *
+   * Figma's scaling menu, which it remembers: fit shrinks *or magnifies* to the
+   * window, fill covers it and clips, actual is 1:1. The stage used to be
+   * hard-clamped to shrink-only, so a phone prototype on a large display was
+   * always a small rectangle in the middle of it.
+   */
+  presentScale: 'fit' | 'fill' | 'actual';
+  setPresentScale: (scale: 'fit' | 'fill' | 'actual') => void;
 
   /** the page currently on the canvas */
   page: string;
@@ -339,6 +371,16 @@ export interface UIState {
   /** alignment guides shown while dragging */
   guides: SnapGuide[];
   setGuides: (guides: SnapGuide[]) => void;
+
+  /**
+   * The frame a drag in progress would drop into, outlined on the canvas, and
+   * — when that frame flows its children — the line where the layer would land
+   * in the flow. The line is in the canvas element's own pixels rather than in
+   * world coordinates, because it is measured off the laid-out children.
+   */
+  dropTarget: string | null;
+  dropSlot: { x: number; y: number; w: number; h: number } | null;
+  setDropTarget: (id: string | null, slot?: { x: number; y: number; w: number; h: number } | null) => void;
 
   /** `page` is set when the menu was opened on a row in the Pages list */
   contextMenu: { x: number; y: number; stack: string[]; page?: string } | null;
@@ -365,6 +407,21 @@ export interface UIState {
   /** ⌘/ — every command by name, and every layer by name */
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
+
+  /**
+   * ⌃⇧? — the shortcuts panel, and the chords it has seen you press.
+   *
+   * Figma lights a key the first time you use it, which turns the panel from a
+   * list into a record of what you have learned. `usedShortcuts` is that
+   * record; it survives a reload, because a progress marker that resets every
+   * session is not one.
+   */
+  shortcutsOpen: boolean;
+  setShortcutsOpen: (open: boolean) => void;
+  usedShortcuts: string[];
+  markShortcut: (chord: string) => void;
+  /** for the test that has to start from nothing learned */
+  resetUsedShortcuts: () => void;
 
   /**
    * Observation. `following` is the awareness client id whose viewport we are
@@ -404,6 +461,19 @@ export const pageActions: {
   rename: ((id: string) => void) | null;
   remove: ((id: string) => void) | null;
 } = { rename: null, remove: null };
+
+/**
+ * The marks, published by the text editor for the menu a right-click over a
+ * caret opens.
+ *
+ * The runs belong to the mounted editor — it keeps them in a ref and rebuilds
+ * the spans from them — so a change made behind its back is overwritten by the
+ * next keystroke. The menu draws the rows and the editor runs them.
+ */
+export const textActions: {
+  mark: ((key: 'bold' | 'italic' | 'underline' | 'strike') => void) | null;
+  pastePlain: (() => void) | null;
+} = { mark: null, pastePlain: null };
 
 /**
  * Panel geometry. `base` is the width the panel ships at — the same number the
@@ -485,6 +555,25 @@ function fitPanel(width: number, bounds: PanelBounds, otherWidth: number): numbe
 }
 
 const PANEL_KEY = 'paperlike:panels';
+const USED_KEY = 'paperlike:shortcuts';
+
+function persistUsedShortcuts(used: string[]): void {
+  try {
+    localStorage.setItem(USED_KEY, JSON.stringify(used));
+  } catch {
+    // a tick beside a shortcut is not worth breaking a keypress over
+  }
+}
+
+function readUsedShortcuts(): string[] {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(USED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed.filter((chord): chord is string => typeof chord === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Storage is unavailable in private windows and blocked by some settings. */
 function persistPanels(leftWidth: number, rightWidth: number, pagesHeight: number): void {
@@ -622,7 +711,10 @@ export const useUI = create<UIState>((set) => ({
     set((state) => ({ viewport: typeof next === 'function' ? next(state.viewport) : next })),
 
   editing: null,
-  setEditing: (editing) => set({ editing }),
+  setEditing: (editing) => set({ editing, editingRange: null }),
+
+  editingRange: null,
+  setEditingRange: (editingRange) => set({ editingRange }),
 
   vectorEdit: null,
   setVectorEdit: (vectorEdit) =>
@@ -725,7 +817,7 @@ export const useUI = create<UIState>((set) => ({
   presenting: null,
   present: (presenting) => set({ presenting, editing: null }),
 
-  motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
+  motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1, collapsed: [] },
   openMotion: (frame) =>
     set((state) => ({
       // opening it on another frame starts that timeline from the top rather
@@ -736,12 +828,21 @@ export const useUI = create<UIState>((set) => ({
       motion:
         frame === state.motion.frame
           ? { ...state.motion, frame }
-          : { frame, at: 0, playing: false, recording: !!frame, selected: [], zoom: 1 },
+          : { frame, at: 0, playing: false, recording: !!frame, selected: [], zoom: 1, collapsed: [] },
     })),
   setMotionAt: (at) => set((state) => ({ motion: { ...state.motion, at: Math.max(0, at) } })),
   setMotionPlaying: (playing) => set((state) => ({ motion: { ...state.motion, playing } })),
   setMotionRecording: (recording) => set((state) => ({ motion: { ...state.motion, recording } })),
   selectKeyframes: (selected) => set((state) => ({ motion: { ...state.motion, selected } })),
+  toggleMotionLayer: (id) =>
+    set((state) => ({
+      motion: {
+        ...state.motion,
+        collapsed: state.motion.collapsed.includes(id)
+          ? state.motion.collapsed.filter((entry) => entry !== id)
+          : [...state.motion.collapsed, id],
+      },
+    })),
   motionClipboard: [],
   copyKeyframes: (motionClipboard) => set({ motionClipboard }),
   setMotionZoom: (zoom) =>
@@ -749,6 +850,9 @@ export const useUI = create<UIState>((set) => ({
 
   device: 'none',
   setDevice: (device) => set({ device }),
+
+  presentScale: 'fit',
+  setPresentScale: (presentScale) => set({ presentScale }),
 
   page: 'root',
   setPage: (page) => set({ page, selection: [], entered: null, editing: null }),
@@ -766,10 +870,12 @@ export const useUI = create<UIState>((set) => ({
       cropping: null,
       expanded: {},
       guides: [],
+      dropTarget: null,
+      dropSlot: null,
       lockedHint: null,
       contextMenu: null,
       presenting: null,
-      motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1 },
+      motion: { frame: null, at: 0, playing: false, recording: false, selected: [], zoom: 1, collapsed: [] },
       paletteOpen: false,
       exportOpen: false,
       versionsOpen: false,
@@ -786,6 +892,10 @@ export const useUI = create<UIState>((set) => ({
 
   guides: [],
   setGuides: (guides) => set({ guides }),
+
+  dropTarget: null,
+  dropSlot: null,
+  setDropTarget: (dropTarget, dropSlot = null) => set({ dropTarget, dropSlot }),
 
   contextMenu: null,
   setContextMenu: (contextMenu) => set({ contextMenu }),
@@ -807,6 +917,21 @@ export const useUI = create<UIState>((set) => ({
 
   paletteOpen: false,
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+
+  shortcutsOpen: false,
+  setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  usedShortcuts: readUsedShortcuts(),
+  markShortcut: (chord) =>
+    set((state) => {
+      if (state.usedShortcuts.includes(chord)) return {};
+      const usedShortcuts = [...state.usedShortcuts, chord];
+      persistUsedShortcuts(usedShortcuts);
+      return { usedShortcuts };
+    }),
+  resetUsedShortcuts: () => {
+    persistUsedShortcuts([]);
+    set({ usedShortcuts: [] });
+  },
 
   following: null,
   // following someone and presenting to them are mutually exclusive

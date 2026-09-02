@@ -7,6 +7,7 @@ import { Icon } from './ui/Icons';
 import { newFile, renameFileAction } from '../server/actions';
 import { useTabs } from '../state/tabs';
 import { useUI } from '../state/ui';
+import { Panel } from './ContextMenu';
 
 export interface TabFile {
   id: string;
@@ -108,11 +109,21 @@ export function FileTabs({ active, files }: { active: string; files: TabFile[] }
   useEffect(() => {
     if (!menu) return;
     const dismiss = () => setMenu(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      // the canvas's Escape chain listens on window too, and knows nothing
+      // about this menu — left alone it would step out of the selection
+      // instead, and the menu would still be sitting there
+      event.stopPropagation();
+      setMenu(null);
+    };
     window.addEventListener('pointerdown', dismiss);
     window.addEventListener('blur', dismiss);
+    window.addEventListener('keydown', onKey, true);
     return () => {
       window.removeEventListener('pointerdown', dismiss);
       window.removeEventListener('blur', dismiss);
+      window.removeEventListener('keydown', onKey, true);
     };
   }, [menu]);
 
@@ -351,49 +362,32 @@ export function FileTabs({ active, files }: { active: string; files: TabFile[] }
       </form>
 
       {menu && (
-        <div
-          className="fig-tab-menu"
-          role="menu"
-          style={{ left: menu.x, top: menu.y }}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          {(
-            [
-              [
-                'Copy link',
-                () => void navigator.clipboard?.writeText(`${window.location.origin}/f/${menu.id}`),
-                true,
-              ],
-              ['Rename', () => setRenaming(menu.id), byId[menu.id]?.owned ?? false],
-              ['—', () => undefined, false],
-              ['Close', () => close(menu.id), true],
-              ['Close others', () => closeOthers(menu.id), shown.length > 1],
-              [
-                'Close to the right',
-                () => closeAfter(menu.id),
-                shown.indexOf(menu.id) < shown.length - 1,
-              ],
-              ['Close all', () => closeAll(), true],
-            ] as const
-          ).map(([label, run, enabled], index) =>
-            label === '—' ? (
-              <hr key={index} />
-            ) : (
-              <button
-                key={label}
-                type="button"
-                role="menuitem"
-                disabled={!enabled}
-                onClick={() => {
-                  setMenu(null);
-                  run();
-                }}
-              >
-                {label}
-              </button>
-            ),
-          )}
-        </div>
+        <Panel
+          items={[
+            {
+              label: 'Copy link',
+              run: () => void navigator.clipboard?.writeText(`${window.location.origin}/f/${menu.id}`),
+            },
+            {
+              label: 'Rename',
+              // a file shared with you to read is the owner's to name
+              disabled: !byId[menu.id]?.owned,
+              run: () => setRenaming(menu.id),
+            },
+            { label: 'Close', shortcut: '⌥⌘W', divider: true, run: () => close(menu.id) },
+            { label: 'Close others', disabled: shown.length <= 1, run: () => closeOthers(menu.id) },
+            {
+              label: 'Close to the right',
+              disabled: shown.indexOf(menu.id) >= shown.length - 1,
+              run: () => closeAfter(menu.id),
+            },
+            { label: 'Close all', run: () => closeAll() },
+          ]}
+          x={menu.x}
+          y={menu.y}
+          width={200}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   );
